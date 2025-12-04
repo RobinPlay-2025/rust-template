@@ -1,3 +1,212 @@
+using ConVar;
+using UnityEngine;
+using UnityEngine.AI;
+
+public class Building
+{
+	public uint ID;
+
+	public ListHashSet<BuildingPrivlidge> buildingPrivileges = new ListHashSet<BuildingPrivlidge>();
+
+	public ListHashSet<BuildingBlock> buildingBlocks = new ListHashSet<BuildingBlock>();
+
+	public ListHashSet<DecayEntity> decayEntities = new ListHashSet<DecayEntity>();
+
+	public ListHashSet<Door> doors = new ListHashSet<Door>();
+
+	public NavMeshObstacle buildingNavMeshObstacle;
+
+	public ListHashSet<NavMeshObstacle> navmeshCarvers;
+
+	public bool isNavMeshCarvingDirty;
+
+	public bool isNavMeshCarveOptimized;
+
+	public bool IsEmpty()
+	{
+		if (HasBuildingPrivileges())
+		{
+			return false;
+		}
+		if (HasBuildingBlocks())
+		{
+			return false;
+		}
+		if (HasDecayEntities())
+		{
+			return false;
+		}
+		return true;
+	}
+
+	public BuildingPrivlidge GetDominatingBuildingPrivilege()
+	{
+		BuildingPrivlidge buildingPrivlidge = null;
+		if (HasBuildingPrivileges())
+		{
+			for (int i = 0; i < buildingPrivileges.Count; i++)
+			{
+				BuildingPrivlidge buildingPrivlidge2 = buildingPrivileges[i];
+				if (!((Object)(object)buildingPrivlidge2 == (Object)null) && buildingPrivlidge2.IsOlderThan(buildingPrivlidge))
+				{
+					buildingPrivlidge = buildingPrivlidge2;
+				}
+			}
+		}
+		return buildingPrivlidge;
+	}
+
+	public bool HasBuildingPrivileges()
+	{
+		if (buildingPrivileges != null)
+		{
+			return buildingPrivileges.Count > 0;
+		}
+		return false;
+	}
+
+	public bool HasBuildingBlocks()
+	{
+		if (buildingBlocks != null)
+		{
+			return buildingBlocks.Count > 0;
+		}
+		return false;
+	}
+
+	public bool HasDecayEntities()
+	{
+		if (decayEntities != null)
+		{
+			return decayEntities.Count > 0;
+		}
+		return false;
+	}
+
+	public void AddBuildingPrivilege(BuildingPrivlidge ent)
+	{
+		if (!((Object)(object)ent == (Object)null) && !buildingPrivileges.Contains(ent))
+		{
+			buildingPrivileges.Add(ent);
+		}
+	}
+
+	public void RemoveBuildingPrivilege(BuildingPrivlidge ent)
+	{
+		if (!((Object)(object)ent == (Object)null))
+		{
+			buildingPrivileges.Remove(ent);
+		}
+	}
+
+	public void AddBuildingBlock(BuildingBlock ent)
+	{
+		if ((Object)(object)ent == (Object)null || buildingBlocks.Contains(ent))
+		{
+			return;
+		}
+		buildingBlocks.Add(ent);
+		if (!AI.nav_carve_use_building_optimization)
+		{
+			return;
+		}
+		NavMeshObstacle component = ((Component)ent).GetComponent<NavMeshObstacle>();
+		if ((Object)(object)component != (Object)null)
+		{
+			isNavMeshCarvingDirty = true;
+			if (navmeshCarvers == null)
+			{
+				navmeshCarvers = new ListHashSet<NavMeshObstacle>();
+			}
+			navmeshCarvers.Add(component);
+		}
+	}
+
+	public void RemoveBuildingBlock(BuildingBlock ent)
+	{
+		if ((Object)(object)ent == (Object)null)
+		{
+			return;
+		}
+		buildingBlocks.Remove(ent);
+		if (!AI.nav_carve_use_building_optimization || navmeshCarvers == null)
+		{
+			return;
+		}
+		NavMeshObstacle component = ((Component)ent).GetComponent<NavMeshObstacle>();
+		if (!((Object)(object)component != (Object)null))
+		{
+			return;
+		}
+		navmeshCarvers.Remove(component);
+		if (navmeshCarvers.Count == 0)
+		{
+			navmeshCarvers = null;
+		}
+		isNavMeshCarvingDirty = true;
+		if (navmeshCarvers == null)
+		{
+			Building building = ent.GetBuilding();
+			if (building != null)
+			{
+				int ticks = 2;
+				server.UpdateNavMeshCarver(building, ref ticks, 0);
+			}
+		}
+	}
+
+	public void AddDecayEntity(DecayEntity ent)
+	{
+		if (!((Object)(object)ent == (Object)null))
+		{
+			if (!decayEntities.Contains(ent))
+			{
+				decayEntities.Add(ent);
+			}
+			if (ent is Door door && !doors.Contains(door))
+			{
+				doors.Add(ent as Door);
+			}
+		}
+	}
+
+	public void RemoveDecayEntity(DecayEntity ent)
+	{
+		if (!((Object)(object)ent == (Object)null))
+		{
+			decayEntities.Remove(ent);
+			if (ent is Door door)
+			{
+				doors.Remove(door);
+			}
+		}
+	}
+
+	public void Add(DecayEntity ent)
+	{
+		AddDecayEntity(ent);
+		AddBuildingBlock(ent as BuildingBlock);
+		AddBuildingPrivilege(ent as BuildingPrivlidge);
+	}
+
+	public void Remove(DecayEntity ent)
+	{
+		RemoveDecayEntity(ent);
+		RemoveBuildingBlock(ent as BuildingBlock);
+		RemoveBuildingPrivilege(ent as BuildingPrivlidge);
+	}
+
+	public void Dirty()
+	{
+		BuildingPrivlidge dominatingBuildingPrivilege = GetDominatingBuildingPrivilege();
+		if ((Object)(object)dominatingBuildingPrivilege != (Object)null)
+		{
+			dominatingBuildingPrivilege.BuildingDirty();
+		}
+	}
+}
+
+
 using System;
 using System.Collections.Generic;
 using ConVar;
@@ -1234,8 +1443,8 @@ public class Climate : SingletonComponent<Climate>
 		[Horizontal(4, -1)]
 		public Float4 FogAmbientIntensity = Float4.One();
 
-		[Range(0f, 1f)]
 		[Horizontal(4, -1)]
+		[Range(0f, 1f)]
 		public Float4 FogAmbientSaturation = Float4.One();
 
 		[Horizontal(4, -1)]
@@ -1804,8 +2013,8 @@ public class ClimateParameters
 	[Horizontal(4, -1)]
 	public Float4 FogAmbientIntensity = Float4.One();
 
-	[Range(0f, 1f)]
 	[Horizontal(4, -1)]
+	[Range(0f, 1f)]
 	public Float4 FogAmbientSaturation = Float4.One();
 
 	[Horizontal(4, -1)]
@@ -3799,8 +4008,8 @@ public class EnvironmentVolume : MonoBehaviour, IPrefabPreProcess
 
 	public Vector3 Size = Vector3.one;
 
-	[field: SerializeField]
 	[field: Tooltip("Controls the falloff amount of the positive axes of spatially aware volumes.")]
+	[field: SerializeField]
 	public Vector3 FalloffPositive { get; private set; } = Vector3.zero;
 
 	[field: SerializeField]
@@ -4330,8 +4539,8 @@ public class FakePhysicsRope : FacepunchBehaviour, IClientComponent
 
 	public Vector3 endPointOffset;
 
-	[Range(2f, 100f)]
 	[Header("Settings")]
+	[Range(2f, 100f)]
 	public int linePoints = 10;
 
 	[Tooltip("Value highly dependent on use case, a metal cable would have high stiffness, a rubber rope would have a low one")]
@@ -4493,14 +4702,14 @@ public class FoliagePlacement : ScriptableObject
 	[Header("Randomization")]
 	public float RandomScaling = 0.2f;
 
-	[Header("Placement Range")]
 	[MinMax(0f, 1f)]
+	[Header("Placement Range")]
 	public MinMax Range = new MinMax(0f, 1f);
 
 	public float RangeFade = 0.1f;
 
-	[Header("LOD")]
 	[Range(0f, 1f)]
+	[Header("LOD")]
 	public float DistanceDensity;
 
 	[Range(1f, 2f)]
@@ -7439,8 +7648,8 @@ public class LevelInfo : SingletonComponent<LevelInfo>
 	[Tooltip("A background image to be shown when loading the map")]
 	public Texture2D image;
 
-	[Tooltip("You should incrememnt this version when you make changes to the map that will invalidate old saves")]
 	[Space(10f)]
+	[Tooltip("You should incrememnt this version when you make changes to the map that will invalidate old saves")]
 	public int version = 1;
 }
 
@@ -10981,7 +11190,7 @@ public class SaveRestore : SingletonComponent<SaveRestore>
 		writer.Write(JsonConvert.SerializeObject((object)saveExtraData));
 		writer.Write((sbyte)68);
 		writer.Write(Epoch.FromDateTime(SaveCreatedTime));
-		writer.Write(273u);
+		writer.Write(274u);
 	}
 
 	private static int WriteEntities(BinaryWriter writer)
@@ -11122,7 +11331,7 @@ public class SaveRestore : SingletonComponent<SaveRestore>
 					binaryReader.ReadChar();
 					SaveCreatedTime = Epoch.ToDateTime((long)binaryReader.ReadInt32());
 				}
-				if (binaryReader.ReadUInt32() != 273)
+				if (binaryReader.ReadUInt32() != 274)
 				{
 					if (allowOutOfDateSaves)
 					{
@@ -11773,10 +11982,10 @@ using UnityEngine.Serialization;
 [CreateAssetMenu(menuName = "Rust/Density Spawn Population")]
 public class DensitySpawnPopulation : SpawnPopulationBase
 {
-	[Header("Spawn Info")]
 	[Tooltip("Usually per square km")]
-	[SerializeField]
 	[FormerlySerializedAs("TargetDensity")]
+	[Header("Spawn Info")]
+	[SerializeField]
 	public float _targetDensity = 1f;
 
 	public int ClusterSizeMin = 1;
@@ -13007,8 +13216,8 @@ public class IndividualSpawner : BaseMonoBehaviour, IServerComponent, ISpawnPoin
 
 	public LayerMask customBoundsCheckMask;
 
-	[Tooltip("Simply spawns the entity once. No respawning. Entity can be saved if desired.")]
 	[SerializeField]
+	[Tooltip("Simply spawns the entity once. No respawning. Entity can be saved if desired.")]
 	public bool oneTimeSpawner;
 
 	internal bool isSpawnerActive = true;
@@ -13387,8 +13596,8 @@ using UnityEngine;
 
 public class RadialSpawnPoint : BaseSpawnPoint
 {
-	[Tooltip("Circle to spawn within")]
 	[SerializeField]
+	[Tooltip("Circle to spawn within")]
 	public float radius = 10f;
 
 	public override void GetLocation(out Vector3 pos, out Quaternion rot)
@@ -13454,18 +13663,22 @@ public class SpaceCheckingSpawnPoint : GenericSpawnPoint
 
 	public override bool IsAvailableTo(GameObject prefab)
 	{
-		//IL_0052: Unknown result type (might be due to invalid IL or missing references)
-		//IL_005d: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0062: Unknown result type (might be due to invalid IL or missing references)
-		//IL_006d: Unknown result type (might be due to invalid IL or missing references)
-		//IL_001a: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0025: Unknown result type (might be due to invalid IL or missing references)
-		//IL_002a: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0035: Unknown result type (might be due to invalid IL or missing references)
-		//IL_003b: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0061: Unknown result type (might be due to invalid IL or missing references)
+		//IL_006c: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0071: Unknown result type (might be due to invalid IL or missing references)
+		//IL_007c: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0029: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0034: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0039: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0044: Unknown result type (might be due to invalid IL or missing references)
+		//IL_004a: Unknown result type (might be due to invalid IL or missing references)
 		if (!base.IsAvailableTo(prefab))
 		{
 			return false;
+		}
+		if (customBoundsCheckScale == 0f)
+		{
+			return true;
 		}
 		if (useCustomBoundsCheckMask)
 		{
@@ -15290,8 +15503,8 @@ public class TriggerBase : BaseMonoBehaviour
 
 	public bool HasAnyEntityContents => !entityContents.IsNullOrEmpty();
 
-	[ClientVar]
 	[ServerVar]
+	[ClientVar]
 	public static bool UseExcludeLayers
 	{
 		get
@@ -16907,9 +17120,9 @@ using UnityEngine;
 [RequireComponent(typeof(Collider))]
 public class TriggerParent : TriggerBase, IServerComponent
 {
+	[SerializeField]
 	[Header("General")]
 	[Tooltip("Deparent if the parented entity clips into an obstacle")]
-	[SerializeField]
 	public bool doClippingCheck;
 
 	[Tooltip("If deparenting via clipping, this will be used (if assigned) to also move the entity to a valid dismount position")]
@@ -16930,8 +17143,8 @@ public class TriggerParent : TriggerBase, IServerComponent
 	[Tooltip("When parenting an NPC don't check if they are shop keepers or mission providers.")]
 	public bool SkipNPCChecks;
 
-	[Header("Other")]
 	[Tooltip("If the player is already parented to something else, they'll switch over to another parent only if this is true")]
+	[Header("Other")]
 	public bool overrideOtherTriggers;
 
 	[Tooltip("Requires associatedMountable to be set. Prevents players entering the trigger if there's something between their feet and the bottom of the parent trigger")]
@@ -17840,9 +18053,9 @@ public class TriggerRadiation : TriggerBase
 
 	public bool BypassArmor;
 
+	[Min(0f)]
 	[Space]
 	[Tooltip("The fraction of the radius where we fade in from 0-1 dosage.")]
-	[Min(0f)]
 	public float falloff = 0.1f;
 
 	public bool usePerAxisFalloff;
@@ -18644,8 +18857,8 @@ using UnityEngine;
 
 public class TubeRenderer : FacepunchBehaviour
 {
-	[Header("Settings")]
 	[Range(3f, 64f)]
+	[Header("Settings")]
 	public int Segments = 12;
 
 	public float Radius = 0.1f;
@@ -21366,12 +21579,12 @@ public class Wearable : MonoBehaviour, IItemSetup, IPrefabPreProcess
 
 	public bool HideInEyesView;
 
-	[Header("First Person Legs")]
 	[Tooltip("If this is true, we'll hide this item in the first person view. Usually done for items that you definitely won't see in first person view, like facemasks and hats.")]
+	[Header("First Person Legs")]
 	public bool HideInFirstPerson;
 
-	[Range(0f, 5f)]
 	[Tooltip("Use this if the clothing item clips into the player view. It'll push the chest legs model backwards.")]
+	[Range(0f, 5f)]
 	public float ExtraLeanBack;
 
 	[Tooltip("Enable this to check for BoneRetargets which need to be preserved in first person view")]
@@ -23146,9 +23359,9 @@ public class MaterialOverlay : MonoBehaviour
 
 using UnityEngine;
 
-[ExecuteInEditMode]
-[RequireComponent(typeof(Camera))]
 [AddComponentMenu("Image Effects/Natural Bloom and Dirty Lens")]
+[RequireComponent(typeof(Camera))]
+[ExecuteInEditMode]
 public class NaturalBloomAndDirtyLens : MonoBehaviour
 {
 	public Shader shader;

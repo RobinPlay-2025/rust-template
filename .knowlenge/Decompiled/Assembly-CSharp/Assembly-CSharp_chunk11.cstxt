@@ -219,6 +219,164 @@ public class TimedUnlootableCrate : LootContainer
 }
 
 
+using System.Collections.Generic;
+using Facepunch;
+using UnityEngine;
+
+public class PhysicsTumblingEntity : BaseEntity
+{
+	[ServerVar(Saved = true, Help = "Minimum force applied on collision to cause tumbling")]
+	public static float min_tumbling_force = 600f;
+
+	[ServerVar(Saved = true, Help = "Maximum force applied on collision to cause tumbling")]
+	public static float max_tumbling_force = 1000f;
+
+	[ServerVar(Saved = true, Help = "Cone angle in degrees for randomizing tumbling force direction")]
+	public static float tumbling_force_cone_angle = 30f;
+
+	[ServerVar(Saved = true, Help = "Override for rigidbody drag. Set to -1 to disable.")]
+	public static float drag_override = -1f;
+
+	[ServerVar(Saved = true, Help = "Override for rigidbody angular drag. Set to -1 to disable.")]
+	public static float angular_drag_override = -1f;
+
+	[ServerVar(Saved = true, Help = "Multiplier for impulse applied to players when ragdolled by this entity")]
+	public static float player_impulse_multiplier = 10f;
+
+	[ServerVar(Saved = true, Help = "Minimum velocity required for an object to get tumbling force applied on collision")]
+	public static float velocity_threshold_for_tumbling_force = 1.5f;
+
+	private Rigidbody rb;
+
+	public override void OnCollision(Collision collision, BaseEntity hitEntity)
+	{
+		//IL_0070: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0075: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00c4: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00c9: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00cc: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00d6: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00db: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00dc: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00de: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00e3: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00ea: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00fd: Unknown result type (might be due to invalid IL or missing references)
+		//IL_010e: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0113: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0114: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0119: Unknown result type (might be due to invalid IL or missing references)
+		//IL_009b: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00a1: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00a6: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00a9: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00ae: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00b8: Unknown result type (might be due to invalid IL or missing references)
+		if ((Object)(object)rb == (Object)null)
+		{
+			rb = ((Component)this).GetComponent<Rigidbody>();
+		}
+		if ((Object)(object)hitEntity == (Object)null)
+		{
+			hitEntity = collision.collider.ToBaseEntity();
+		}
+		if ((Object)(object)hitEntity == (Object)(object)this || ((Object)(object)hitEntity != (Object)null && hitEntity.isServer != base.isServer) || hitEntity is TimedExplosive)
+		{
+			return;
+		}
+		float num = Random.Range(min_tumbling_force, max_tumbling_force);
+		Vector3 val = rb.velocity;
+		if (!(((Vector3)(ref val)).magnitude < velocity_threshold_for_tumbling_force))
+		{
+			if ((Object)(object)hitEntity == (Object)null)
+			{
+				Vector3 point = ((ContactPoint)(ref collision.contacts[0])).point;
+				val = collision.impulse;
+				RagdollPlayers(point, -((Vector3)(ref val)).normalized * player_impulse_multiplier);
+			}
+			else
+			{
+				val = collision.impulse;
+				Vector3 val2 = RandomVectorInCone(((Vector3)(ref val)).normalized, tumbling_force_cone_angle);
+				val2 *= num;
+				rb.AddForce(val2, (ForceMode)1);
+				Debug.DrawLine(((ContactPoint)(ref collision.contacts[0])).point, ((ContactPoint)(ref collision.contacts[0])).point + val2, Color.gray, 10f);
+			}
+		}
+	}
+
+	public void FixedUpdate()
+	{
+		if ((Object)(object)rb == (Object)null)
+		{
+			rb = ((Component)this).GetComponent<Rigidbody>();
+		}
+		if (drag_override != -1f && rb.drag != drag_override)
+		{
+			rb.drag = drag_override;
+		}
+		if (angular_drag_override != -1f && rb.angularDrag != angular_drag_override)
+		{
+			rb.angularDrag = angular_drag_override;
+		}
+	}
+
+	private void RagdollPlayers(Vector3 worldPosition, Vector3 impulse)
+	{
+		//IL_0006: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0043: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0048: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0049: Unknown result type (might be due to invalid IL or missing references)
+		List<BasePlayer> list = Pool.Get<List<BasePlayer>>();
+		Vis.Entities(worldPosition, 0.4f, list, 131072, (QueryTriggerInteraction)2);
+		foreach (BasePlayer item in list)
+		{
+			if (item.isServer && !item.IsDead() && !item.InSafeZone())
+			{
+				item.Ragdoll(item.GetWorldVelocity() + impulse);
+			}
+		}
+	}
+
+	public static Vector3 RandomVectorInCone(Vector3 normal, float coneAngle)
+	{
+		//IL_0002: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0007: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0023: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0024: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0029: Unknown result type (might be due to invalid IL or missing references)
+		//IL_002e: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0050: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0051: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0056: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0057: Unknown result type (might be due to invalid IL or missing references)
+		//IL_005c: Unknown result type (might be due to invalid IL or missing references)
+		//IL_005d: Unknown result type (might be due to invalid IL or missing references)
+		//IL_005e: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0063: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0064: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0069: Unknown result type (might be due to invalid IL or missing references)
+		//IL_006c: Unknown result type (might be due to invalid IL or missing references)
+		//IL_003d: Unknown result type (might be due to invalid IL or missing references)
+		//IL_003e: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0043: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0048: Unknown result type (might be due to invalid IL or missing references)
+		normal = ((Vector3)(ref normal)).normalized;
+		float num = Random.Range(0f, coneAngle);
+		float num2 = Random.Range(0f, 360f);
+		Vector3 val = Vector3.Cross(normal, Vector3.up);
+		if (((Vector3)(ref val)).sqrMagnitude < 0.001f)
+		{
+			val = Vector3.Cross(normal, Vector3.right);
+		}
+		((Vector3)(ref val)).Normalize();
+		val = Quaternion.AngleAxis(num2, normal) * val;
+		Vector3 val2 = Quaternion.AngleAxis(num, val) * normal;
+		return ((Vector3)(ref val2)).normalized;
+	}
+}
+
+
 using System;
 using System.Collections.Generic;
 using UnityEngine;
@@ -1265,8 +1423,8 @@ using UnityEngine;
 
 public class TorpedoServerProjectile : ServerProjectile
 {
-	[SerializeField]
 	[Tooltip("Make sure to leave some allowance for waves, which affect the true depth.")]
+	[SerializeField]
 	private float minWaterDepth = 0.5f;
 
 	[SerializeField]
@@ -1615,8 +1773,8 @@ using UnityEngine;
 
 public class TravellingVendorSounds : MonoBehaviour
 {
-	[SerializeField]
 	[Header("Engine")]
+	[SerializeField]
 	private EngineAudioSet EngineAudioSet;
 
 	[SerializeField]
@@ -1656,8 +1814,8 @@ public class TravellingVendorSounds : MonoBehaviour
 	[SerializeField]
 	private AnimationCurve suspensionUpAngleDeltaGain;
 
-	[SerializeField]
 	[Header("Tires")]
+	[SerializeField]
 	private SoundDefinition tireDirtSoundDef;
 
 	[SerializeField]
@@ -1679,8 +1837,8 @@ public class TravellingVendorSounds : MonoBehaviour
 	[SerializeField]
 	private AnimationCurve movementLoopGainCurve;
 
-	[SerializeField]
 	[Header("Brakes")]
+	[SerializeField]
 	private SoundDefinition brakeLoopDef;
 
 	[SerializeField]
@@ -1689,8 +1847,8 @@ public class TravellingVendorSounds : MonoBehaviour
 	[SerializeField]
 	private float brakeHissCooldown = 2f;
 
-	[SerializeField]
 	[Header("Misc")]
+	[SerializeField]
 	private SoundDefinition angryHornSoundDef;
 
 	[SerializeField]
@@ -2723,12 +2881,16 @@ public enum WipeFrequency
 }
 
 
+using System;
 using UnityEngine;
 using UnityEngine.UI;
 
 public class WipeTimerScreen : MonoBehaviour
 {
 	public Text timerText;
+
+	[NonSerialized]
+	public WipeLaptopEntity wipeLaptop;
 }
 
 
@@ -4410,7 +4572,7 @@ public static class PlayerStateEx
 		uint seed = state.seed;
 		int saveCreatedTime = state.saveCreatedTime;
 		int num = Epoch.FromDateTime(SaveRestore.SaveCreatedTime);
-		if (273 == protocol && World.Seed == seed)
+		if (274 == protocol && World.Seed == seed)
 		{
 			return num != saveCreatedTime;
 		}
@@ -5311,8 +5473,8 @@ public class PlayerModel : ListComponent<PlayerModel>
 
 	public SubsurfaceProfile subsurfaceProfile;
 
-	[Header("Parameters")]
 	[Range(0f, 1f)]
+	[Header("Parameters")]
 	public float voiceVolume;
 
 	[Range(0f, 1f)]
@@ -9005,8 +9167,8 @@ public class CatapultSounds : GroundVehicleAudio
 	[SerializeField]
 	private float suspensionMinTimeBetweenSounds = 0.25f;
 
-	[SerializeField]
 	[Header("Tires")]
+	[SerializeField]
 	private SoundDefinition tireDirtSoundDef;
 
 	[SerializeField]
@@ -9021,8 +9183,8 @@ public class CatapultSounds : GroundVehicleAudio
 	[SerializeField]
 	private AnimationCurve tireGainCurve;
 
-	[Header("Movement")]
 	[SerializeField]
+	[Header("Movement")]
 	private SoundDefinition movementLoopDef;
 
 	[SerializeField]
@@ -10062,12 +10224,12 @@ public class TimedExplosive : BaseEntity, ServerProjectile.IProjectileImpact
 
 	public GameObjectRef watersurfaceExplosionEffect;
 
-	[Header("Water")]
 	[Min(0f)]
+	[Header("Water")]
 	public float underwaterExplosionDepth = 1f;
 
-	[Tooltip("Optional: Will fall back to underwaterExplosionEffect or explosionEffect if not assigned.")]
 	[MinMax(0f, 100f)]
+	[Tooltip("Optional: Will fall back to underwaterExplosionEffect or explosionEffect if not assigned.")]
 	public MinMax watersurfaceExplosionDepth = new MinMax(0.5f, 10f);
 
 	public bool waterCausesExplosion;
@@ -12042,8 +12204,8 @@ public class BikeVehicleAudio : GroundVehicleAudio
 	[SerializeField]
 	private float suspensionMinTimeBetweenSounds = 0.25f;
 
-	[Header("Tires")]
 	[SerializeField]
+	[Header("Tires")]
 	private SoundDefinition tireDirtSoundDef;
 
 	[SerializeField]
@@ -12201,8 +12363,8 @@ public class BaseBoat : BaseVehicle
 
 	protected virtual bool SkipBoatForcedUpdate => false;
 
-	[ServerVar]
 	[Help("Seconds until boat starts drifting to shore if there's nobody around")]
+	[ServerVar]
 	public static int seconds_until_shore_drift(Arg arg)
 	{
 		secondsUntilShoreDrift = arg.GetInt(0, secondsUntilShoreDrift);
@@ -12210,8 +12372,8 @@ public class BaseBoat : BaseVehicle
 		return secondsUntilShoreDrift;
 	}
 
-	[ServerVar]
 	[Help("Seconds between shore drift teleport ticks")]
+	[ServerVar]
 	public static int seconds_between_shore_drift(Arg arg)
 	{
 		secondsBetweenShoreDrift = arg.GetInt(0, secondsBetweenShoreDrift);
@@ -12919,9 +13081,9 @@ public class Buoyancy : ListComponent<Buoyancy>, IServerComponent, IPrefabPrePro
 	[Range(0f, 3f)]
 	public float underwaterDrag = 2f;
 
+	[FormerlySerializedAs("flatWaterLerp")]
 	[Range(0f, 1f)]
 	[Tooltip("How much this object will pay attention to the wave system, 0 = flat water, 1 = full waves (default 1)")]
-	[FormerlySerializedAs("flatWaterLerp")]
 	public float wavesEffect = 1f;
 
 	public Action<bool> SubmergedChanged;
@@ -13700,8 +13862,8 @@ public class TugboatSounds : MonoBehaviour, IClientComponent
 
 	private float soundCullDistanceSq;
 
-	[Header("Engine")]
 	[SerializeField]
+	[Header("Engine")]
 	private SoundDefinition engineLoopDef;
 
 	private Sound engineLoop;
@@ -13734,8 +13896,8 @@ public class TugboatSounds : MonoBehaviour, IClientComponent
 	[SerializeField]
 	private Transform bridgeControlsTransform;
 
-	[Header("Water")]
 	[SerializeField]
+	[Header("Water")]
 	private SoundDefinition waterIdleDef;
 
 	[SerializeField]
@@ -13811,8 +13973,8 @@ public class TugboatSounds : MonoBehaviour, IClientComponent
 
 	private float lastChainRattle;
 
-	[SerializeField]
 	[Header("Horn")]
+	[SerializeField]
 	private SoundDefinition hornLoop;
 
 	[SerializeField]
@@ -13821,19 +13983,19 @@ public class TugboatSounds : MonoBehaviour, IClientComponent
 	[SerializeField]
 	private SoundDefinition hornStop;
 
-	[SerializeField]
-	[Min(0f)]
 	[Tooltip("The maximum amount of time a looped horn can last. If 0s then this is ignored.")]
+	[Min(0f)]
+	[SerializeField]
 	private float maxHornTime;
 
-	[SerializeField]
-	[Min(0f)]
 	[Tooltip("Used for rate limiting. This defines the maximum number of horn spams that can be invoked one after another.")]
+	[Min(0f)]
+	[SerializeField]
 	private int hornTokenCapacity = 3;
 
-	[SerializeField]
-	[Min(0f)]
 	[Tooltip("Used for rate limiting. This defines how quickly a new token regenerates, permitting another horn honk.")]
+	[Min(0f)]
+	[SerializeField]
 	private float hornTokenRegenerationTime = 1f;
 
 	private Line leftSoundLine;
@@ -13855,8 +14017,8 @@ using UnityEngine;
 [Serializable]
 public class CarSettings
 {
-	[Header("Vehicle Setup")]
 	[Range(0f, 1f)]
+	[Header("Vehicle Setup")]
 	public float rollingResistance = 0.05f;
 
 	[Range(0f, 1f)]
@@ -13906,8 +14068,8 @@ public class CarSettings
 
 	public bool disableHandbrakes;
 
-	[Range(0f, 1f)]
 	[Header("Front/Rear Vehicle Balance")]
+	[Range(0f, 1f)]
 	public float handlingBias = 0.5f;
 }
 
@@ -15027,8 +15189,8 @@ public class DamageRenderer : MonoBehaviour, IClientComponent
 	[SerializeField]
 	private List<DamageShowingRenderer> damageShowingRenderers;
 
-	[HideInInspector]
 	[SerializeField]
+	[HideInInspector]
 	private List<GlassPane> damageShowingGlassRenderers;
 }
 
@@ -15074,8 +15236,8 @@ public class DiverPropulsionVehicleAudio : MonoBehaviour
 	[SerializeField]
 	private SoundDefinition engineActiveLoopDef;
 
-	[SerializeField]
 	[Header("Propeller")]
+	[SerializeField]
 	private SoundDefinition propellerLoopSoundDef;
 
 	[SerializeField]
@@ -15118,8 +15280,8 @@ using UnityEngine;
 
 public abstract class GroundVehicle : BaseVehicle, IEngineControllerUser, IEntity, TriggerHurtNotChild.IHurtTriggerUser
 {
-	[SerializeField]
 	[Header("GroundVehicle")]
+	[SerializeField]
 	public GroundVehicleAudio gvAudio;
 
 	[SerializeField]
@@ -15445,8 +15607,8 @@ public abstract class GroundVehicleAudio : MonoBehaviour, IClientComponent
 	[SerializeField]
 	protected GroundVehicle groundVehicle;
 
-	[SerializeField]
 	[Header("Engine")]
+	[SerializeField]
 	private SoundDefinition engineStartSound;
 
 	[SerializeField]
@@ -15765,8 +15927,8 @@ public abstract class BaseHelicopter : BaseVehicle, SeekerTarget.ISeekerTargetOw
 	[SerializeField]
 	public GameObjectRef crashEffect;
 
-	[SerializeField]
 	[Range(0.1f, 0.95f)]
+	[SerializeField]
 	[Tooltip("Lower values mean more lift is produced at high angles.")]
 	public float liftDotMax = 0.75f;
 
@@ -15774,8 +15936,8 @@ public abstract class BaseHelicopter : BaseVehicle, SeekerTarget.ISeekerTargetOw
 	[Range(0.1f, 0.95f)]
 	public float altForceDotMin = 0.85f;
 
-	[SerializeField]
 	[Range(0.1f, 0.95f)]
+	[SerializeField]
 	public float liftFraction = 0.25f;
 
 	[SerializeField]
@@ -18819,15 +18981,15 @@ using UnityEngine;
 
 public class ScrapTransportHelicopter : PlayerHelicopterWithFlares, TriggerHurtNotChild.IHurtTriggerUser
 {
-	[Header("Scrap Transport Helicopter Specific")]
 	[SerializeField]
+	[Header("Scrap Transport Helicopter Specific")]
 	private Transform searchlightEye;
 
 	[SerializeField]
 	private BoxCollider parentTriggerCollider;
 
-	[SerializeField]
 	[Header("Damage Effects")]
+	[SerializeField]
 	private ParticleSystemContainer tailDamageLight;
 
 	[SerializeField]
@@ -19448,9 +19610,9 @@ public class RidableHorseAnimation : EntityComponent<RidableHorse>, IClientCompo
 
 	public Vector3 headLookOffset = Vector3.zero;
 
-	[Header("Spine")]
-	[Range(0f, 1f)]
 	[SerializeField]
+	[Range(0f, 1f)]
+	[Header("Spine")]
 	private float spineBlend = 0.5f;
 
 	[ReadOnly]
@@ -19462,8 +19624,8 @@ public class RidableHorseAnimation : EntityComponent<RidableHorse>, IClientCompo
 
 	public float spineYawInertiaFactor = 150f;
 
-	[ReadOnly]
 	[SerializeField]
+	[ReadOnly]
 	private Quaternion[] targetNeckRotations;
 
 	[SerializeField]
@@ -19478,8 +19640,8 @@ public class RidableHorseAnimation : EntityComponent<RidableHorse>, IClientCompo
 	[ReadOnly]
 	private Vector3 originalHipPosition;
 
-	[SerializeField]
 	[ReadOnly]
+	[SerializeField]
 	private Quaternion originalHipRotation;
 
 	public Vector3 spineOffset;
@@ -22495,8 +22657,8 @@ using UnityEngine;
 
 public class SnowmobileAudio : GroundVehicleAudio
 {
-	[SerializeField]
 	[Header("Engine")]
+	[SerializeField]
 	private EngineAudioSet engineAudioSet;
 
 	[Header("Skis")]
@@ -22518,8 +22680,8 @@ public class SnowmobileAudio : GroundVehicleAudio
 	[SerializeField]
 	private SoundDefinition skiSlideWaterSoundDef;
 
-	[SerializeField]
 	[Header("Movement")]
+	[SerializeField]
 	private AnimationCurve movementGainCurve;
 
 	[SerializeField]
@@ -22998,8 +23160,8 @@ public class SubmarineAudio : MonoBehaviour
 	[SerializeField]
 	private GameObject dashboardAudioPoint;
 
-	[SerializeField]
 	[Header("Other")]
+	[SerializeField]
 	private SoundDefinition climbOrDiveLoopSound;
 
 	[SerializeField]
@@ -24816,8 +24978,8 @@ using UnityEngine;
 
 public class LocomotiveExtraVisuals : MonoBehaviour
 {
-	[SerializeField]
 	[Header("Gauges")]
+	[SerializeField]
 	private TrainEngine trainEngine;
 
 	[SerializeField]
@@ -24877,8 +25039,8 @@ using UnityEngine;
 
 public class TrainCarAudio : MonoBehaviour
 {
-	[Header("Train Car Audio")]
 	[SerializeField]
+	[Header("Train Car Audio")]
 	private TrainCar trainCar;
 
 	[SerializeField]
@@ -25459,8 +25621,8 @@ public class TrainEngineAudio : TrainCarAudio
 	[SerializeField]
 	private float reflectionRayOffset = 0.5f;
 
-	[Header("Horn")]
 	[SerializeField]
+	[Header("Horn")]
 	private SoundDefinition hornLoop;
 
 	[SerializeField]
@@ -26425,8 +26587,8 @@ public class TrainWagonLootData : ScriptableObject
 	[SerializeField]
 	private LootOption[] oreOptions;
 
-	[SerializeField]
 	[ReadOnly]
+	[SerializeField]
 	private LootOption lootWagonContent;
 
 	[SerializeField]
@@ -33002,215 +33164,6 @@ public abstract class BuildingManager
 	protected abstract Building CreateBuilding(uint id);
 
 	protected abstract void DisposeBuilding(ref Building building);
-}
-
-
-using ConVar;
-using UnityEngine;
-using UnityEngine.AI;
-
-public class Building
-{
-	public uint ID;
-
-	public ListHashSet<BuildingPrivlidge> buildingPrivileges = new ListHashSet<BuildingPrivlidge>();
-
-	public ListHashSet<BuildingBlock> buildingBlocks = new ListHashSet<BuildingBlock>();
-
-	public ListHashSet<DecayEntity> decayEntities = new ListHashSet<DecayEntity>();
-
-	public ListHashSet<Door> doors = new ListHashSet<Door>();
-
-	public NavMeshObstacle buildingNavMeshObstacle;
-
-	public ListHashSet<NavMeshObstacle> navmeshCarvers;
-
-	public bool isNavMeshCarvingDirty;
-
-	public bool isNavMeshCarveOptimized;
-
-	public bool IsEmpty()
-	{
-		if (HasBuildingPrivileges())
-		{
-			return false;
-		}
-		if (HasBuildingBlocks())
-		{
-			return false;
-		}
-		if (HasDecayEntities())
-		{
-			return false;
-		}
-		return true;
-	}
-
-	public BuildingPrivlidge GetDominatingBuildingPrivilege()
-	{
-		BuildingPrivlidge buildingPrivlidge = null;
-		if (HasBuildingPrivileges())
-		{
-			for (int i = 0; i < buildingPrivileges.Count; i++)
-			{
-				BuildingPrivlidge buildingPrivlidge2 = buildingPrivileges[i];
-				if (!((Object)(object)buildingPrivlidge2 == (Object)null) && buildingPrivlidge2.IsOlderThan(buildingPrivlidge))
-				{
-					buildingPrivlidge = buildingPrivlidge2;
-				}
-			}
-		}
-		return buildingPrivlidge;
-	}
-
-	public bool HasBuildingPrivileges()
-	{
-		if (buildingPrivileges != null)
-		{
-			return buildingPrivileges.Count > 0;
-		}
-		return false;
-	}
-
-	public bool HasBuildingBlocks()
-	{
-		if (buildingBlocks != null)
-		{
-			return buildingBlocks.Count > 0;
-		}
-		return false;
-	}
-
-	public bool HasDecayEntities()
-	{
-		if (decayEntities != null)
-		{
-			return decayEntities.Count > 0;
-		}
-		return false;
-	}
-
-	public void AddBuildingPrivilege(BuildingPrivlidge ent)
-	{
-		if (!((Object)(object)ent == (Object)null) && !buildingPrivileges.Contains(ent))
-		{
-			buildingPrivileges.Add(ent);
-		}
-	}
-
-	public void RemoveBuildingPrivilege(BuildingPrivlidge ent)
-	{
-		if (!((Object)(object)ent == (Object)null))
-		{
-			buildingPrivileges.Remove(ent);
-		}
-	}
-
-	public void AddBuildingBlock(BuildingBlock ent)
-	{
-		if ((Object)(object)ent == (Object)null || buildingBlocks.Contains(ent))
-		{
-			return;
-		}
-		buildingBlocks.Add(ent);
-		if (!AI.nav_carve_use_building_optimization)
-		{
-			return;
-		}
-		NavMeshObstacle component = ((Component)ent).GetComponent<NavMeshObstacle>();
-		if ((Object)(object)component != (Object)null)
-		{
-			isNavMeshCarvingDirty = true;
-			if (navmeshCarvers == null)
-			{
-				navmeshCarvers = new ListHashSet<NavMeshObstacle>();
-			}
-			navmeshCarvers.Add(component);
-		}
-	}
-
-	public void RemoveBuildingBlock(BuildingBlock ent)
-	{
-		if ((Object)(object)ent == (Object)null)
-		{
-			return;
-		}
-		buildingBlocks.Remove(ent);
-		if (!AI.nav_carve_use_building_optimization || navmeshCarvers == null)
-		{
-			return;
-		}
-		NavMeshObstacle component = ((Component)ent).GetComponent<NavMeshObstacle>();
-		if (!((Object)(object)component != (Object)null))
-		{
-			return;
-		}
-		navmeshCarvers.Remove(component);
-		if (navmeshCarvers.Count == 0)
-		{
-			navmeshCarvers = null;
-		}
-		isNavMeshCarvingDirty = true;
-		if (navmeshCarvers == null)
-		{
-			Building building = ent.GetBuilding();
-			if (building != null)
-			{
-				int ticks = 2;
-				server.UpdateNavMeshCarver(building, ref ticks, 0);
-			}
-		}
-	}
-
-	public void AddDecayEntity(DecayEntity ent)
-	{
-		if (!((Object)(object)ent == (Object)null))
-		{
-			if (!decayEntities.Contains(ent))
-			{
-				decayEntities.Add(ent);
-			}
-			if (ent is Door door && !doors.Contains(door))
-			{
-				doors.Add(ent as Door);
-			}
-		}
-	}
-
-	public void RemoveDecayEntity(DecayEntity ent)
-	{
-		if (!((Object)(object)ent == (Object)null))
-		{
-			decayEntities.Remove(ent);
-			if (ent is Door door)
-			{
-				doors.Remove(door);
-			}
-		}
-	}
-
-	public void Add(DecayEntity ent)
-	{
-		AddDecayEntity(ent);
-		AddBuildingBlock(ent as BuildingBlock);
-		AddBuildingPrivilege(ent as BuildingPrivlidge);
-	}
-
-	public void Remove(DecayEntity ent)
-	{
-		RemoveDecayEntity(ent);
-		RemoveBuildingBlock(ent as BuildingBlock);
-		RemoveBuildingPrivilege(ent as BuildingPrivlidge);
-	}
-
-	public void Dirty()
-	{
-		BuildingPrivlidge dominatingBuildingPrivilege = GetDominatingBuildingPrivilege();
-		if ((Object)(object)dominatingBuildingPrivilege != (Object)null)
-		{
-			dominatingBuildingPrivilege.BuildingDirty();
-		}
-	}
 }
 
 
