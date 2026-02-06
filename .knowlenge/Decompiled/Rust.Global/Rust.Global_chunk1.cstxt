@@ -1,4 +1,15 @@
 using System;
+using System.Runtime.CompilerServices;
+using Microsoft.CodeAnalysis;
+
+[CompilerGenerated]
+[Embedded]
+internal sealed class IsUnmanagedAttribute : Attribute
+{
+}
+
+
+using System;
 using UnityEngine;
 
 public class ArrayIndexIsEnum : PropertyAttribute
@@ -110,6 +121,58 @@ public static class AssetPool
 				item2.Value.Clear();
 			}
 		}
+	}
+}
+
+
+using System.Collections.Generic;
+using UnityEngine;
+
+public class Pool
+{
+	public Stack<Object> stack = new Stack<Object>();
+
+	public int allocated;
+
+	public int available;
+
+	public string name;
+
+	public Pool(string name)
+	{
+		this.name = name;
+	}
+
+	public T Pop<T>() where T : Object, new()
+	{
+		if (stack.Count > 0)
+		{
+			available--;
+			Object obj = stack.Pop();
+			return (T)(object)((obj is T) ? obj : null);
+		}
+		allocated++;
+		T val = new T();
+		((Object)val).name = name;
+		return val;
+	}
+
+	public void Push<T>(ref T instance) where T : Object, new()
+	{
+		available++;
+		stack.Push((Object)(object)instance);
+		instance = default(T);
+	}
+
+	public void Clear()
+	{
+		foreach (Object item in stack)
+		{
+			Object.Destroy(item);
+		}
+		available -= stack.Count;
+		allocated -= stack.Count;
+		stack.Clear();
 	}
 }
 
@@ -413,6 +476,103 @@ public abstract class PersistentObjectWorkQueue<T> : PersistentObjectWorkQueue
 }
 
 
+using System;
+using System.Diagnostics;
+
+public abstract class PersistentObjectWorkQueueListBacked<T> : PersistentObjectWorkQueue
+{
+	private int currentIndex;
+
+	private Stopwatch stopwatch = new Stopwatch();
+
+	public abstract BufferList<T> AssignedList { get; }
+
+	public override int ListLength => AssignedList?.Count ?? 0;
+
+	public PersistentObjectWorkQueueListBacked()
+	{
+		Name = GetType().FullName;
+		PersistentObjectWorkQueue.All.Add(this);
+	}
+
+	public void RunList(double maximumMilliseconds)
+	{
+		if (ListLength == 0)
+		{
+			return;
+		}
+		TimeWarning val = TimeWarning.New(Name, (int)WarningThreshold.TotalMilliseconds);
+		try
+		{
+			stopwatch.Reset();
+			stopwatch.Start();
+			int listLength = ListLength;
+			BufferList<T> assignedList = AssignedList;
+			if (currentIndex >= listLength)
+			{
+				currentIndex = 0;
+			}
+			int num = currentIndex;
+			LastProcessedCount = 0;
+			while (LastProcessedCount < listLength)
+			{
+				LastProcessedCount++;
+				T val2 = assignedList[currentIndex];
+				if (val2 != null)
+				{
+					RunJob(val2);
+				}
+				currentIndex++;
+				if (currentIndex >= listLength)
+				{
+					currentIndex = 0;
+				}
+				if (currentIndex == num || stopwatch.Elapsed.TotalMilliseconds >= maximumMilliseconds)
+				{
+					break;
+				}
+			}
+			LastExecutionTime = stopwatch.Elapsed;
+			TotalExecutionTime += LastExecutionTime;
+		}
+		finally
+		{
+			((IDisposable)val)?.Dispose();
+		}
+	}
+
+	protected abstract void RunJob(T entity);
+
+	public string Info()
+	{
+		return $"{ListLength:n0}, lastCount: {LastProcessedCount:n0}, lastMS: {LastExecutionTime.TotalMilliseconds:R}, totMS: {TotalExecutionTime.TotalMilliseconds:n0}";
+	}
+
+	public void RunOnAll(Action<T> target)
+	{
+		//IL_000f: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0014: Unknown result type (might be due to invalid IL or missing references)
+		if (AssignedList == null)
+		{
+			return;
+		}
+		Enumerator<T> enumerator = AssignedList.GetEnumerator();
+		try
+		{
+			while (enumerator.MoveNext())
+			{
+				T current = enumerator.Current;
+				target(current);
+			}
+		}
+		finally
+		{
+			((IDisposable)enumerator/*cast due to .constrained prefix*/).Dispose();
+		}
+	}
+}
+
+
 using UnityEngine;
 
 public class WorldSpaceGrid<T>
@@ -584,6 +744,13 @@ public class WorldSpaceGrid
 		float num6 = ((float)v2 - num3) * cellSize;
 		return new Vector3(num5, 0f, num6);
 	}
+}
+
+
+public enum RoundingMode
+{
+	Up,
+	Down
 }
 
 
@@ -1892,62 +2059,134 @@ public struct Cylinder
 
 using System;
 using System.Runtime.CompilerServices;
+using Unity.Burst;
 using Unity.Profiling;
 using UnityEngine;
 using UnityEngine.Assertions;
 
+[BurstCompile]
 public static class GJK
 {
-	private static readonly ProfilerMarker p_Distance = new ProfilerMarker("GJK.Distance");
+	internal delegate float Distance_00000095$PostfixBurstDelegate(in OBB a, in OBB b);
 
-	private static readonly ProfilerMarker p_SolveDistance = new ProfilerMarker("Simplex.SolveDistance");
-
-	private static readonly ProfilerMarker p_GetSupportingVertex = new ProfilerMarker("GetSupportingVertex");
-
-	private const float MaxIterations = 32f;
-
-	public unsafe static float Distance(OBB a, OBB b)
+	internal static class Distance_00000095$BurstDirectCall
 	{
-		//IL_0000: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0005: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0008: Unknown result type (might be due to invalid IL or missing references)
-		//IL_000d: Unknown result type (might be due to invalid IL or missing references)
-		ProfilerMarker val = p_Distance;
-		AutoScope val2 = ((ProfilerMarker)(ref val)).Auto();
-		try
+		private static IntPtr Pointer;
+
+		private static IntPtr DeferredCompilation;
+
+		[BurstDiscard]
+		private unsafe static void GetFunctionPointerDiscard(ref IntPtr P_0)
 		{
-			Span<Vector3> span = new Span<Vector3>(stackalloc Vector3[8], 8);
-			Span<Vector3> span2 = new Span<Vector3>(stackalloc Vector3[8], 8);
-			PopulateVertices(a, span);
-			PopulateVertices(b, span2);
-			return DistanceInternal((ReadOnlySpan<Vector3>)span, (ReadOnlySpan<Vector3>)span2);
+			if (Pointer == (IntPtr)0)
+			{
+				Pointer = (nint)BurstCompiler.GetILPPMethodFunctionPointer2(DeferredCompilation, (RuntimeMethodHandle)/*OpCode not supported: LdMemberToken*/, typeof(Distance_00000095$PostfixBurstDelegate).TypeHandle);
+			}
+			P_0 = Pointer;
 		}
-		finally
+
+		private static IntPtr GetFunctionPointer()
 		{
-			((IDisposable)(AutoScope)(ref val2)/*cast due to .constrained prefix*/).Dispose();
+			nint result = 0;
+			GetFunctionPointerDiscard(ref result);
+			return result;
+		}
+
+		public static void Constructor()
+		{
+			DeferredCompilation = BurstCompiler.CompileILPPMethod2((RuntimeMethodHandle)/*OpCode not supported: LdMemberToken*/);
+		}
+
+		public static void Initialize()
+		{
+		}
+
+		static Distance_00000095$BurstDirectCall()
+		{
+			Constructor();
+		}
+
+		public unsafe static float Invoke(in OBB a, in OBB b)
+		{
+			if (BurstCompiler.IsEnabled)
+			{
+				IntPtr functionPointer = GetFunctionPointer();
+				if (functionPointer != (IntPtr)0)
+				{
+					return ((delegate* unmanaged[Cdecl]<ref OBB, ref OBB, float>)functionPointer)(ref a, ref b);
+				}
+			}
+			return Distance$BurstManaged(in a, in b);
 		}
 	}
 
-	public unsafe static float Distance2(OBB a, OBB b)
+	internal delegate float Distance2_00000096$PostfixBurstDelegate(in OBB a, in OBB b);
+
+	internal static class Distance2_00000096$BurstDirectCall
 	{
-		//IL_0000: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0005: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0008: Unknown result type (might be due to invalid IL or missing references)
-		//IL_000d: Unknown result type (might be due to invalid IL or missing references)
-		ProfilerMarker val = p_Distance;
-		AutoScope val2 = ((ProfilerMarker)(ref val)).Auto();
-		try
+		private static IntPtr Pointer;
+
+		private static IntPtr DeferredCompilation;
+
+		[BurstDiscard]
+		private unsafe static void GetFunctionPointerDiscard(ref IntPtr P_0)
 		{
-			Span<Vector3> span = new Span<Vector3>(stackalloc Vector3[8], 8);
-			Span<Vector3> span2 = new Span<Vector3>(stackalloc Vector3[8], 8);
-			PopulateVertices(a, span);
-			PopulateVertices(b, span2);
-			return Distance2Internal((ReadOnlySpan<Vector3>)span, (ReadOnlySpan<Vector3>)span2);
+			if (Pointer == (IntPtr)0)
+			{
+				Pointer = (nint)BurstCompiler.GetILPPMethodFunctionPointer2(DeferredCompilation, (RuntimeMethodHandle)/*OpCode not supported: LdMemberToken*/, typeof(Distance2_00000096$PostfixBurstDelegate).TypeHandle);
+			}
+			P_0 = Pointer;
 		}
-		finally
+
+		private static IntPtr GetFunctionPointer()
 		{
-			((IDisposable)(AutoScope)(ref val2)/*cast due to .constrained prefix*/).Dispose();
+			nint result = 0;
+			GetFunctionPointerDiscard(ref result);
+			return result;
 		}
+
+		public static void Constructor()
+		{
+			DeferredCompilation = BurstCompiler.CompileILPPMethod2((RuntimeMethodHandle)/*OpCode not supported: LdMemberToken*/);
+		}
+
+		public static void Initialize()
+		{
+		}
+
+		static Distance2_00000096$BurstDirectCall()
+		{
+			Constructor();
+		}
+
+		public unsafe static float Invoke(in OBB a, in OBB b)
+		{
+			if (BurstCompiler.IsEnabled)
+			{
+				IntPtr functionPointer = GetFunctionPointer();
+				if (functionPointer != (IntPtr)0)
+				{
+					return ((delegate* unmanaged[Cdecl]<ref OBB, ref OBB, float>)functionPointer)(ref a, ref b);
+				}
+			}
+			return Distance2$BurstManaged(in a, in b);
+		}
+	}
+
+	private static readonly ProfilerMarker p_Distance = new ProfilerMarker("GJK.Distance");
+
+	private const float MaxIterations = 32f;
+
+	[BurstCompile]
+	public static float Distance(in OBB a, in OBB b)
+	{
+		return Distance_00000095$BurstDirectCall.Invoke(in a, in b);
+	}
+
+	[BurstCompile]
+	public static float Distance2(in OBB a, in OBB b)
+	{
+		return Distance2_00000096$BurstDirectCall.Invoke(in a, in b);
 	}
 
 	private static float DistanceInternal(in ReadOnlySpan<Vector3> a, in ReadOnlySpan<Vector3> b)
@@ -1993,17 +2232,13 @@ public static class GJK
 		//IL_009b: Unknown result type (might be due to invalid IL or missing references)
 		//IL_009d: Unknown result type (might be due to invalid IL or missing references)
 		//IL_00a3: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00e0: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00e2: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00fb: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0100: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0104: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0109: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00ea: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00ec: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00f4: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00f6: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0122: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00dd: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00df: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00ff: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00e7: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00e9: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00f1: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00f3: Unknown result type (might be due to invalid IL or missing references)
 		Assert.IsTrue(a.Length > 0, "Distance function called with empty LHS collider");
 		Assert.IsTrue(b.Length > 0, "Distance function called with empty RHS collider");
 		Simplex simplex2 = new Simplex
@@ -2035,16 +2270,7 @@ public static class GJK
 					simplex.d = supportingVertex;
 					break;
 				}
-				ProfilerMarker val = p_SolveDistance;
-				AutoScope val2 = ((ProfilerMarker)(ref val)).Auto();
-				try
-				{
-					simplex.SolveDistance();
-				}
-				finally
-				{
-					((IDisposable)(AutoScope)(ref val2)/*cast due to .constrained prefix*/).Dispose();
-				}
+				simplex.SolveDistance();
 				num = Vector3.SqrMagnitude(simplex.Direction);
 				if (simplex.size == 4)
 				{
@@ -2086,34 +2312,17 @@ public static class GJK
 
 	private static Vector3 GetSupportingVertex(in ReadOnlySpan<Vector3> verticesA, in ReadOnlySpan<Vector3> verticesB, in Vector3 direction)
 	{
-		//IL_0000: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0005: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0008: Unknown result type (might be due to invalid IL or missing references)
-		//IL_000d: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0010: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0017: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0002: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0009: Unknown result type (might be due to invalid IL or missing references)
+		//IL_000e: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0013: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0016: Unknown result type (might be due to invalid IL or missing references)
+		//IL_001b: Unknown result type (might be due to invalid IL or missing references)
 		//IL_001c: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0021: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0024: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0029: Unknown result type (might be due to invalid IL or missing references)
-		//IL_002a: Unknown result type (might be due to invalid IL or missing references)
-		//IL_002b: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0030: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0041: Unknown result type (might be due to invalid IL or missing references)
-		ProfilerMarker val = p_GetSupportingVertex;
-		AutoScope val2 = ((ProfilerMarker)(ref val)).Auto();
-		try
-		{
-			Vector3 val3 = Support(in verticesA, in direction);
-			Vector3 direction2 = -direction;
-			Vector3 val4 = Support(in verticesB, in direction2);
-			direction2 = val3 - val4;
-			return direction2;
-		}
-		finally
-		{
-			((IDisposable)(AutoScope)(ref val2)/*cast due to .constrained prefix*/).Dispose();
-		}
+		//IL_001d: Unknown result type (might be due to invalid IL or missing references)
+		Vector3 val = Support(in verticesA, in direction);
+		Vector3 val2 = Support(in verticesB, -direction);
+		return val - val2;
 	}
 
 	[MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -2255,6 +2464,170 @@ public static class GJK
 		vertices[5] = position - right * extents.x + up * extents.y - forward * extents.z;
 		vertices[6] = position - right * extents.x - up * extents.y + forward * extents.z;
 		vertices[7] = position - right * extents.x - up * extents.y - forward * extents.z;
+	}
+
+	[MethodImpl(MethodImplOptions.AggressiveInlining)]
+	[BurstCompile]
+	internal unsafe static float Distance$BurstManaged(in OBB a, in OBB b)
+	{
+		//IL_0000: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0005: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0008: Unknown result type (might be due to invalid IL or missing references)
+		//IL_000d: Unknown result type (might be due to invalid IL or missing references)
+		ProfilerMarker val = p_Distance;
+		AutoScope val2 = ((ProfilerMarker)(ref val)).Auto();
+		try
+		{
+			Span<Vector3> span = new Span<Vector3>(stackalloc Vector3[8], 8);
+			Span<Vector3> span2 = new Span<Vector3>(stackalloc Vector3[8], 8);
+			PopulateVertices(a, span);
+			PopulateVertices(b, span2);
+			return DistanceInternal((ReadOnlySpan<Vector3>)span, (ReadOnlySpan<Vector3>)span2);
+		}
+		finally
+		{
+			((IDisposable)(AutoScope)(ref val2)/*cast due to .constrained prefix*/).Dispose();
+		}
+	}
+
+	[MethodImpl(MethodImplOptions.AggressiveInlining)]
+	[BurstCompile]
+	internal unsafe static float Distance2$BurstManaged(in OBB a, in OBB b)
+	{
+		//IL_0000: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0005: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0008: Unknown result type (might be due to invalid IL or missing references)
+		//IL_000d: Unknown result type (might be due to invalid IL or missing references)
+		ProfilerMarker val = p_Distance;
+		AutoScope val2 = ((ProfilerMarker)(ref val)).Auto();
+		try
+		{
+			Span<Vector3> span = new Span<Vector3>(stackalloc Vector3[8], 8);
+			Span<Vector3> span2 = new Span<Vector3>(stackalloc Vector3[8], 8);
+			PopulateVertices(a, span);
+			PopulateVertices(b, span2);
+			return Distance2Internal((ReadOnlySpan<Vector3>)span, (ReadOnlySpan<Vector3>)span2);
+		}
+		finally
+		{
+			((IDisposable)(AutoScope)(ref val2)/*cast due to .constrained prefix*/).Dispose();
+		}
+	}
+}
+
+
+internal delegate float Distance_00000095$PostfixBurstDelegate(in OBB a, in OBB b);
+
+
+using System;
+using Unity.Burst;
+
+internal static class Distance_00000095$BurstDirectCall
+{
+	private static IntPtr Pointer;
+
+	private static IntPtr DeferredCompilation;
+
+	[BurstDiscard]
+	private unsafe static void GetFunctionPointerDiscard(ref IntPtr P_0)
+	{
+		if (Pointer == (IntPtr)0)
+		{
+			Pointer = (nint)BurstCompiler.GetILPPMethodFunctionPointer2(DeferredCompilation, (RuntimeMethodHandle)/*OpCode not supported: LdMemberToken*/, typeof(Distance_00000095$PostfixBurstDelegate).TypeHandle);
+		}
+		P_0 = Pointer;
+	}
+
+	private static IntPtr GetFunctionPointer()
+	{
+		nint result = 0;
+		GetFunctionPointerDiscard(ref result);
+		return result;
+	}
+
+	public static void Constructor()
+	{
+		DeferredCompilation = BurstCompiler.CompileILPPMethod2((RuntimeMethodHandle)/*OpCode not supported: LdMemberToken*/);
+	}
+
+	public static void Initialize()
+	{
+	}
+
+	static Distance_00000095$BurstDirectCall()
+	{
+		Constructor();
+	}
+
+	public unsafe static float Invoke(in OBB a, in OBB b)
+	{
+		if (BurstCompiler.IsEnabled)
+		{
+			IntPtr functionPointer = GetFunctionPointer();
+			if (functionPointer != (IntPtr)0)
+			{
+				return ((delegate* unmanaged[Cdecl]<ref OBB, ref OBB, float>)functionPointer)(ref a, ref b);
+			}
+		}
+		return Distance$BurstManaged(in a, in b);
+	}
+}
+
+
+internal delegate float Distance2_00000096$PostfixBurstDelegate(in OBB a, in OBB b);
+
+
+using System;
+using Unity.Burst;
+
+internal static class Distance2_00000096$BurstDirectCall
+{
+	private static IntPtr Pointer;
+
+	private static IntPtr DeferredCompilation;
+
+	[BurstDiscard]
+	private unsafe static void GetFunctionPointerDiscard(ref IntPtr P_0)
+	{
+		if (Pointer == (IntPtr)0)
+		{
+			Pointer = (nint)BurstCompiler.GetILPPMethodFunctionPointer2(DeferredCompilation, (RuntimeMethodHandle)/*OpCode not supported: LdMemberToken*/, typeof(Distance2_00000096$PostfixBurstDelegate).TypeHandle);
+		}
+		P_0 = Pointer;
+	}
+
+	private static IntPtr GetFunctionPointer()
+	{
+		nint result = 0;
+		GetFunctionPointerDiscard(ref result);
+		return result;
+	}
+
+	public static void Constructor()
+	{
+		DeferredCompilation = BurstCompiler.CompileILPPMethod2((RuntimeMethodHandle)/*OpCode not supported: LdMemberToken*/);
+	}
+
+	public static void Initialize()
+	{
+	}
+
+	static Distance2_00000096$BurstDirectCall()
+	{
+		Constructor();
+	}
+
+	public unsafe static float Invoke(in OBB a, in OBB b)
+	{
+		if (BurstCompiler.IsEnabled)
+		{
+			IntPtr functionPointer = GetFunctionPointer();
+			if (functionPointer != (IntPtr)0)
+			{
+				return ((delegate* unmanaged[Cdecl]<ref OBB, ref OBB, float>)functionPointer)(ref a, ref b);
+			}
+		}
+		return Distance2$BurstManaged(in a, in b);
 	}
 }
 
@@ -3290,9 +3663,12 @@ public static class Mathx
 }
 
 
+using System;
 using UnityEngine;
+using UnityEngine.Scripting;
 
-public struct OBB
+[Preserve]
+public struct OBB : IEquatable<OBB>
 {
 	public Quaternion rotation;
 
@@ -3965,7 +4341,7 @@ public struct OBB
 
 	public float Distance(OBB other)
 	{
-		return GJK.Distance(this, other);
+		return GJK.Distance(in this, in other);
 	}
 
 	public float Distance(Vector3 position)
@@ -3978,7 +4354,7 @@ public struct OBB
 
 	public float SqrDistance(OBB other)
 	{
-		return GJK.Distance2(this, other);
+		return GJK.Distance2(in this, in other);
 	}
 
 	public float SqrDistance(Vector3 position)
@@ -4041,7 +4417,84 @@ public struct OBB
 		Debug.DrawLine(GetPoint(-1f, 1f, -1f), GetPoint(1f, 1f, -1f), colour, duration);
 		Debug.DrawLine(GetPoint(-1f, 1f, 1f), GetPoint(1f, 1f, 1f), colour, duration);
 		Debug.DrawLine(GetPoint(-1f, 1f, -1f), GetPoint(-1f, 1f, 1f), colour, duration);
-		Debug.DrawLine(GetPoint(1f, -1f, -1f), GetPoint(1f, 1f, 1f), colour, duration);
+		Debug.DrawLine(GetPoint(1f, 1f, -1f), GetPoint(1f, 1f, 1f), colour, duration);
+	}
+
+	public void DebugDrawGizmos(Color colour)
+	{
+		//IL_0000: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0016: Unknown result type (might be due to invalid IL or missing references)
+		//IL_002b: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0045: Unknown result type (might be due to invalid IL or missing references)
+		//IL_005a: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0074: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0089: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00a3: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00b8: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00d2: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00e7: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0101: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0116: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0130: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0145: Unknown result type (might be due to invalid IL or missing references)
+		//IL_015f: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0174: Unknown result type (might be due to invalid IL or missing references)
+		//IL_018e: Unknown result type (might be due to invalid IL or missing references)
+		//IL_01a3: Unknown result type (might be due to invalid IL or missing references)
+		//IL_01bd: Unknown result type (might be due to invalid IL or missing references)
+		//IL_01d2: Unknown result type (might be due to invalid IL or missing references)
+		//IL_01ec: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0201: Unknown result type (might be due to invalid IL or missing references)
+		//IL_021b: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0230: Unknown result type (might be due to invalid IL or missing references)
+		Gizmos.color = colour;
+		Gizmos.DrawLine(GetPoint(-1f, -1f, -1f), GetPoint(1f, -1f, -1f));
+		Gizmos.DrawLine(GetPoint(-1f, -1f, 1f), GetPoint(1f, -1f, 1f));
+		Gizmos.DrawLine(GetPoint(-1f, -1f, -1f), GetPoint(-1f, -1f, 1f));
+		Gizmos.DrawLine(GetPoint(1f, -1f, -1f), GetPoint(1f, -1f, 1f));
+		Gizmos.DrawLine(GetPoint(-1f, -1f, -1f), GetPoint(-1f, 1f, -1f));
+		Gizmos.DrawLine(GetPoint(-1f, -1f, 1f), GetPoint(-1f, 1f, 1f));
+		Gizmos.DrawLine(GetPoint(1f, -1f, -1f), GetPoint(1f, 1f, -1f));
+		Gizmos.DrawLine(GetPoint(1f, -1f, 1f), GetPoint(1f, 1f, 1f));
+		Gizmos.DrawLine(GetPoint(-1f, 1f, -1f), GetPoint(1f, 1f, -1f));
+		Gizmos.DrawLine(GetPoint(-1f, 1f, 1f), GetPoint(1f, 1f, 1f));
+		Gizmos.DrawLine(GetPoint(-1f, 1f, -1f), GetPoint(-1f, 1f, 1f));
+		Gizmos.DrawLine(GetPoint(1f, 1f, -1f), GetPoint(1f, 1f, 1f));
+	}
+
+	public bool Equals(OBB other)
+	{
+		//IL_0007: Unknown result type (might be due to invalid IL or missing references)
+		//IL_001a: Unknown result type (might be due to invalid IL or missing references)
+		//IL_002d: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0040: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0053: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0066: Unknown result type (might be due to invalid IL or missing references)
+		if (((Quaternion)(ref rotation)).Equals(other.rotation) && ((Vector3)(ref position)).Equals(other.position) && ((Vector3)(ref extents)).Equals(other.extents) && ((Vector3)(ref forward)).Equals(other.forward) && ((Vector3)(ref right)).Equals(other.right) && ((Vector3)(ref up)).Equals(other.up))
+		{
+			return reject.Equals(other.reject);
+		}
+		return false;
+	}
+
+	public override bool Equals(object obj)
+	{
+		if (obj is OBB other)
+		{
+			return Equals(other);
+		}
+		return false;
+	}
+
+	public override int GetHashCode()
+	{
+		//IL_0001: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0007: Unknown result type (might be due to invalid IL or missing references)
+		//IL_000d: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0013: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0019: Unknown result type (might be due to invalid IL or missing references)
+		//IL_001f: Unknown result type (might be due to invalid IL or missing references)
+		return HashCode.Combine<Quaternion, Vector3, Vector3, Vector3, Vector3, Vector3, float>(rotation, position, extents, forward, right, up, reject);
 	}
 }
 
@@ -4183,7 +4636,7 @@ public class SeedRandom
 	public static Vector2 Value2D(ref uint seed)
 	{
 		//IL_001f: Unknown result type (might be due to invalid IL or missing references)
-		float num = Value(ref seed) * (float)Math.PI * 2f;
+		float num = Value(ref seed) * MathF.PI * 2f;
 		return new Vector2(Mathf.Cos(num), Mathf.Sin(num));
 	}
 
@@ -4691,6 +5144,36 @@ public struct Triangle
 		float num2 = Vector3.Distance(point1, point2);
 		float num3 = Vector3.Distance(point2, point0);
 		return 0.25f * Mathf.Sqrt((num + num2 + num3) * (0f - num + num2 + num3) * (num - num2 + num3) * (num + num2 - num3));
+	}
+}
+
+
+using Unity.Burst;
+using Unity.Collections;
+
+[BurstCompile]
+public static class NativeArrayUtility
+{
+	public static NativeArray<T> CopyToNativeArray<T>(this T[] array, Allocator allocator) where T : struct
+	{
+		//IL_0005: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0029: Unknown result type (might be due to invalid IL or missing references)
+		NativeArray<T> result = default(NativeArray<T>);
+		result..ctor(array.Length, allocator, (NativeArrayOptions)1);
+		for (int i = 0; i < array.Length; i++)
+		{
+			result[i] = array[i];
+		}
+		return result;
+	}
+
+	[BurstCompile]
+	public static void Fill<T>(ref NativeArray<T> nativeArray, T value) where T : unmanaged
+	{
+		for (int i = 0; i < nativeArray.Length; i++)
+		{
+			nativeArray[i] = value;
+		}
 	}
 }
 
@@ -5651,6 +6134,314 @@ public class TextTable : IPooled, IDisposable
 }
 
 
+using System.Runtime.InteropServices;
+using UnityEngine;
+
+[StructLayout(LayoutKind.Explicit)]
+private struct RowValueUnion
+{
+	[FieldOffset(0)]
+	public bool Bool;
+
+	[FieldOffset(0)]
+	public int Int;
+
+	[FieldOffset(0)]
+	public uint UInt;
+
+	[FieldOffset(0)]
+	public long Long;
+
+	[FieldOffset(0)]
+	public ulong ULong;
+
+	[FieldOffset(0)]
+	public float Float;
+
+	[FieldOffset(0)]
+	public double Double;
+
+	[FieldOffset(0)]
+	public Vector3 Vec3;
+
+	[FieldOffset(0)]
+	public string String;
+}
+
+
+private enum ValueType
+{
+	Bool,
+	Int,
+	UInt,
+	Long,
+	ULong,
+	Float,
+	Double,
+	Vec3,
+	String,
+	NextRow
+}
+
+
+using System;
+using System.Globalization;
+using System.IO;
+using System.Text;
+using Newtonsoft.Json;
+
+private struct RowValue
+{
+	public RowValueUnion Value;
+
+	public ValueType ValueType;
+
+	public void WriteTo(StringBuilder builder)
+	{
+		switch (ValueType)
+		{
+		case ValueType.Bool:
+			builder.Append(Value.Bool);
+			break;
+		case ValueType.Int:
+		{
+			Span<char> destination7 = stackalloc char[32];
+			Value.Int.TryFormat(destination7, out var charsWritten7);
+			builder.Append(destination7.Slice(0, charsWritten7));
+			break;
+		}
+		case ValueType.UInt:
+		{
+			Span<char> destination6 = stackalloc char[32];
+			Value.UInt.TryFormat(destination6, out var charsWritten6);
+			builder.Append(destination6.Slice(0, charsWritten6));
+			break;
+		}
+		case ValueType.Long:
+		{
+			Span<char> destination5 = stackalloc char[32];
+			Value.Long.TryFormat(destination5, out var charsWritten5);
+			builder.Append(destination5.Slice(0, charsWritten5));
+			break;
+		}
+		case ValueType.ULong:
+		{
+			Span<char> destination4 = stackalloc char[32];
+			Value.ULong.TryFormat(destination4, out var charsWritten4);
+			builder.Append(destination4.Slice(0, charsWritten4));
+			break;
+		}
+		case ValueType.Float:
+		{
+			Span<char> destination3 = stackalloc char[32];
+			Value.Float.TryFormat(destination3, out var charsWritten3);
+			builder.Append(destination3.Slice(0, charsWritten3));
+			break;
+		}
+		case ValueType.Double:
+		{
+			Span<char> destination2 = stackalloc char[32];
+			Value.Double.TryFormat(destination2, out var charsWritten2);
+			builder.Append(destination2.Slice(0, charsWritten2));
+			break;
+		}
+		case ValueType.Vec3:
+		{
+			Span<char> destination = stackalloc char[32];
+			builder.Append('(');
+			NumberFormatInfo numberFormat = CultureInfo.InvariantCulture.NumberFormat;
+			Value.Vec3.x.TryFormat(destination, out var charsWritten, "F2", numberFormat);
+			builder.Append(destination.Slice(0, charsWritten));
+			builder.Append(", ");
+			Value.Vec3.y.TryFormat(destination, out charsWritten, "F2", numberFormat);
+			builder.Append(destination.Slice(0, charsWritten));
+			builder.Append(", ");
+			Value.Vec3.z.TryFormat(destination, out charsWritten, "F2", numberFormat);
+			builder.Append(destination.Slice(0, charsWritten));
+			builder.Append(')');
+			break;
+		}
+		case ValueType.String:
+			builder.Append(Value.String);
+			break;
+		}
+	}
+
+	public void WriteTo(JsonTextWriter writer, TextWriter textWriter, bool stringify)
+	{
+		if (stringify)
+		{
+			switch (ValueType)
+			{
+			case ValueType.Bool:
+				((JsonWriter)writer).WriteRaw("\"");
+				((JsonWriter)writer).WriteRawValue(Value.Bool ? "True" : "False");
+				((JsonWriter)writer).WriteRaw("\"");
+				break;
+			case ValueType.Int:
+				((JsonWriter)writer).WriteRaw("\"");
+				((JsonWriter)writer).WriteValue(Value.Int);
+				((JsonWriter)writer).WriteRaw("\"");
+				break;
+			case ValueType.UInt:
+				((JsonWriter)writer).WriteRaw("\"");
+				((JsonWriter)writer).WriteValue(Value.UInt);
+				((JsonWriter)writer).WriteRaw("\"");
+				break;
+			case ValueType.Long:
+				((JsonWriter)writer).WriteRaw("\"");
+				((JsonWriter)writer).WriteValue(Value.Long);
+				((JsonWriter)writer).WriteRaw("\"");
+				break;
+			case ValueType.ULong:
+				((JsonWriter)writer).WriteRaw("\"");
+				((JsonWriter)writer).WriteValue(Value.ULong);
+				((JsonWriter)writer).WriteRaw("\"");
+				break;
+			case ValueType.Float:
+			{
+				Span<char> destination2 = stackalloc char[32];
+				Value.Float.TryFormat(destination2, out var charsWritten2);
+				((JsonWriter)writer).WriteRaw("\"");
+				for (int l = 0; l < charsWritten2; l++)
+				{
+					textWriter.Write(destination2[l]);
+				}
+				((JsonWriter)writer).WriteRaw("\"");
+				((JsonWriter)writer).WriteRawValue((string)null);
+				break;
+			}
+			case ValueType.Double:
+			{
+				Span<char> destination3 = stackalloc char[32];
+				Value.Double.TryFormat(destination3, out var charsWritten3);
+				((JsonWriter)writer).WriteRaw("\"");
+				for (int m = 0; m < charsWritten3; m++)
+				{
+					textWriter.Write(destination3[m]);
+				}
+				((JsonWriter)writer).WriteRaw("\"");
+				((JsonWriter)writer).WriteRawValue((string)null);
+				break;
+			}
+			case ValueType.Vec3:
+			{
+				((JsonWriter)writer).WriteRaw("\"(");
+				Span<char> destination = stackalloc char[32];
+				NumberFormatInfo numberFormat = CultureInfo.InvariantCulture.NumberFormat;
+				Value.Vec3.x.TryFormat(destination, out var charsWritten, "F2", numberFormat);
+				for (int i = 0; i < charsWritten; i++)
+				{
+					textWriter.Write(destination[i]);
+				}
+				((JsonWriter)writer).WriteRaw(", ");
+				Value.Vec3.y.TryFormat(destination, out charsWritten, "F2", numberFormat);
+				for (int j = 0; j < charsWritten; j++)
+				{
+					textWriter.Write(destination[j]);
+				}
+				((JsonWriter)writer).WriteRaw(", ");
+				Value.Vec3.z.TryFormat(destination, out charsWritten, "F2", numberFormat);
+				for (int k = 0; k < charsWritten; k++)
+				{
+					textWriter.Write(destination[k]);
+				}
+				((JsonWriter)writer).WriteRaw(")\"");
+				((JsonWriter)writer).WriteRawValue((string)null);
+				break;
+			}
+			case ValueType.String:
+				((JsonWriter)writer).WriteValue(Value.String);
+				break;
+			}
+			return;
+		}
+		switch (ValueType)
+		{
+		case ValueType.Bool:
+			((JsonWriter)writer).WriteValue(Value.Bool);
+			break;
+		case ValueType.Int:
+			((JsonWriter)writer).WriteValue(Value.Int);
+			break;
+		case ValueType.UInt:
+			((JsonWriter)writer).WriteValue(Value.UInt);
+			break;
+		case ValueType.Long:
+			((JsonWriter)writer).WriteValue(Value.Long);
+			break;
+		case ValueType.ULong:
+			((JsonWriter)writer).WriteValue(Value.ULong);
+			break;
+		case ValueType.Float:
+		{
+			Span<char> destination5 = stackalloc char[32];
+			Value.Float.TryFormat(destination5, out var charsWritten5);
+			for (int num3 = 0; num3 < charsWritten5; num3++)
+			{
+				textWriter.Write(destination5[num3]);
+			}
+			((JsonWriter)writer).WriteRawValue((string)null);
+			break;
+		}
+		case ValueType.Double:
+		{
+			Span<char> destination6 = stackalloc char[32];
+			Value.Double.TryFormat(destination6, out var charsWritten6);
+			for (int num4 = 0; num4 < charsWritten6; num4++)
+			{
+				textWriter.Write(destination6[num4]);
+			}
+			((JsonWriter)writer).WriteRawValue((string)null);
+			break;
+		}
+		case ValueType.Vec3:
+		{
+			((JsonWriter)writer).WriteStartArray();
+			Span<char> destination4 = stackalloc char[32];
+			NumberFormatInfo numberFormat2 = CultureInfo.InvariantCulture.NumberFormat;
+			Value.Vec3.x.TryFormat(destination4, out var charsWritten4, "F2", numberFormat2);
+			for (int n = 0; n < charsWritten4; n++)
+			{
+				textWriter.Write(destination4[n]);
+			}
+			textWriter.Write(',');
+			Value.Vec3.y.TryFormat(destination4, out charsWritten4, "F2", numberFormat2);
+			for (int num = 0; num < charsWritten4; num++)
+			{
+				textWriter.Write(destination4[num]);
+			}
+			textWriter.Write(',');
+			Value.Vec3.z.TryFormat(destination4, out charsWritten4, "F2", numberFormat2);
+			for (int num2 = 0; num2 < charsWritten4; num2++)
+			{
+				textWriter.Write(destination4[num2]);
+			}
+			((JsonWriter)writer).WriteEndArray();
+			break;
+		}
+		case ValueType.String:
+			((JsonWriter)writer).WriteValue(Value.String);
+			break;
+		}
+	}
+}
+
+
+private struct Column
+{
+	public string title;
+
+	public int width;
+
+	public Column(string title)
+	{
+		this.title = title;
+		width = title.Length;
+	}
+}
+
+
 using System;
 using System.Collections.Generic;
 using System.Runtime.CompilerServices;
@@ -5698,6 +6489,19 @@ public static class UnsafeListAccess
 }
 
 
+using UnityEngine.Scripting;
+
+[Preserve]
+private class ListPrivateFieldAccess<T>
+{
+	internal T[] _items;
+
+	internal int _size;
+
+	internal int _version;
+}
+
+
 using System.CodeDom.Compiler;
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
@@ -5724,7 +6528,7 @@ internal class UnitySourceGeneratedAssemblyMonoScriptTypes_v1
 	private static MonoScriptData Get()
 	{
 		MonoScriptData result = default(MonoScriptData);
-		result.FilePathsData = new byte[2994]
+		result.FilePathsData = new byte[3059]
 		{
 			0, 0, 0, 1, 0, 0, 0, 42, 92, 65,
 			115, 115, 101, 116, 115, 92, 80, 108, 117, 103,
@@ -5748,7 +6552,7 @@ internal class UnitySourceGeneratedAssemblyMonoScriptTypes_v1
 			111, 108, 108, 101, 99, 116, 105, 111, 110, 115,
 			92, 79, 98, 106, 101, 99, 116, 87, 111, 114,
 			107, 81, 117, 101, 117, 101, 46, 99, 115, 0,
-			0, 0, 2, 0, 0, 0, 68, 92, 65, 115,
+			0, 0, 3, 0, 0, 0, 68, 92, 65, 115,
 			115, 101, 116, 115, 92, 80, 108, 117, 103, 105,
 			110, 115, 92, 82, 117, 115, 116, 46, 71, 108,
 			111, 98, 97, 108, 92, 67, 111, 108, 108, 101,
@@ -6008,26 +6812,32 @@ internal class UnitySourceGeneratedAssemblyMonoScriptTypes_v1
 			92, 85, 116, 105, 108, 105, 116, 121, 92, 65,
 			115, 121, 110, 99, 84, 101, 120, 116, 117, 114,
 			101, 76, 111, 97, 100, 46, 99, 115, 0, 0,
-			0, 1, 0, 0, 0, 49, 92, 65, 115, 115,
+			0, 1, 0, 0, 0, 57, 92, 65, 115, 115,
 			101, 116, 115, 92, 80, 108, 117, 103, 105, 110,
 			115, 92, 82, 117, 115, 116, 46, 71, 108, 111,
 			98, 97, 108, 92, 85, 116, 105, 108, 105, 116,
-			121, 92, 84, 101, 120, 116, 66, 117, 102, 102,
-			101, 114, 46, 99, 115, 0, 0, 0, 4, 0,
-			0, 0, 48, 92, 65, 115, 115, 101, 116, 115,
-			92, 80, 108, 117, 103, 105, 110, 115, 92, 82,
-			117, 115, 116, 46, 71, 108, 111, 98, 97, 108,
-			92, 85, 116, 105, 108, 105, 116, 121, 92, 84,
-			101, 120, 116, 84, 97, 98, 108, 101, 46, 99,
-			115, 0, 0, 0, 2, 0, 0, 0, 55, 92,
-			65, 115, 115, 101, 116, 115, 92, 80, 108, 117,
-			103, 105, 110, 115, 92, 82, 117, 115, 116, 46,
-			71, 108, 111, 98, 97, 108, 92, 85, 116, 105,
-			108, 105, 116, 121, 92, 85, 110, 115, 97, 102,
-			101, 76, 105, 115, 116, 65, 99, 99, 101, 115,
-			115, 46, 99, 115
+			121, 92, 78, 97, 116, 105, 118, 101, 65, 114,
+			114, 97, 121, 85, 116, 105, 108, 105, 116, 121,
+			46, 99, 115, 0, 0, 0, 1, 0, 0, 0,
+			49, 92, 65, 115, 115, 101, 116, 115, 92, 80,
+			108, 117, 103, 105, 110, 115, 92, 82, 117, 115,
+			116, 46, 71, 108, 111, 98, 97, 108, 92, 85,
+			116, 105, 108, 105, 116, 121, 92, 84, 101, 120,
+			116, 66, 117, 102, 102, 101, 114, 46, 99, 115,
+			0, 0, 0, 4, 0, 0, 0, 48, 92, 65,
+			115, 115, 101, 116, 115, 92, 80, 108, 117, 103,
+			105, 110, 115, 92, 82, 117, 115, 116, 46, 71,
+			108, 111, 98, 97, 108, 92, 85, 116, 105, 108,
+			105, 116, 121, 92, 84, 101, 120, 116, 84, 97,
+			98, 108, 101, 46, 99, 115, 0, 0, 0, 2,
+			0, 0, 0, 55, 92, 65, 115, 115, 101, 116,
+			115, 92, 80, 108, 117, 103, 105, 110, 115, 92,
+			82, 117, 115, 116, 46, 71, 108, 111, 98, 97,
+			108, 92, 85, 116, 105, 108, 105, 116, 121, 92,
+			85, 110, 115, 97, 102, 101, 76, 105, 115, 116,
+			65, 99, 99, 101, 115, 115, 46, 99, 115
 		};
-		result.TypesData = new byte[1898]
+		result.TypesData = new byte[1963]
 		{
 			0, 0, 0, 0, 16, 82, 117, 115, 116, 124,
 			65, 112, 112, 108, 105, 99, 97, 116, 105, 111,
@@ -6049,182 +6859,203 @@ internal class UnitySourceGeneratedAssemblyMonoScriptTypes_v1
 			111, 114, 107, 81, 117, 101, 117, 101, 1, 0,
 			0, 0, 26, 124, 80, 101, 114, 115, 105, 115,
 			116, 101, 110, 116, 79, 98, 106, 101, 99, 116,
-			87, 111, 114, 107, 81, 117, 101, 117, 101, 1,
-			0, 0, 0, 15, 124, 87, 111, 114, 108, 100,
-			83, 112, 97, 99, 101, 71, 114, 105, 100, 1,
-			0, 0, 0, 15, 124, 87, 111, 114, 108, 100,
-			83, 112, 97, 99, 101, 71, 114, 105, 100, 0,
-			0, 0, 0, 45, 82, 117, 115, 116, 46, 67,
-			111, 109, 112, 111, 110, 101, 110, 116, 115, 46,
-			67, 97, 109, 101, 114, 97, 124, 68, 101, 112,
-			116, 104, 79, 102, 70, 105, 101, 108, 100, 70,
-			111, 99, 117, 115, 80, 111, 105, 110, 116, 0,
-			0, 0, 0, 39, 82, 117, 115, 116, 46, 67,
-			111, 109, 112, 111, 110, 101, 110, 116, 115, 46,
-			67, 97, 109, 101, 114, 97, 124, 76, 105, 103,
-			104, 116, 105, 110, 103, 79, 118, 101, 114, 114,
-			105, 100, 101, 0, 0, 0, 0, 33, 82, 117,
-			115, 116, 46, 67, 111, 109, 112, 111, 110, 101,
-			110, 116, 115, 124, 78, 117, 108, 108, 77, 111,
-			110, 111, 66, 101, 104, 97, 118, 105, 111, 117,
-			114, 0, 0, 0, 0, 39, 82, 117, 115, 116,
-			46, 67, 111, 109, 112, 111, 110, 101, 110, 116,
-			115, 46, 85, 116, 105, 108, 105, 116, 121, 124,
-			79, 110, 79, 98, 106, 101, 99, 116, 68, 105,
-			115, 97, 98, 108, 101, 0, 0, 0, 0, 38,
-			82, 117, 115, 116, 46, 67, 111, 109, 112, 111,
-			110, 101, 110, 116, 115, 46, 85, 116, 105, 108,
-			105, 116, 121, 124, 79, 110, 79, 98, 106, 101,
-			99, 116, 69, 110, 97, 98, 108, 101, 0, 0,
-			0, 0, 4, 124, 67, 82, 67, 0, 0, 0,
-			0, 11, 82, 117, 115, 116, 124, 76, 97, 121,
-			101, 114, 115, 0, 0, 0, 0, 18, 82, 117,
-			115, 116, 46, 76, 97, 121, 101, 114, 115, 124,
-			83, 101, 114, 118, 101, 114, 0, 0, 0, 0,
-			18, 82, 117, 115, 116, 46, 76, 97, 121, 101,
-			114, 115, 124, 67, 108, 105, 101, 110, 116, 0,
-			0, 0, 0, 16, 82, 117, 115, 116, 46, 76,
-			97, 121, 101, 114, 115, 124, 77, 97, 115, 107,
-			0, 0, 0, 0, 8, 124, 70, 108, 111, 97,
-			116, 69, 120, 0, 0, 0, 0, 17, 85, 110,
+			87, 111, 114, 107, 81, 117, 101, 117, 101, 0,
+			0, 0, 0, 36, 124, 80, 101, 114, 115, 105,
+			115, 116, 101, 110, 116, 79, 98, 106, 101, 99,
+			116, 87, 111, 114, 107, 81, 117, 101, 117, 101,
+			76, 105, 115, 116, 66, 97, 99, 107, 101, 100,
+			1, 0, 0, 0, 15, 124, 87, 111, 114, 108,
+			100, 83, 112, 97, 99, 101, 71, 114, 105, 100,
+			1, 0, 0, 0, 15, 124, 87, 111, 114, 108,
+			100, 83, 112, 97, 99, 101, 71, 114, 105, 100,
+			0, 0, 0, 0, 45, 82, 117, 115, 116, 46,
+			67, 111, 109, 112, 111, 110, 101, 110, 116, 115,
+			46, 67, 97, 109, 101, 114, 97, 124, 68, 101,
+			112, 116, 104, 79, 102, 70, 105, 101, 108, 100,
+			70, 111, 99, 117, 115, 80, 111, 105, 110, 116,
+			0, 0, 0, 0, 39, 82, 117, 115, 116, 46,
+			67, 111, 109, 112, 111, 110, 101, 110, 116, 115,
+			46, 67, 97, 109, 101, 114, 97, 124, 76, 105,
+			103, 104, 116, 105, 110, 103, 79, 118, 101, 114,
+			114, 105, 100, 101, 0, 0, 0, 0, 33, 82,
+			117, 115, 116, 46, 67, 111, 109, 112, 111, 110,
+			101, 110, 116, 115, 124, 78, 117, 108, 108, 77,
+			111, 110, 111, 66, 101, 104, 97, 118, 105, 111,
+			117, 114, 0, 0, 0, 0, 39, 82, 117, 115,
+			116, 46, 67, 111, 109, 112, 111, 110, 101, 110,
+			116, 115, 46, 85, 116, 105, 108, 105, 116, 121,
+			124, 79, 110, 79, 98, 106, 101, 99, 116, 68,
+			105, 115, 97, 98, 108, 101, 0, 0, 0, 0,
+			38, 82, 117, 115, 116, 46, 67, 111, 109, 112,
+			111, 110, 101, 110, 116, 115, 46, 85, 116, 105,
+			108, 105, 116, 121, 124, 79, 110, 79, 98, 106,
+			101, 99, 116, 69, 110, 97, 98, 108, 101, 0,
+			0, 0, 0, 4, 124, 67, 82, 67, 0, 0,
+			0, 0, 11, 82, 117, 115, 116, 124, 76, 97,
+			121, 101, 114, 115, 0, 0, 0, 0, 18, 82,
+			117, 115, 116, 46, 76, 97, 121, 101, 114, 115,
+			124, 83, 101, 114, 118, 101, 114, 0, 0, 0,
+			0, 18, 82, 117, 115, 116, 46, 76, 97, 121,
+			101, 114, 115, 124, 67, 108, 105, 101, 110, 116,
+			0, 0, 0, 0, 16, 82, 117, 115, 116, 46,
+			76, 97, 121, 101, 114, 115, 124, 77, 97, 115,
+			107, 0, 0, 0, 0, 8, 124, 70, 108, 111,
+			97, 116, 69, 120, 0, 0, 0, 0, 17, 85,
+			110, 105, 116, 121, 69, 110, 103, 105, 110, 101,
+			124, 73, 110, 116, 69, 120, 0, 0, 0, 0,
+			7, 124, 76, 105, 115, 116, 69, 120, 0, 0,
+			0, 0, 18, 85, 110, 105, 116, 121, 69, 110,
+			103, 105, 110, 101, 124, 77, 97, 116, 104, 69,
+			120, 0, 0, 0, 0, 16, 124, 83, 116, 114,
+			105, 110, 103, 66, 117, 105, 108, 100, 101, 114,
+			69, 120, 0, 0, 0, 0, 20, 85, 110, 105,
+			116, 121, 69, 110, 103, 105, 110, 101, 124, 83,
+			116, 114, 105, 110, 103, 69, 120, 0, 0, 0,
+			0, 21, 85, 110, 105, 116, 121, 69, 110, 103,
+			105, 110, 101, 124, 86, 101, 99, 116, 111, 114,
+			50, 69, 120, 0, 0, 0, 0, 21, 85, 110,
 			105, 116, 121, 69, 110, 103, 105, 110, 101, 124,
-			73, 110, 116, 69, 120, 0, 0, 0, 0, 7,
-			124, 76, 105, 115, 116, 69, 120, 0, 0, 0,
-			0, 18, 85, 110, 105, 116, 121, 69, 110, 103,
-			105, 110, 101, 124, 77, 97, 116, 104, 69, 120,
-			0, 0, 0, 0, 16, 124, 83, 116, 114, 105,
-			110, 103, 66, 117, 105, 108, 100, 101, 114, 69,
-			120, 0, 0, 0, 0, 20, 85, 110, 105, 116,
-			121, 69, 110, 103, 105, 110, 101, 124, 83, 116,
-			114, 105, 110, 103, 69, 120, 0, 0, 0, 0,
-			21, 85, 110, 105, 116, 121, 69, 110, 103, 105,
-			110, 101, 124, 86, 101, 99, 116, 111, 114, 50,
-			69, 120, 0, 0, 0, 0, 21, 85, 110, 105,
-			116, 121, 69, 110, 103, 105, 110, 101, 124, 86,
-			101, 99, 116, 111, 114, 51, 69, 120, 0, 0,
-			0, 0, 21, 85, 110, 105, 116, 121, 69, 110,
-			103, 105, 110, 101, 124, 86, 101, 99, 116, 111,
-			114, 52, 69, 120, 0, 0, 0, 0, 11, 82,
-			117, 115, 116, 124, 71, 108, 111, 98, 97, 108,
-			0, 0, 0, 0, 20, 124, 72, 111, 114, 105,
-			122, 111, 110, 116, 97, 108, 65, 116, 116, 114,
-			105, 98, 117, 116, 101, 0, 0, 0, 0, 24,
-			124, 73, 67, 117, 115, 116, 111, 109, 77, 97,
-			116, 101, 114, 105, 97, 108, 82, 101, 112, 108,
-			97, 99, 101, 114, 0, 0, 0, 0, 12, 82,
-			117, 115, 116, 124, 73, 69, 110, 116, 105, 116,
-			121, 0, 0, 0, 0, 29, 82, 117, 115, 116,
-			46, 73, 109, 97, 103, 101, 69, 102, 102, 101,
-			99, 116, 115, 124, 73, 99, 111, 110, 79, 117,
-			116, 108, 105, 110, 101, 0, 0, 0, 0, 24,
-			124, 73, 110, 115, 112, 101, 99, 116, 111, 114,
-			70, 108, 97, 103, 115, 65, 116, 116, 114, 105,
-			98, 117, 116, 101, 0, 0, 0, 0, 21, 70,
-			97, 99, 101, 112, 117, 110, 99, 104, 124, 73,
-			110, 115, 116, 97, 110, 116, 105, 97, 116, 101,
-			0, 0, 0, 0, 17, 124, 73, 69, 100, 105,
-			116, 111, 114, 67, 111, 109, 112, 111, 110, 101,
-			110, 116, 0, 0, 0, 0, 17, 124, 73, 83,
-			101, 114, 118, 101, 114, 67, 111, 109, 112, 111,
-			110, 101, 110, 116, 0, 0, 0, 0, 17, 124,
-			73, 67, 108, 105, 101, 110, 116, 67, 111, 109,
-			112, 111, 110, 101, 110, 116, 0, 0, 0, 0,
-			18, 124, 73, 80, 114, 101, 102, 97, 98, 80,
-			114, 101, 80, 114, 111, 99, 101, 115, 115, 0,
-			0, 0, 0, 19, 124, 73, 80, 114, 101, 102,
-			97, 98, 80, 111, 115, 116, 80, 114, 111, 99,
-			101, 115, 115, 0, 0, 0, 0, 17, 124, 73,
-			80, 114, 101, 102, 97, 98, 80, 114, 111, 99,
-			101, 115, 115, 111, 114, 0, 0, 0, 0, 19,
-			124, 73, 83, 101, 114, 118, 101, 114, 67, 111,
-			109, 112, 111, 110, 101, 110, 116, 69, 120, 0,
-			0, 0, 0, 19, 124, 73, 67, 108, 105, 101,
-			110, 116, 67, 111, 109, 112, 111, 110, 101, 110,
-			116, 69, 120, 0, 0, 0, 0, 18, 124, 73,
-			80, 114, 111, 112, 82, 101, 110, 100, 101, 114,
-			78, 111, 116, 105, 102, 121, 0, 0, 0, 0,
-			21, 82, 117, 115, 116, 124, 73, 110, 100, 105,
-			114, 101, 99, 116, 76, 105, 103, 104, 116, 105,
-			110, 103, 0, 0, 0, 0, 40, 82, 117, 115,
-			116, 46, 73, 110, 100, 105, 114, 101, 99, 116,
-			76, 105, 103, 104, 116, 105, 110, 103, 124, 65,
-			109, 98, 105, 101, 110, 116, 80, 114, 111, 98,
-			101, 80, 97, 114, 97, 109, 115, 0, 0, 0,
-			0, 20, 124, 77, 97, 116, 101, 114, 105, 97,
-			108, 82, 101, 112, 108, 97, 99, 101, 109, 101,
-			110, 116, 0, 0, 0, 0, 5, 124, 65, 65,
-			66, 66, 0, 0, 0, 0, 8, 124, 67, 97,
-			112, 115, 117, 108, 101, 0, 0, 0, 0, 9,
-			124, 67, 121, 108, 105, 110, 100, 101, 114, 0,
-			0, 0, 0, 4, 124, 71, 74, 75, 0, 0,
-			0, 0, 8, 124, 83, 105, 109, 112, 108, 101,
-			120, 0, 0, 0, 0, 5, 124, 76, 105, 110,
-			101, 0, 0, 0, 0, 6, 124, 77, 97, 116,
-			104, 120, 0, 0, 0, 0, 4, 124, 79, 66,
-			66, 0, 0, 0, 0, 7, 124, 83, 101, 101,
-			100, 69, 120, 0, 0, 0, 0, 11, 124, 83,
-			101, 101, 100, 82, 97, 110, 100, 111, 109, 0,
-			0, 0, 0, 7, 124, 83, 112, 104, 101, 114,
-			101, 0, 0, 0, 0, 9, 124, 84, 114, 105,
-			97, 110, 103, 108, 101, 0, 0, 0, 0, 20,
+			86, 101, 99, 116, 111, 114, 51, 69, 120, 0,
+			0, 0, 0, 21, 85, 110, 105, 116, 121, 69,
+			110, 103, 105, 110, 101, 124, 86, 101, 99, 116,
+			111, 114, 52, 69, 120, 0, 0, 0, 0, 11,
+			82, 117, 115, 116, 124, 71, 108, 111, 98, 97,
+			108, 0, 0, 0, 0, 20, 124, 72, 111, 114,
+			105, 122, 111, 110, 116, 97, 108, 65, 116, 116,
+			114, 105, 98, 117, 116, 101, 0, 0, 0, 0,
+			24, 124, 73, 67, 117, 115, 116, 111, 109, 77,
+			97, 116, 101, 114, 105, 97, 108, 82, 101, 112,
+			108, 97, 99, 101, 114, 0, 0, 0, 0, 12,
+			82, 117, 115, 116, 124, 73, 69, 110, 116, 105,
+			116, 121, 0, 0, 0, 0, 29, 82, 117, 115,
+			116, 46, 73, 109, 97, 103, 101, 69, 102, 102,
+			101, 99, 116, 115, 124, 73, 99, 111, 110, 79,
+			117, 116, 108, 105, 110, 101, 0, 0, 0, 0,
+			24, 124, 73, 110, 115, 112, 101, 99, 116, 111,
+			114, 70, 108, 97, 103, 115, 65, 116, 116, 114,
+			105, 98, 117, 116, 101, 0, 0, 0, 0, 21,
 			70, 97, 99, 101, 112, 117, 110, 99, 104, 124,
+			73, 110, 115, 116, 97, 110, 116, 105, 97, 116,
+			101, 0, 0, 0, 0, 17, 124, 73, 69, 100,
+			105, 116, 111, 114, 67, 111, 109, 112, 111, 110,
+			101, 110, 116, 0, 0, 0, 0, 17, 124, 73,
+			83, 101, 114, 118, 101, 114, 67, 111, 109, 112,
+			111, 110, 101, 110, 116, 0, 0, 0, 0, 17,
+			124, 73, 67, 108, 105, 101, 110, 116, 67, 111,
+			109, 112, 111, 110, 101, 110, 116, 0, 0, 0,
+			0, 18, 124, 73, 80, 114, 101, 102, 97, 98,
+			80, 114, 101, 80, 114, 111, 99, 101, 115, 115,
+			0, 0, 0, 0, 19, 124, 73, 80, 114, 101,
+			102, 97, 98, 80, 111, 115, 116, 80, 114, 111,
+			99, 101, 115, 115, 0, 0, 0, 0, 17, 124,
+			73, 80, 114, 101, 102, 97, 98, 80, 114, 111,
+			99, 101, 115, 115, 111, 114, 0, 0, 0, 0,
+			19, 124, 73, 83, 101, 114, 118, 101, 114, 67,
+			111, 109, 112, 111, 110, 101, 110, 116, 69, 120,
+			0, 0, 0, 0, 19, 124, 73, 67, 108, 105,
+			101, 110, 116, 67, 111, 109, 112, 111, 110, 101,
+			110, 116, 69, 120, 0, 0, 0, 0, 18, 124,
+			73, 80, 114, 111, 112, 82, 101, 110, 100, 101,
+			114, 78, 111, 116, 105, 102, 121, 0, 0, 0,
+			0, 21, 82, 117, 115, 116, 124, 73, 110, 100,
+			105, 114, 101, 99, 116, 76, 105, 103, 104, 116,
+			105, 110, 103, 0, 0, 0, 0, 40, 82, 117,
+			115, 116, 46, 73, 110, 100, 105, 114, 101, 99,
+			116, 76, 105, 103, 104, 116, 105, 110, 103, 124,
+			65, 109, 98, 105, 101, 110, 116, 80, 114, 111,
+			98, 101, 80, 97, 114, 97, 109, 115, 0, 0,
+			0, 0, 20, 124, 77, 97, 116, 101, 114, 105,
+			97, 108, 82, 101, 112, 108, 97, 99, 101, 109,
+			101, 110, 116, 0, 0, 0, 0, 5, 124, 65,
+			65, 66, 66, 0, 0, 0, 0, 8, 124, 67,
+			97, 112, 115, 117, 108, 101, 0, 0, 0, 0,
+			9, 124, 67, 121, 108, 105, 110, 100, 101, 114,
+			0, 0, 0, 0, 4, 124, 71, 74, 75, 0,
+			0, 0, 0, 8, 124, 83, 105, 109, 112, 108,
+			101, 120, 0, 0, 0, 0, 5, 124, 76, 105,
+			110, 101, 0, 0, 0, 0, 6, 124, 77, 97,
+			116, 104, 120, 0, 0, 0, 0, 4, 124, 79,
+			66, 66, 0, 0, 0, 0, 7, 124, 83, 101,
+			101, 100, 69, 120, 0, 0, 0, 0, 11, 124,
+			83, 101, 101, 100, 82, 97, 110, 100, 111, 109,
+			0, 0, 0, 0, 7, 124, 83, 112, 104, 101,
+			114, 101, 0, 0, 0, 0, 9, 124, 84, 114,
+			105, 97, 110, 103, 108, 101, 0, 0, 0, 0,
+			20, 70, 97, 99, 101, 112, 117, 110, 99, 104,
+			124, 79, 98, 106, 101, 99, 116, 80, 111, 111,
+			108, 0, 0, 0, 0, 24, 70, 97, 99, 101,
+			112, 117, 110, 99, 104, 124, 71, 97, 109, 101,
 			79, 98, 106, 101, 99, 116, 80, 111, 111, 108,
-			0, 0, 0, 0, 24, 70, 97, 99, 101, 112,
-			117, 110, 99, 104, 124, 71, 97, 109, 101, 79,
-			98, 106, 101, 99, 116, 80, 111, 111, 108, 0,
-			0, 0, 0, 17, 82, 117, 115, 116, 124, 80,
-			114, 111, 112, 82, 101, 110, 100, 101, 114, 101,
-			114, 0, 0, 0, 0, 36, 82, 117, 115, 116,
-			46, 80, 114, 111, 112, 82, 101, 110, 100, 101,
-			114, 101, 114, 124, 83, 107, 105, 110, 86, 105,
-			101, 119, 101, 114, 83, 101, 116, 116, 105, 110,
-			103, 115, 0, 0, 0, 0, 22, 82, 117, 115,
-			116, 124, 80, 114, 111, 112, 82, 101, 110, 100,
-			101, 114, 101, 114, 68, 101, 98, 117, 103, 0,
-			0, 0, 0, 13, 82, 117, 115, 116, 124, 80,
-			114, 111, 116, 111, 99, 111, 108, 0, 0, 0,
-			0, 20, 82, 117, 115, 116, 46, 82, 101, 103,
-			105, 115, 116, 114, 121, 124, 69, 110, 116, 105,
-			116, 121, 1, 0, 0, 0, 14, 70, 97, 99,
-			101, 112, 117, 110, 99, 104, 124, 84, 105, 99,
-			107, 1, 0, 0, 0, 20, 70, 97, 99, 101,
+			0, 0, 0, 0, 17, 82, 117, 115, 116, 124,
+			80, 114, 111, 112, 82, 101, 110, 100, 101, 114,
+			101, 114, 0, 0, 0, 0, 36, 82, 117, 115,
+			116, 46, 80, 114, 111, 112, 82, 101, 110, 100,
+			101, 114, 101, 114, 124, 83, 107, 105, 110, 86,
+			105, 101, 119, 101, 114, 83, 101, 116, 116, 105,
+			110, 103, 115, 0, 0, 0, 0, 22, 82, 117,
+			115, 116, 124, 80, 114, 111, 112, 82, 101, 110,
+			100, 101, 114, 101, 114, 68, 101, 98, 117, 103,
+			0, 0, 0, 0, 13, 82, 117, 115, 116, 124,
+			80, 114, 111, 116, 111, 99, 111, 108, 0, 0,
+			0, 0, 20, 82, 117, 115, 116, 46, 82, 101,
+			103, 105, 115, 116, 114, 121, 124, 69, 110, 116,
+			105, 116, 121, 1, 0, 0, 0, 14, 70, 97,
+			99, 101, 112, 117, 110, 99, 104, 124, 84, 105,
+			99, 107, 1, 0, 0, 0, 20, 70, 97, 99,
+			101, 112, 117, 110, 99, 104, 46, 84, 105, 99,
+			107, 124, 69, 110, 116, 114, 121, 1, 0, 0,
+			0, 14, 70, 97, 99, 101, 112, 117, 110, 99,
+			104, 124, 84, 105, 99, 107, 1, 0, 0, 0,
+			20, 70, 97, 99, 101, 112, 117, 110, 99, 104,
+			46, 84, 105, 99, 107, 124, 69, 110, 116, 114,
+			121, 0, 0, 0, 0, 20, 70, 97, 99, 101,
 			112, 117, 110, 99, 104, 46, 84, 105, 99, 107,
-			124, 69, 110, 116, 114, 121, 1, 0, 0, 0,
-			14, 70, 97, 99, 101, 112, 117, 110, 99, 104,
-			124, 84, 105, 99, 107, 1, 0, 0, 0, 20,
-			70, 97, 99, 101, 112, 117, 110, 99, 104, 46,
-			84, 105, 99, 107, 124, 69, 110, 116, 114, 121,
-			0, 0, 0, 0, 20, 70, 97, 99, 101, 112,
-			117, 110, 99, 104, 46, 84, 105, 99, 107, 43,
-			124, 76, 105, 115, 116, 0, 0, 0, 0, 23,
-			70, 97, 99, 101, 112, 117, 110, 99, 104, 124,
-			84, 105, 99, 107, 67, 111, 109, 112, 111, 110,
-			101, 110, 116, 0, 0, 0, 0, 21, 82, 117,
-			115, 116, 124, 65, 115, 121, 110, 99, 84, 101,
-			120, 116, 117, 114, 101, 76, 111, 97, 100, 0,
-			0, 0, 0, 11, 124, 84, 101, 120, 116, 66,
-			117, 102, 102, 101, 114, 0, 0, 0, 0, 10,
-			124, 84, 101, 120, 116, 84, 97, 98, 108, 101,
-			0, 0, 0, 0, 23, 84, 101, 120, 116, 84,
-			97, 98, 108, 101, 124, 82, 111, 119, 86, 97,
-			108, 117, 101, 85, 110, 105, 111, 110, 0, 0,
-			0, 0, 18, 84, 101, 120, 116, 84, 97, 98,
-			108, 101, 124, 82, 111, 119, 86, 97, 108, 117,
-			101, 0, 0, 0, 0, 16, 84, 101, 120, 116,
-			84, 97, 98, 108, 101, 124, 67, 111, 108, 117,
-			109, 110, 0, 0, 0, 0, 17, 124, 85, 110,
-			115, 97, 102, 101, 76, 105, 115, 116, 65, 99,
-			99, 101, 115, 115, 0, 0, 0, 0, 39, 85,
-			110, 115, 97, 102, 101, 76, 105, 115, 116, 65,
-			99, 99, 101, 115, 115, 124, 76, 105, 115, 116,
-			80, 114, 105, 118, 97, 116, 101, 70, 105, 101,
-			108, 100, 65, 99, 99, 101, 115, 115
+			43, 124, 76, 105, 115, 116, 0, 0, 0, 0,
+			23, 70, 97, 99, 101, 112, 117, 110, 99, 104,
+			124, 84, 105, 99, 107, 67, 111, 109, 112, 111,
+			110, 101, 110, 116, 0, 0, 0, 0, 21, 82,
+			117, 115, 116, 124, 65, 115, 121, 110, 99, 84,
+			101, 120, 116, 117, 114, 101, 76, 111, 97, 100,
+			0, 0, 0, 0, 19, 124, 78, 97, 116, 105,
+			118, 101, 65, 114, 114, 97, 121, 85, 116, 105,
+			108, 105, 116, 121, 0, 0, 0, 0, 11, 124,
+			84, 101, 120, 116, 66, 117, 102, 102, 101, 114,
+			0, 0, 0, 0, 10, 124, 84, 101, 120, 116,
+			84, 97, 98, 108, 101, 0, 0, 0, 0, 23,
+			84, 101, 120, 116, 84, 97, 98, 108, 101, 124,
+			82, 111, 119, 86, 97, 108, 117, 101, 85, 110,
+			105, 111, 110, 0, 0, 0, 0, 18, 84, 101,
+			120, 116, 84, 97, 98, 108, 101, 124, 82, 111,
+			119, 86, 97, 108, 117, 101, 0, 0, 0, 0,
+			16, 84, 101, 120, 116, 84, 97, 98, 108, 101,
+			124, 67, 111, 108, 117, 109, 110, 0, 0, 0,
+			0, 17, 124, 85, 110, 115, 97, 102, 101, 76,
+			105, 115, 116, 65, 99, 99, 101, 115, 115, 0,
+			0, 0, 0, 39, 85, 110, 115, 97, 102, 101,
+			76, 105, 115, 116, 65, 99, 99, 101, 115, 115,
+			124, 76, 105, 115, 116, 80, 114, 105, 118, 97,
+			116, 101, 70, 105, 101, 108, 100, 65, 99, 99,
+			101, 115, 115
 		};
-		result.TotalFiles = 53;
-		result.TotalTypes = 82;
+		result.TotalFiles = 54;
+		result.TotalTypes = 84;
 		result.IsEditorOnly = false;
 		return result;
 	}
+}
+
+
+private struct MonoScriptData
+{
+	public byte[] FilePathsData;
+
+	public byte[] TypesData;
+
+	public int TotalTypes;
+
+	public int TotalFiles;
+
+	public bool IsEditorOnly;
 }
 
 
@@ -6489,6 +7320,153 @@ public static class Tick
 	{
 		Cleanup();
 		Late.Tick();
+	}
+}
+
+
+using System;
+using System.Collections.Generic;
+using UnityEngine;
+
+public struct Entry
+{
+	public class List : List<Entry>
+	{
+		public void Remove(Object obj)
+		{
+			for (int i = 0; i < base.Count; i++)
+			{
+				if (base[i].TargetObject == obj || base[i].Errored)
+				{
+					RemoveAt(i);
+					i--;
+				}
+			}
+		}
+
+		internal void Tick()
+		{
+			int i = 0;
+			try
+			{
+				for (i = 0; i < base.Count; i++)
+				{
+					base[i].Function();
+				}
+			}
+			catch (Exception ex)
+			{
+				Debug.LogException(ex);
+				Entry value = base[i];
+				value.Errored = true;
+				base[i] = value;
+			}
+		}
+
+		internal void TickTimed()
+		{
+			float time = Time.time;
+			int i = 0;
+			try
+			{
+				for (i = 0; i < base.Count; i++)
+				{
+					Entry value = base[i];
+					if (!(value.NextCall > time))
+					{
+						value.Function();
+						value.NextCall = time + value.MinDelay + value.RandDelay * Random.Range(0f, 1f);
+						base[i] = value;
+					}
+				}
+			}
+			catch (Exception ex)
+			{
+				Debug.LogException(ex);
+				Entry value2 = base[i];
+				value2.Errored = true;
+				base[i] = value2;
+			}
+		}
+	}
+
+	public Object TargetObject;
+
+	public float MinDelay;
+
+	public float RandDelay;
+
+	public float NextCall;
+
+	public Action Function;
+
+	private bool Errored;
+
+	public string DebugName;
+}
+
+
+using System;
+using System.Collections.Generic;
+using UnityEngine;
+
+public class List : List<Entry>
+{
+	public void Remove(Object obj)
+	{
+		for (int i = 0; i < base.Count; i++)
+		{
+			if (base[i].TargetObject == obj || base[i].Errored)
+			{
+				RemoveAt(i);
+				i--;
+			}
+		}
+	}
+
+	internal void Tick()
+	{
+		int i = 0;
+		try
+		{
+			for (i = 0; i < base.Count; i++)
+			{
+				base[i].Function();
+			}
+		}
+		catch (Exception ex)
+		{
+			Debug.LogException(ex);
+			Entry value = base[i];
+			value.Errored = true;
+			base[i] = value;
+		}
+	}
+
+	internal void TickTimed()
+	{
+		float time = Time.time;
+		int i = 0;
+		try
+		{
+			for (i = 0; i < base.Count; i++)
+			{
+				Entry value = base[i];
+				if (!(value.NextCall > time))
+				{
+					value.Function();
+					value.NextCall = time + value.MinDelay + value.RandDelay * Random.Range(0f, 1f);
+					base[i] = value;
+				}
+			}
+		}
+		catch (Exception ex)
+		{
+			Debug.LogException(ex);
+			Entry value2 = base[i];
+			value2.Errored = true;
+			base[i] = value2;
+		}
 	}
 }
 
@@ -7119,7 +8097,7 @@ public static class Vector2Ex
 		//IL_0025: Unknown result type (might be due to invalid IL or missing references)
 		//IL_002d: Unknown result type (might be due to invalid IL or missing references)
 		//IL_0036: Unknown result type (might be due to invalid IL or missing references)
-		float num = degrees * ((float)Math.PI / 180f);
+		float num = degrees * (MathF.PI / 180f);
 		float num2 = Mathf.Sin(num);
 		float num3 = Mathf.Cos(num);
 		return new Vector2(v.x * num3 - v.y * num2, v.y * num3 + v.x * num2);
@@ -7168,7 +8146,7 @@ public static class Vector2Ex
 		//IL_0006: Unknown result type (might be due to invalid IL or missing references)
 		//IL_000d: Unknown result type (might be due to invalid IL or missing references)
 		//IL_0013: Unknown result type (might be due to invalid IL or missing references)
-		return Mathf.Atan2(to.y - from.y, to.x - from.x) * (180f / (float)Math.PI);
+		return Mathf.Atan2(to.y - from.y, to.x - from.x) * (180f / MathF.PI);
 	}
 }
 
@@ -7963,6 +8941,128 @@ public static class Layers
 }
 
 
+public static class Server
+{
+	public const int VehiclesSimple = 32768;
+
+	public const int Players = 131072;
+
+	public const int NPCs = 2048;
+
+	public const int Buildings = 2097152;
+
+	public const int Bullet = 1220225809;
+
+	public const int Projectile = 1237003025;
+
+	public const int ProjectileStaticSolid = 1084293393;
+
+	public const int Deployed = 256;
+
+	public const int Stability = 2097408;
+
+	public const int Decay = 2097408;
+
+	public const int PlayerMovement = 1503731969;
+
+	public const int PlayerGrounded = 1503764737;
+
+	public const int GroundWatch = 161546240;
+
+	public const int Targets = 133120;
+
+	public const int VehicleCollision = 1235583233;
+
+	public const int RagdollCollision = -910884607;
+}
+
+
+public static class Client
+{
+	public const int Melee = 1270440705;
+
+	public const int Bullet = 1270440721;
+
+	public const int PlayerUse = -1917228287;
+
+	public const int PlayerMovement = 1537286401;
+
+	public const int PlayerStepDetection = 455155969;
+
+	public const int Footstep = 144777217;
+
+	public const int EntTrace = -877042943;
+}
+
+
+public static class Mask
+{
+	public const int Default = 1;
+
+	public const int TransparentFX = 2;
+
+	public const int Ignore_Raycast = 4;
+
+	public const int Reserved1 = 8;
+
+	public const int Water = 16;
+
+	public const int UI = 32;
+
+	public const int Reserved2 = 64;
+
+	public const int Reserved3 = 128;
+
+	public const int Deployed = 256;
+
+	public const int Ragdoll = 512;
+
+	public const int Invisible = 1024;
+
+	public const int AI = 2048;
+
+	public const int Player_Movement = 4096;
+
+	public const int Vehicle_Detailed = 8192;
+
+	public const int Game_Trace = 16384;
+
+	public const int Vehicle_World = 32768;
+
+	public const int World = 65536;
+
+	public const int Player_Server = 131072;
+
+	public const int Trigger = 262144;
+
+	public const int Harvestable = 524288;
+
+	public const int Physics_Projectile = 1048576;
+
+	public const int Construction = 2097152;
+
+	public const int Construction_Socket = 4194304;
+
+	public const int Terrain = 8388608;
+
+	public const int Transparent = 16777216;
+
+	public const int Clutter = 33554432;
+
+	public const int Bush = 67108864;
+
+	public const int Vehicle_Large = 134217728;
+
+	public const int Prevent_Movement = 268435456;
+
+	public const int Prevent_Building = 536870912;
+
+	public const int Tree = 1073741824;
+
+	public const int Physics_Debris = int.MinValue;
+}
+
+
 public enum Rarity
 {
 	None,
@@ -8020,7 +9120,27 @@ public enum AmmoTypes
 	MISSILE_SEEKING = 0x1000,
 	CATAPULT_BOULDER = 0x2000,
 	BALLISTA_ARROW = 0x4000,
-	DART = 0x8000
+	DART = 0x8000,
+	CANNONBALL = 0x10000,
+	PAINTBALL = 0x20000
+}
+
+
+using System;
+
+[Flags]
+public enum AmmoSubTypes
+{
+	STANDARD = 1,
+	HV = 2,
+	INCENDIARY = 4,
+	EXPLOSIVE = 8,
+	SLUG = 0x10,
+	SMOKE = 0x20,
+	BUCKSHOT = 0x40,
+	RADIATION = 0x80,
+	SCATTER = 0x100,
+	INCAPACITATE = 0x200
 }
 
 
@@ -8100,8 +9220,8 @@ public static class Global
 
 	public static void Init()
 	{
-		LaunchCountThisVersion = PlayerPrefs.GetInt($"launch{2617}", 0) + 1;
-		PlayerPrefs.SetInt($"launch{2617}", LaunchCountThisVersion);
+		LaunchCountThisVersion = PlayerPrefs.GetInt($"launch{2621}", 0) + 1;
+		PlayerPrefs.SetInt($"launch{2621}", LaunchCountThisVersion);
 	}
 }
 
@@ -8218,6 +9338,16 @@ public static class IndirectLighting
 }
 
 
+using UnityEngine.Rendering;
+
+public struct AmbientProbeParams
+{
+	public SphericalHarmonicsL2 sh;
+
+	public float intensity;
+}
+
+
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -8229,6 +9359,7 @@ using Rust.ImageEffects;
 using UnityEngine;
 using UnityEngine.Rendering;
 
+[ExecuteInEditMode]
 public class PropRenderer : MonoBehaviour, IClientComponent
 {
 	[Serializable]
@@ -8254,6 +9385,8 @@ public class PropRenderer : MonoBehaviour, IClientComponent
 
 	public bool Outline = true;
 
+	public bool ForceIdleAnimation;
+
 	[Header("Rotation")]
 	public Vector3 Rotation = Vector3.zero;
 
@@ -8263,6 +9396,8 @@ public class PropRenderer : MonoBehaviour, IClientComponent
 	public Vector3 PositionalTweak = Vector3.zero;
 
 	[Header("Misc")]
+	public GameObject[] HideDuringRender = (GameObject[])(object)new GameObject[0];
+
 	public float FieldOfView = 40f;
 
 	public float farClipPlane = 100f;
@@ -8272,8 +9407,6 @@ public class PropRenderer : MonoBehaviour, IClientComponent
 	public Vector3 LookDirection = new Vector3(0.2f, 0.4f, 1f);
 
 	public Vector3 UpDirection = Vector3.up;
-
-	public GameObject[] HideDuringRender = (GameObject[])(object)new GameObject[0];
 
 	[Range(0f, 1f)]
 	public float Light1IntensityMultiplier = 1f;
@@ -8286,6 +9419,8 @@ public class PropRenderer : MonoBehaviour, IClientComponent
 
 	[Range(-360f, 360f)]
 	public float Light2Rotation = -35f;
+
+	public string PathOverride = "";
 
 	public SkinViewerSettings skinViewerSettings;
 
@@ -8530,7 +9665,7 @@ public class PropRenderer : MonoBehaviour, IClientComponent
 
 	public static float DefaultLightIntensityScale(float intensity)
 	{
-		return Mathf.GammaToLinearSpace(intensity) * (float)Math.PI;
+		return Mathf.GammaToLinearSpace(intensity) * MathF.PI;
 	}
 
 	public Texture2D ScreenshotToTexture(int width, int height, int superSampleSize, LightIntensityScale lightIntensityScale = null)
@@ -8690,6 +9825,28 @@ public class PropRenderer : MonoBehaviour, IClientComponent
 }
 
 
+using System;
+using UnityEngine;
+
+[Serializable]
+public class SkinViewerSettings
+{
+	[Tooltip("If non-zero, will be used as a pivot point instead of the centre of the enclosing bounds")]
+	public Vector3 customLocalPivot = Vector3.zero;
+
+	[Tooltip("Additional camera offset only used in the skin viewer (as opposed to icon generation)")]
+	public Vector3 camPosOffset;
+
+	[Tooltip("For objects that rotate weirdly in other skin viewer pivot modes")]
+	public bool forceCamUpPivot;
+
+	public bool HasCustomPivot => customLocalPivot != Vector3.zero;
+}
+
+
+public delegate float LightIntensityScale(float intensity);
+
+
 using Rust;
 using UnityEngine;
 
@@ -8709,19 +9866,19 @@ public class PropRendererDebug : MonoBehaviour
 
 public static class Protocol
 {
-	public const int network = 2617;
+	public const int network = 2621;
 
-	public const int save = 275;
+	public const int save = 281;
 
 	public const int report = 1;
 
-	public const int persistance = 9;
+	public const int persistance = 10;
 
 	public const int analytics_db = 1;
 
 	public const int ping = 1;
 
-	public static string printable => 2617 + "." + 275 + "." + 1;
+	public static string printable => 2621 + "." + 281 + "." + 1;
 }
 
 
@@ -9234,697 +10391,15 @@ public class LightingOverride : MonoBehaviour
 }
 
 
-using System.Collections.Generic;
 using UnityEngine;
 
-public class Pool
+internal static class $BurstDirectCallInitializer
 {
-	public Stack<Object> stack = new Stack<Object>();
-
-	public int allocated;
-
-	public int available;
-
-	public string name;
-
-	public Pool(string name)
+	[RuntimeInitializeOnLoadMethod(/*Could not decode attribute arguments.*/)]
+	private static void Initialize()
 	{
-		this.name = name;
-	}
-
-	public T Pop<T>() where T : Object, new()
-	{
-		if (stack.Count > 0)
-		{
-			available--;
-			Object obj = stack.Pop();
-			return (T)(object)((obj is T) ? obj : null);
-		}
-		allocated++;
-		T val = new T();
-		((Object)val).name = name;
-		return val;
-	}
-
-	public void Push<T>(ref T instance) where T : Object, new()
-	{
-		available++;
-		stack.Push((Object)(object)instance);
-		instance = default(T);
-	}
-
-	public void Clear()
-	{
-		foreach (Object item in stack)
-		{
-			Object.Destroy(item);
-		}
-		available -= stack.Count;
-		allocated -= stack.Count;
-		stack.Clear();
-	}
-}
-
-
-public enum RoundingMode
-{
-	Up,
-	Down
-}
-
-
-using System.Runtime.InteropServices;
-using UnityEngine;
-
-[StructLayout(LayoutKind.Explicit)]
-private struct RowValueUnion
-{
-	[FieldOffset(0)]
-	public bool Bool;
-
-	[FieldOffset(0)]
-	public int Int;
-
-	[FieldOffset(0)]
-	public uint UInt;
-
-	[FieldOffset(0)]
-	public long Long;
-
-	[FieldOffset(0)]
-	public ulong ULong;
-
-	[FieldOffset(0)]
-	public float Float;
-
-	[FieldOffset(0)]
-	public double Double;
-
-	[FieldOffset(0)]
-	public Vector3 Vec3;
-
-	[FieldOffset(0)]
-	public string String;
-}
-
-
-private enum ValueType
-{
-	Bool,
-	Int,
-	UInt,
-	Long,
-	ULong,
-	Float,
-	Double,
-	Vec3,
-	String,
-	NextRow
-}
-
-
-using System;
-using System.Globalization;
-using System.IO;
-using System.Text;
-using Newtonsoft.Json;
-
-private struct RowValue
-{
-	public RowValueUnion Value;
-
-	public ValueType ValueType;
-
-	public void WriteTo(StringBuilder builder)
-	{
-		switch (ValueType)
-		{
-		case ValueType.Bool:
-			builder.Append(Value.Bool);
-			break;
-		case ValueType.Int:
-		{
-			Span<char> destination7 = stackalloc char[32];
-			Value.Int.TryFormat(destination7, out var charsWritten7);
-			builder.Append(destination7.Slice(0, charsWritten7));
-			break;
-		}
-		case ValueType.UInt:
-		{
-			Span<char> destination6 = stackalloc char[32];
-			Value.UInt.TryFormat(destination6, out var charsWritten6);
-			builder.Append(destination6.Slice(0, charsWritten6));
-			break;
-		}
-		case ValueType.Long:
-		{
-			Span<char> destination5 = stackalloc char[32];
-			Value.Long.TryFormat(destination5, out var charsWritten5);
-			builder.Append(destination5.Slice(0, charsWritten5));
-			break;
-		}
-		case ValueType.ULong:
-		{
-			Span<char> destination4 = stackalloc char[32];
-			Value.ULong.TryFormat(destination4, out var charsWritten4);
-			builder.Append(destination4.Slice(0, charsWritten4));
-			break;
-		}
-		case ValueType.Float:
-		{
-			Span<char> destination3 = stackalloc char[32];
-			Value.Float.TryFormat(destination3, out var charsWritten3);
-			builder.Append(destination3.Slice(0, charsWritten3));
-			break;
-		}
-		case ValueType.Double:
-		{
-			Span<char> destination2 = stackalloc char[32];
-			Value.Double.TryFormat(destination2, out var charsWritten2);
-			builder.Append(destination2.Slice(0, charsWritten2));
-			break;
-		}
-		case ValueType.Vec3:
-		{
-			Span<char> destination = stackalloc char[32];
-			builder.Append('(');
-			NumberFormatInfo numberFormat = CultureInfo.InvariantCulture.NumberFormat;
-			Value.Vec3.x.TryFormat(destination, out var charsWritten, "F2", numberFormat);
-			builder.Append(destination.Slice(0, charsWritten));
-			builder.Append(", ");
-			Value.Vec3.y.TryFormat(destination, out charsWritten, "F2", numberFormat);
-			builder.Append(destination.Slice(0, charsWritten));
-			builder.Append(", ");
-			Value.Vec3.z.TryFormat(destination, out charsWritten, "F2", numberFormat);
-			builder.Append(destination.Slice(0, charsWritten));
-			builder.Append(')');
-			break;
-		}
-		case ValueType.String:
-			builder.Append(Value.String);
-			break;
-		}
-	}
-
-	public void WriteTo(JsonTextWriter writer, TextWriter textWriter, bool stringify)
-	{
-		if (stringify)
-		{
-			switch (ValueType)
-			{
-			case ValueType.Bool:
-				((JsonWriter)writer).WriteRaw("\"");
-				((JsonWriter)writer).WriteRawValue(Value.Bool ? "True" : "False");
-				((JsonWriter)writer).WriteRaw("\"");
-				break;
-			case ValueType.Int:
-				((JsonWriter)writer).WriteRaw("\"");
-				((JsonWriter)writer).WriteValue(Value.Int);
-				((JsonWriter)writer).WriteRaw("\"");
-				break;
-			case ValueType.UInt:
-				((JsonWriter)writer).WriteRaw("\"");
-				((JsonWriter)writer).WriteValue(Value.UInt);
-				((JsonWriter)writer).WriteRaw("\"");
-				break;
-			case ValueType.Long:
-				((JsonWriter)writer).WriteRaw("\"");
-				((JsonWriter)writer).WriteValue(Value.Long);
-				((JsonWriter)writer).WriteRaw("\"");
-				break;
-			case ValueType.ULong:
-				((JsonWriter)writer).WriteRaw("\"");
-				((JsonWriter)writer).WriteValue(Value.ULong);
-				((JsonWriter)writer).WriteRaw("\"");
-				break;
-			case ValueType.Float:
-			{
-				Span<char> destination2 = stackalloc char[32];
-				Value.Float.TryFormat(destination2, out var charsWritten2);
-				((JsonWriter)writer).WriteRaw("\"");
-				for (int l = 0; l < charsWritten2; l++)
-				{
-					textWriter.Write(destination2[l]);
-				}
-				((JsonWriter)writer).WriteRaw("\"");
-				((JsonWriter)writer).WriteRawValue((string)null);
-				break;
-			}
-			case ValueType.Double:
-			{
-				Span<char> destination3 = stackalloc char[32];
-				Value.Double.TryFormat(destination3, out var charsWritten3);
-				((JsonWriter)writer).WriteRaw("\"");
-				for (int m = 0; m < charsWritten3; m++)
-				{
-					textWriter.Write(destination3[m]);
-				}
-				((JsonWriter)writer).WriteRaw("\"");
-				((JsonWriter)writer).WriteRawValue((string)null);
-				break;
-			}
-			case ValueType.Vec3:
-			{
-				((JsonWriter)writer).WriteRaw("\"(");
-				Span<char> destination = stackalloc char[32];
-				NumberFormatInfo numberFormat = CultureInfo.InvariantCulture.NumberFormat;
-				Value.Vec3.x.TryFormat(destination, out var charsWritten, "F2", numberFormat);
-				for (int i = 0; i < charsWritten; i++)
-				{
-					textWriter.Write(destination[i]);
-				}
-				((JsonWriter)writer).WriteRaw(", ");
-				Value.Vec3.y.TryFormat(destination, out charsWritten, "F2", numberFormat);
-				for (int j = 0; j < charsWritten; j++)
-				{
-					textWriter.Write(destination[j]);
-				}
-				((JsonWriter)writer).WriteRaw(", ");
-				Value.Vec3.z.TryFormat(destination, out charsWritten, "F2", numberFormat);
-				for (int k = 0; k < charsWritten; k++)
-				{
-					textWriter.Write(destination[k]);
-				}
-				((JsonWriter)writer).WriteRaw(")\"");
-				((JsonWriter)writer).WriteRawValue((string)null);
-				break;
-			}
-			case ValueType.String:
-				((JsonWriter)writer).WriteValue(Value.String);
-				break;
-			}
-			return;
-		}
-		switch (ValueType)
-		{
-		case ValueType.Bool:
-			((JsonWriter)writer).WriteValue(Value.Bool);
-			break;
-		case ValueType.Int:
-			((JsonWriter)writer).WriteValue(Value.Int);
-			break;
-		case ValueType.UInt:
-			((JsonWriter)writer).WriteValue(Value.UInt);
-			break;
-		case ValueType.Long:
-			((JsonWriter)writer).WriteValue(Value.Long);
-			break;
-		case ValueType.ULong:
-			((JsonWriter)writer).WriteValue(Value.ULong);
-			break;
-		case ValueType.Float:
-		{
-			Span<char> destination5 = stackalloc char[32];
-			Value.Float.TryFormat(destination5, out var charsWritten5);
-			for (int num3 = 0; num3 < charsWritten5; num3++)
-			{
-				textWriter.Write(destination5[num3]);
-			}
-			((JsonWriter)writer).WriteRawValue((string)null);
-			break;
-		}
-		case ValueType.Double:
-		{
-			Span<char> destination6 = stackalloc char[32];
-			Value.Double.TryFormat(destination6, out var charsWritten6);
-			for (int num4 = 0; num4 < charsWritten6; num4++)
-			{
-				textWriter.Write(destination6[num4]);
-			}
-			((JsonWriter)writer).WriteRawValue((string)null);
-			break;
-		}
-		case ValueType.Vec3:
-		{
-			((JsonWriter)writer).WriteStartArray();
-			Span<char> destination4 = stackalloc char[32];
-			NumberFormatInfo numberFormat2 = CultureInfo.InvariantCulture.NumberFormat;
-			Value.Vec3.x.TryFormat(destination4, out var charsWritten4, "F2", numberFormat2);
-			for (int n = 0; n < charsWritten4; n++)
-			{
-				textWriter.Write(destination4[n]);
-			}
-			textWriter.Write(',');
-			Value.Vec3.y.TryFormat(destination4, out charsWritten4, "F2", numberFormat2);
-			for (int num = 0; num < charsWritten4; num++)
-			{
-				textWriter.Write(destination4[num]);
-			}
-			textWriter.Write(',');
-			Value.Vec3.z.TryFormat(destination4, out charsWritten4, "F2", numberFormat2);
-			for (int num2 = 0; num2 < charsWritten4; num2++)
-			{
-				textWriter.Write(destination4[num2]);
-			}
-			((JsonWriter)writer).WriteEndArray();
-			break;
-		}
-		case ValueType.String:
-			((JsonWriter)writer).WriteValue(Value.String);
-			break;
-		}
-	}
-}
-
-
-private struct Column
-{
-	public string title;
-
-	public int width;
-
-	public Column(string title)
-	{
-		this.title = title;
-		width = title.Length;
-	}
-}
-
-
-using UnityEngine.Scripting;
-
-[Preserve]
-private class ListPrivateFieldAccess<T>
-{
-	internal T[] _items;
-
-	internal int _size;
-
-	internal int _version;
-}
-
-
-private struct MonoScriptData
-{
-	public byte[] FilePathsData;
-
-	public byte[] TypesData;
-
-	public int TotalTypes;
-
-	public int TotalFiles;
-
-	public bool IsEditorOnly;
-}
-
-
-using System;
-using System.Collections.Generic;
-using UnityEngine;
-
-public struct Entry
-{
-	public class List : List<Entry>
-	{
-		public void Remove(Object obj)
-		{
-			for (int i = 0; i < base.Count; i++)
-			{
-				if (base[i].TargetObject == obj || base[i].Errored)
-				{
-					RemoveAt(i);
-					i--;
-				}
-			}
-		}
-
-		internal void Tick()
-		{
-			int i = 0;
-			try
-			{
-				for (i = 0; i < base.Count; i++)
-				{
-					base[i].Function();
-				}
-			}
-			catch (Exception ex)
-			{
-				Debug.LogException(ex);
-				Entry value = base[i];
-				value.Errored = true;
-				base[i] = value;
-			}
-		}
-
-		internal void TickTimed()
-		{
-			float time = Time.time;
-			int i = 0;
-			try
-			{
-				for (i = 0; i < base.Count; i++)
-				{
-					Entry value = base[i];
-					if (!(value.NextCall > time))
-					{
-						value.Function();
-						value.NextCall = time + value.MinDelay + value.RandDelay * Random.Range(0f, 1f);
-						base[i] = value;
-					}
-				}
-			}
-			catch (Exception ex)
-			{
-				Debug.LogException(ex);
-				Entry value2 = base[i];
-				value2.Errored = true;
-				base[i] = value2;
-			}
-		}
-	}
-
-	public Object TargetObject;
-
-	public float MinDelay;
-
-	public float RandDelay;
-
-	public float NextCall;
-
-	public Action Function;
-
-	private bool Errored;
-
-	public string DebugName;
-}
-
-
-public static class Server
-{
-	public const int VehiclesSimple = 32768;
-
-	public const int Players = 131072;
-
-	public const int NPCs = 2048;
-
-	public const int Buildings = 2097152;
-
-	public const int Bullet = 1220225809;
-
-	public const int Projectile = 1237003025;
-
-	public const int ProjectileStaticSolid = 1084293393;
-
-	public const int Deployed = 256;
-
-	public const int Stability = 2097408;
-
-	public const int Decay = 2097408;
-
-	public const int PlayerMovement = 1503731969;
-
-	public const int PlayerGrounded = 1503764737;
-
-	public const int GroundWatch = 161546240;
-
-	public const int Targets = 133120;
-
-	public const int VehicleCollision = 1235583233;
-
-	public const int RagdollCollision = -910884607;
-}
-
-
-public static class Client
-{
-	public const int Melee = 1270440705;
-
-	public const int Bullet = 1270440721;
-
-	public const int PlayerUse = -1917228287;
-
-	public const int PlayerMovement = 1537286401;
-
-	public const int PlayerStepDetection = 455155969;
-
-	public const int Footstep = 144777217;
-
-	public const int EntTrace = -877042943;
-}
-
-
-public static class Mask
-{
-	public const int Default = 1;
-
-	public const int TransparentFX = 2;
-
-	public const int Ignore_Raycast = 4;
-
-	public const int Reserved1 = 8;
-
-	public const int Water = 16;
-
-	public const int UI = 32;
-
-	public const int Reserved2 = 64;
-
-	public const int Reserved3 = 128;
-
-	public const int Deployed = 256;
-
-	public const int Ragdoll = 512;
-
-	public const int Invisible = 1024;
-
-	public const int AI = 2048;
-
-	public const int Player_Movement = 4096;
-
-	public const int Vehicle_Detailed = 8192;
-
-	public const int Game_Trace = 16384;
-
-	public const int Vehicle_World = 32768;
-
-	public const int World = 65536;
-
-	public const int Player_Server = 131072;
-
-	public const int Trigger = 262144;
-
-	public const int Harvestable = 524288;
-
-	public const int Physics_Projectile = 1048576;
-
-	public const int Construction = 2097152;
-
-	public const int Construction_Socket = 4194304;
-
-	public const int Terrain = 8388608;
-
-	public const int Transparent = 16777216;
-
-	public const int Clutter = 33554432;
-
-	public const int Bush = 67108864;
-
-	public const int Vehicle_Large = 134217728;
-
-	public const int Prevent_Movement = 268435456;
-
-	public const int Prevent_Building = 536870912;
-
-	public const int Tree = 1073741824;
-
-	public const int Physics_Debris = int.MinValue;
-}
-
-
-using UnityEngine.Rendering;
-
-public struct AmbientProbeParams
-{
-	public SphericalHarmonicsL2 sh;
-
-	public float intensity;
-}
-
-
-using System;
-using UnityEngine;
-
-[Serializable]
-public class SkinViewerSettings
-{
-	[Tooltip("If non-zero, will be used as a pivot point instead of the centre of the enclosing bounds")]
-	public Vector3 customLocalPivot = Vector3.zero;
-
-	[Tooltip("Additional camera offset only used in the skin viewer (as opposed to icon generation)")]
-	public Vector3 camPosOffset;
-
-	[Tooltip("For objects that rotate weirdly in other skin viewer pivot modes")]
-	public bool forceCamUpPivot;
-
-	public bool HasCustomPivot => customLocalPivot != Vector3.zero;
-}
-
-
-public delegate float LightIntensityScale(float intensity);
-
-
-using System;
-using System.Collections.Generic;
-using UnityEngine;
-
-public class List : List<Entry>
-{
-	public void Remove(Object obj)
-	{
-		for (int i = 0; i < base.Count; i++)
-		{
-			if (base[i].TargetObject == obj || base[i].Errored)
-			{
-				RemoveAt(i);
-				i--;
-			}
-		}
-	}
-
-	internal void Tick()
-	{
-		int i = 0;
-		try
-		{
-			for (i = 0; i < base.Count; i++)
-			{
-				base[i].Function();
-			}
-		}
-		catch (Exception ex)
-		{
-			Debug.LogException(ex);
-			Entry value = base[i];
-			value.Errored = true;
-			base[i] = value;
-		}
-	}
-
-	internal void TickTimed()
-	{
-		float time = Time.time;
-		int i = 0;
-		try
-		{
-			for (i = 0; i < base.Count; i++)
-			{
-				Entry value = base[i];
-				if (!(value.NextCall > time))
-				{
-					value.Function();
-					value.NextCall = time + value.MinDelay + value.RandDelay * Random.Range(0f, 1f);
-					base[i] = value;
-				}
-			}
-		}
-		catch (Exception ex)
-		{
-			Debug.LogException(ex);
-			Entry value2 = base[i];
-			value2.Errored = true;
-			base[i] = value2;
-		}
+		GJK.Distance_00000095$BurstDirectCall.Initialize();
+		GJK.Distance2_00000096$BurstDirectCall.Initialize();
 	}
 }
 

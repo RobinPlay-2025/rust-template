@@ -1,0 +1,3290 @@
+using System;
+using System.Collections;
+using System.Collections.Generic;
+using System.IO;
+using Newtonsoft.Json;
+using Rust;
+using Rust.Workshop;
+using Steamworks;
+using UnityEngine;
+using UnityEngine.Networking;
+
+public class Skin
+{
+	[JsonModel]
+	public class Manifest
+	{
+		[JsonModel]
+		public class Group
+		{
+			public Dictionary<string, string> Textures { get; set; } = new Dictionary<string, string>();
+
+			public Dictionary<string, float> Floats { get; set; } = new Dictionary<string, float>();
+
+			public Dictionary<string, ColorEntry> Colors { get; set; } = new Dictionary<string, ColorEntry>();
+		}
+
+		[JsonModel]
+		public class ColorEntry
+		{
+			public float r { get; set; }
+
+			public float g { get; set; }
+
+			public float b { get; set; }
+
+			public ColorEntry(Color c)
+			{
+				//IL_0007: Unknown result type (might be due to invalid IL or missing references)
+				//IL_0013: Unknown result type (might be due to invalid IL or missing references)
+				//IL_001f: Unknown result type (might be due to invalid IL or missing references)
+				r = c.r;
+				g = c.g;
+				b = c.b;
+			}
+		}
+
+		public int Version { get; set; }
+
+		public string ItemType { get; set; }
+
+		public ulong AuthorId { get; set; }
+
+		public DateTime PublishDate { get; set; }
+
+		public Group[] Groups { get; set; }
+	}
+
+	private string manifestName;
+
+	private string manifestContent;
+
+	private TextAsset manifestAsset;
+
+	private Manifest manifest;
+
+	private string iconName;
+
+	public Sprite sprite;
+
+	public int references;
+
+	public Skinnable Skinnable;
+
+	public Material[] Materials;
+
+	public Material[] DefaultMaterials;
+
+	public List<Texture> TextureAssets;
+
+	public List<Texture> TextureObjects;
+
+	public Action OnLoaded;
+
+	public Action OnIconLoaded;
+
+	public bool AssetsRequested { get; set; }
+
+	public bool IconRequested { get; set; }
+
+	public bool AssetsLoaded { get; internal set; }
+
+	public bool IconLoaded { get; internal set; }
+
+	private void LoadManifestFromFile()
+	{
+		try
+		{
+			manifestContent = File.ReadAllText(manifestName);
+		}
+		catch (Exception ex)
+		{
+			Debug.LogException(ex);
+		}
+	}
+
+	private void DeserializeManifest()
+	{
+		manifest = JsonConvert.DeserializeObject<Manifest>(manifestContent);
+	}
+
+	public IEnumerator LoadIcon(ulong workshopId, string directory = null, AssetBundle bundle = null)
+	{
+		if ((Object)(object)bundle != (Object)null)
+		{
+			manifestName = "Assets/Skins/" + workshopId + "/manifest.txt";
+			AssetBundleRequest textRequest = bundle.LoadAssetAsync<TextAsset>(manifestName);
+			yield return textRequest;
+			ref TextAsset reference = ref manifestAsset;
+			Object asset = textRequest.asset;
+			reference = (TextAsset)(object)((asset is TextAsset) ? asset : null);
+			if ((Object)(object)manifestAsset != (Object)null)
+			{
+				manifestContent = manifestAsset.text;
+			}
+		}
+		if (manifestContent == null && directory != null)
+		{
+			manifestName = directory + "/manifest.txt";
+			if (File.Exists(manifestName))
+			{
+				yield return ((MonoBehaviour)Global.Runner).StartCoroutine(ParallelEx.Coroutine((Action)LoadManifestFromFile));
+			}
+		}
+		if (manifestContent != null)
+		{
+			yield return ((MonoBehaviour)Global.Runner).StartCoroutine(ParallelEx.Coroutine((Action)DeserializeManifest));
+		}
+		if (manifest == null)
+		{
+			Debug.LogWarning((object)("Invalid skin manifest: " + manifestName));
+			yield break;
+		}
+		Skinnable = Skinnable.FindForItem(manifest.ItemType);
+		if ((Object)(object)bundle != (Object)null)
+		{
+			iconName = "Assets/Skins/" + workshopId + "/icon.png";
+			AssetBundleRequest textRequest = bundle.LoadAssetAsync<Sprite>(iconName);
+			yield return textRequest;
+			Object asset2 = textRequest.asset;
+			Sprite val = (Sprite)(object)((asset2 is Sprite) ? asset2 : null);
+			if ((Object)(object)val != (Object)null)
+			{
+				sprite = val;
+			}
+		}
+		string downloadUrl;
+		InventoryDef[] definitions;
+		if ((Object)(object)sprite == (Object)null && SteamClient.IsValid)
+		{
+			downloadUrl = string.Empty;
+			definitions = SteamInventory.Definitions;
+			iconName = workshopId.ToString();
+			if (definitions != null)
+			{
+				yield return ((MonoBehaviour)Global.Runner).StartCoroutine(ParallelEx.Coroutine((Action)FindURL));
+			}
+			if (!string.IsNullOrEmpty(downloadUrl))
+			{
+				UnityWebRequest request = UnityWebRequestTexture.GetTexture(downloadUrl);
+				request.timeout = Mathf.CeilToInt(WorkshopSkin.DownloadTimeout);
+				yield return request.SendWebRequest();
+				if (request.isDone && !request.isHttpError && !request.isNetworkError)
+				{
+					Texture2D content = DownloadHandlerTexture.GetContent(request);
+					sprite = Sprite.Create(content, new Rect(0f, 0f, 512f, 512f), Vector2.zero, 100f, 0u, (SpriteMeshType)0);
+				}
+				request.Dispose();
+			}
+		}
+		if ((Object)(object)sprite == (Object)null && directory != null)
+		{
+			iconName = directory + "/icon.png";
+			if (File.Exists(iconName))
+			{
+				AsyncTextureLoad request2 = new AsyncTextureLoad(iconName, false, false, true, false, true);
+				yield return request2;
+				Texture2D texture = request2.texture;
+				sprite = Sprite.Create(texture, new Rect(0f, 0f, 512f, 512f), Vector2.zero, 100f, 0u, (SpriteMeshType)0);
+			}
+		}
+		if ((Object)(object)sprite != (Object)null)
+		{
+			IconLoaded = true;
+			if (OnIconLoaded != null)
+			{
+				OnIconLoaded();
+			}
+		}
+		void FindURL()
+		{
+			for (int num = definitions.Length - 1; num >= 0; num--)
+			{
+				InventoryDef val2 = definitions[num];
+				string property = val2.GetProperty("workshopdownload");
+				if (iconName == property)
+				{
+					downloadUrl = val2.IconUrlLarge;
+					break;
+				}
+			}
+		}
+	}
+
+	public IEnumerator LoadAssets(ulong workshopId, string directory = null, AssetBundle bundle = null, bool compressTexturesOnLoad = true)
+	{
+		if ((Object)(object)Skinnable == (Object)null)
+		{
+			Debug.LogWarning((object)("Skinnable is null: " + workshopId));
+			yield break;
+		}
+		if (Skinnable.Groups == null)
+		{
+			Debug.LogWarning((object)("Skinnable.Groups is null: " + workshopId));
+			yield break;
+		}
+		if (manifest == null)
+		{
+			Debug.LogWarning((object)("Manifest is null: " + workshopId));
+			yield break;
+		}
+		if (manifest.Groups == null)
+		{
+			Debug.LogWarning((object)("Manifest.Groups is null: " + workshopId));
+			yield break;
+		}
+		ReadDefaults();
+		for (int i = 0; i < Skinnable.Groups.Length && i < manifest.Groups.Length; i++)
+		{
+			Material material = Materials[i];
+			if ((Object)(object)material == (Object)null)
+			{
+				continue;
+			}
+			Manifest.Group group = manifest.Groups[i];
+			if (group.Floats != null)
+			{
+				foreach (KeyValuePair<string, float> @float in group.Floats)
+				{
+					material.SetFloat(@float.Key, @float.Value);
+					if (@float.Key == "_Cutoff")
+					{
+						if (@float.Value > 0.1f)
+						{
+							material.SetOverrideTag("RenderType", "TransparentCutout");
+							material.EnableKeyword("_ALPHATEST_ON");
+							material.renderQueue = 2450;
+						}
+						else
+						{
+							material.SetOverrideTag("RenderType", "");
+							material.DisableKeyword("_ALPHATEST_ON");
+							material.renderQueue = -1;
+						}
+					}
+					if (@float.Key == "_MicrofiberFuzzIntensity")
+					{
+						if (@float.Value > 0.1f)
+						{
+							material.EnableKeyword("_MICROFIBERFUZZLAYER_ON");
+						}
+						else
+						{
+							material.DisableKeyword("_MICROFIBERFUZZLAYER_ON");
+						}
+					}
+				}
+			}
+			if (group.Colors != null)
+			{
+				foreach (KeyValuePair<string, Manifest.ColorEntry> color in group.Colors)
+				{
+					material.SetColor(color.Key, new Color(color.Value.r, color.Value.g, color.Value.b));
+				}
+			}
+			foreach (KeyValuePair<string, string> mat in group.Textures)
+			{
+				if (mat.Value == "none")
+				{
+					material.SetTexture(mat.Key, (Texture)null);
+					continue;
+				}
+				if (mat.Key == "_EmissionMap")
+				{
+					material.EnableKeyword("_EMISSION");
+				}
+				bool isDiffuseMap = mat.Key == "_MainTex";
+				bool isNormalMap = mat.Key == "_BumpMap" || mat.Key == "_DetailNormalMap";
+				bool isOcclusionMap = mat.Key == "_OcclusionMap" || mat.Key == "_DetailOcclusionMap";
+				bool flag = false;
+				string textureName = null;
+				Texture2D val = null;
+				if ((Object)(object)bundle != (Object)null)
+				{
+					textureName = "Assets/Skins/" + workshopId + "/" + mat.Value;
+					AssetBundleRequest textureRequest = bundle.LoadAssetAsync<Texture2D>(textureName);
+					yield return textureRequest;
+					Object asset = textureRequest.asset;
+					val = (Texture2D)(object)((asset is Texture2D) ? asset : null);
+					flag = true;
+				}
+				if ((Object)(object)val == (Object)null && directory != null)
+				{
+					textureName = directory + "/" + mat.Value;
+					if (File.Exists(textureName))
+					{
+						AsyncTextureLoad request = new AsyncTextureLoad(textureName, isNormalMap, !isNormalMap, true, false, compressTexturesOnLoad);
+						yield return request;
+						val = request.texture;
+						flag = false;
+					}
+				}
+				if (!((Object)(object)val != (Object)null))
+				{
+					continue;
+				}
+				UpdateTextureMetadata(val, textureName, isDiffuseMap || isNormalMap, !isOcclusionMap);
+				material.SetTexture(mat.Key, (Texture)(object)val);
+				if (flag)
+				{
+					if (TextureAssets == null)
+					{
+						TextureAssets = new List<Texture>();
+					}
+					TextureAssets.Add((Texture)(object)val);
+				}
+				else
+				{
+					if (TextureObjects == null)
+					{
+						TextureObjects = new List<Texture>();
+					}
+					TextureObjects.Add((Texture)(object)val);
+				}
+			}
+		}
+		AssetsLoaded = true;
+		if (OnLoaded != null)
+		{
+			OnLoaded();
+		}
+	}
+
+	public void UnloadAssets()
+	{
+		if (Materials != null)
+		{
+			for (int i = 0; i < Materials.Length; i++)
+			{
+				Material val = Materials[i];
+				if (!((Object)(object)val == (Object)null))
+				{
+					Object.DestroyImmediate((Object)(object)val);
+					Materials[i] = null;
+				}
+			}
+		}
+		if (TextureObjects != null)
+		{
+			for (int j = 0; j < TextureObjects.Count; j++)
+			{
+				Texture val2 = TextureObjects[j];
+				if (!((Object)(object)val2 == (Object)null))
+				{
+					Object.DestroyImmediate((Object)(object)val2);
+				}
+			}
+			TextureObjects.Clear();
+		}
+		if (TextureAssets != null)
+		{
+			for (int k = 0; k < TextureAssets.Count; k++)
+			{
+				Texture val3 = TextureAssets[k];
+				if (!((Object)(object)val3 == (Object)null))
+				{
+					Resources.UnloadAsset((Object)(object)val3);
+				}
+			}
+			TextureAssets.Clear();
+		}
+		AssetsLoaded = false;
+	}
+
+	private void UpdateTextureMetadata(Texture2D texture, string textureName, bool anisoFiltering, bool trilinearFiltering)
+	{
+		((Object)texture).name = textureName;
+		((Texture)texture).anisoLevel = ((!anisoFiltering) ? 1 : 16);
+		((Texture)texture).filterMode = (FilterMode)((!trilinearFiltering) ? 1 : 2);
+	}
+
+	public IEnumerable<Texture2D> GetAllTextures()
+	{
+		if (TextureObjects != null)
+		{
+			foreach (Texture textureObject in TextureObjects)
+			{
+				Texture2D val = (Texture2D)(object)((textureObject is Texture2D) ? textureObject : null);
+				if (val != null)
+				{
+					yield return val;
+				}
+			}
+		}
+		if (TextureAssets == null)
+		{
+			yield break;
+		}
+		foreach (Texture textureAsset in TextureAssets)
+		{
+			Texture2D val2 = (Texture2D)(object)((textureAsset is Texture2D) ? textureAsset : null);
+			if (val2 != null)
+			{
+				yield return val2;
+			}
+		}
+	}
+
+	internal void Apply(GameObject gameObject)
+	{
+		Apply(gameObject, Skinnable, Materials);
+	}
+
+	public int GetSizeInBytes()
+	{
+		int num = 0;
+		if ((Object)(object)sprite != (Object)null)
+		{
+			num += TextureEx.GetSizeInBytes((Texture)(object)sprite.texture);
+		}
+		if (TextureAssets != null)
+		{
+			foreach (Texture textureAsset in TextureAssets)
+			{
+				num += TextureEx.GetSizeInBytes(textureAsset);
+			}
+		}
+		if (TextureObjects != null)
+		{
+			foreach (Texture textureObject in TextureObjects)
+			{
+				num += TextureEx.GetSizeInBytes(textureObject);
+			}
+		}
+		return num;
+	}
+
+	public static void Apply(GameObject obj, Skinnable skinnable, Material[] Materials)
+	{
+		if (Materials != null && !((Object)(object)obj == (Object)null))
+		{
+			MaterialReplacement.ReplaceRecursive(obj, skinnable.SourceMaterials, Materials);
+		}
+	}
+
+	internal void ReadDefaults()
+	{
+		//IL_010e: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0113: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0115: Expected O, but got Unknown
+		//IL_0116: Expected O, but got Unknown
+		if (AssetsLoaded)
+		{
+			UnloadAssets();
+		}
+		if (!((Object)(object)Skinnable != (Object)null) || Skinnable.Groups == null)
+		{
+			return;
+		}
+		if (DefaultMaterials == null || DefaultMaterials.Length != Skinnable.Groups.Length)
+		{
+			DefaultMaterials = (Material[])(object)new Material[Skinnable.Groups.Length];
+		}
+		if (Materials == null || Materials.Length != Skinnable.Groups.Length)
+		{
+			Materials = (Material[])(object)new Material[Skinnable.Groups.Length];
+		}
+		for (int i = 0; i < DefaultMaterials.Length; i++)
+		{
+			Skinnable.Group group = Skinnable.Groups[i];
+			if (group != null)
+			{
+				DefaultMaterials[i] = group.Material;
+			}
+		}
+		for (int j = 0; j < Materials.Length; j++)
+		{
+			if ((Object)(object)DefaultMaterials[j] == (Object)null)
+			{
+				Debug.LogWarning((object)("Missing skin for " + Skinnable.ItemName));
+				continue;
+			}
+			Material[] materials = Materials;
+			int num = j;
+			Material val = new Material(DefaultMaterials[j]);
+			Material val2 = val;
+			materials[num] = val;
+			val2.DisableKeyword("_COLORIZELAYER_ON");
+			val2.SetInt("_COLORIZELAYER_ON", 0);
+			((Object)val2).name = ((Object)DefaultMaterials[j]).name + " (Editing)";
+		}
+	}
+}
+
+
+public enum Price
+{
+	NotForSale = 0,
+	TwentyFiveCents = 25,
+	FiftyCents = 50,
+	OneDollar = 100,
+	OneDollarFifty = 150,
+	TwoDollars = 200,
+	TwoDollarsFifty = 250,
+	ThreeDollars = 300,
+	ThreeDollarsFifty = 350,
+	FourDollars = 400,
+	FourDollarsFifty = 450,
+	FiveDollars = 500,
+	SixDollars = 600,
+	SevenFifty = 750,
+	TenDollars = 1000,
+	FifteenDollars = 1500,
+	TwentyDollars = 2000,
+	TwentyFiveDollars = 2500
+}
+
+
+public enum DropChance
+{
+	Never = 0,
+	VeryLow = 5,
+	Low = 1,
+	Medium = 2,
+	High = 3,
+	VeryHigh = 4
+}
+
+
+public enum Category
+{
+	Shirt = 0,
+	Pants = 5,
+	Jacket = 1,
+	Hat = 2,
+	Mask = 3,
+	Footwear = 4,
+	Weapon = 6,
+	Misc = 7,
+	Deployable = 9,
+	Gloves = 10
+}
+
+
+using System;
+using System.IO;
+using System.Linq;
+using Ionic.Crc;
+using Rust.Workshop;
+using UnityEngine;
+
+public class ApprovedSkinInfo
+{
+	public ulong InventoryId { get; private set; }
+
+	public string Desc { get; private set; }
+
+	public string Name { get; private set; }
+
+	public ulong WorkshopdId { get; private set; }
+
+	internal Price Price { get; private set; }
+
+	public bool Tradable { get; private set; }
+
+	public DropChance DropChance { get; private set; }
+
+	public bool Marketable { get; private set; }
+
+	public Skinnable Skinnable { get; private set; }
+
+	public bool AllowInCrates { get; private set; } = true;
+
+	public bool IsLimitedTimeOffer { get; private set; } = true;
+
+	public bool IsTwitchDrop { get; private set; }
+
+	public ApprovedSkinInfo(ulong WorkshopdId, string Name, string Desc, string ItemName)
+	{
+		this.WorkshopdId = WorkshopdId;
+		InventoryId = WorkshopdId;
+		this.Name = Name;
+		this.Desc = Desc;
+		Skinnable = Skinnable.All.FirstOrDefault((Skinnable x) => string.Compare(x.Name, ItemName, StringComparison.OrdinalIgnoreCase) == 0);
+		if ((Object)(object)Skinnable == (Object)null)
+		{
+			throw new Exception("Unknown Item Type: " + ItemName);
+		}
+	}
+
+	public ApprovedSkinInfo Store(Price Price, bool CanBeTraded, bool CanBeSold)
+	{
+		this.Price = Price;
+		Tradable = CanBeTraded;
+		Marketable = CanBeSold;
+		return this;
+	}
+
+	public ApprovedSkinInfo TimeLimited()
+	{
+		IsLimitedTimeOffer = true;
+		return this;
+	}
+
+	public ApprovedSkinInfo Unlimited()
+	{
+		IsLimitedTimeOffer = false;
+		return this;
+	}
+
+	public ApprovedSkinInfo NoCrate()
+	{
+		AllowInCrates = false;
+		return this;
+	}
+
+	public ApprovedSkinInfo Drops(DropChance DropChance)
+	{
+		this.DropChance = DropChance;
+		return this;
+	}
+
+	public ApprovedSkinInfo ItemId(ulong InventoryId)
+	{
+		this.InventoryId = InventoryId;
+		return this;
+	}
+
+	public ApprovedSkinInfo TwitchDrop()
+	{
+		if (Price != 0 || Tradable || Marketable || AllowInCrates)
+		{
+			throw new Exception("wtf");
+		}
+		IsTwitchDrop = true;
+		return this;
+	}
+
+	public static implicit operator ItemSchema.Item(ApprovedSkinInfo o)
+	{
+		//IL_01c0: Unknown result type (might be due to invalid IL or missing references)
+		//IL_01c5: Unknown result type (might be due to invalid IL or missing references)
+		ItemSchema.Item item = new ItemSchema.Item();
+		Category category = o.Skinnable.Category;
+		string text = "cat.none;";
+		if (o.Marketable)
+		{
+			if (o.Skinnable.Category == Category.Pants || o.Skinnable.Category == Category.Shirt || o.Skinnable.Category == Category.Jacket || o.Skinnable.Category == Category.Hat || o.Skinnable.Category == Category.Mask || o.Skinnable.Category == Category.Footwear || o.Skinnable.Category == Category.Gloves)
+			{
+				text = "cat.clothing;breakdown.cloth;";
+			}
+			if (o.Skinnable.Category == Category.Weapon)
+			{
+				text = "cat.weapon;breakdown.metal;";
+			}
+			if (o.Skinnable.Category == Category.Misc || o.Skinnable.Category == Category.Deployable)
+			{
+				text = "cat.deployable;breakdown.wood;";
+			}
+		}
+		if (category == Category.Deployable)
+		{
+			category = Category.Misc;
+		}
+		if (!o.AllowInCrates)
+		{
+			text += "nocrate;";
+		}
+		string text2 = (string.IsNullOrEmpty(o.Skinnable.ItemName) ? "item.none;" : ("item." + o.Skinnable.ItemName.ToLower() + ";"));
+		string text3 = (o.IsLimitedTimeOffer ? "time.limited;" : "time.general;");
+		string text4 = (o.IsTwitchDrop ? "twitchdrop;" : "");
+		if (string.IsNullOrEmpty(o.Skinnable.ItemName))
+		{
+			throw new Exception("Item Type Has No ItemName: " + o.Skinnable.Name);
+		}
+		string text5 = "5";
+		if (File.Exists("Prerequisites/SteamInventory/Icons/" + o.InventoryId + ".png"))
+		{
+			byte[] array = File.ReadAllBytes("Prerequisites/SteamInventory/Icons/" + o.InventoryId + ".png");
+			CRC32 val = new CRC32();
+			val.SlurpBlock(array, 0, array.Length);
+			text5 = ((uint)val.Crc32Result).ToString();
+		}
+		string text6 = category.ToString().ToLower();
+		item.itemdefid = (uint)o.InventoryId;
+		item.name = o.Name;
+		item.type = o.Skinnable.Category.ToString();
+		item.icon_url = "https://files.facepunch.com/rust/icons/inventory/rust/" + o.InventoryId + "_small.png?" + text5;
+		item.icon_url_large = "https://files.facepunch.com/rust/icons/inventory/rust/" + o.InventoryId + "_large.png?" + text5;
+		item.marketable = o.Marketable;
+		item.tradable = o.Tradable;
+		item.commodity = true;
+		item.market_hash_name = o.Name;
+		item.market_name = o.Name;
+		item.description = o.Desc;
+		item.price_category = ((o.Price == Price.NotForSale) ? null : ("1;VLV" + (int)o.Price));
+		item.dropChance = o.DropChance;
+		item.priceCategory = o.Price;
+		item.itemshortname = o.Skinnable.ItemName;
+		item.workshopdownload = ((o.WorkshopdId != 0) ? o.WorkshopdId.ToString() : null);
+		item.workshopid = item.workshopdownload;
+		item.store_tags = (text + text3 + "subcat." + text6 + ";" + text2 + text4).TrimEnd(';');
+		return item;
+	}
+}
+
+
+using System;
+using Newtonsoft.Json;
+using Rust.Workshop;
+
+public class ItemSchema
+{
+	public class Item
+	{
+		public string name;
+
+		public uint itemdefid;
+
+		public string type;
+
+		public string price_category;
+
+		public string icon_url;
+
+		public string icon_url_large;
+
+		public bool marketable;
+
+		public bool tradable;
+
+		public bool commodity;
+
+		public string market_hash_name;
+
+		public string market_name;
+
+		public string bundle;
+
+		public string description;
+
+		public string workshopid;
+
+		public string itemshortname;
+
+		public string tags;
+
+		public string store_tags;
+
+		public string store_images;
+
+		public string exchange;
+
+		public bool store_hidden;
+
+		public string background_color;
+
+		public string name_color;
+
+		[NonSerialized]
+		public DropChance dropChance;
+
+		[NonSerialized]
+		public Price priceCategory;
+
+		public string workshopdownload;
+
+		[JsonProperty(/*Could not decode attribute arguments.*/)]
+		public int? purchase_limit;
+
+		[JsonIgnore]
+		public double Price => (double)priceCategory / 100.0;
+	}
+
+	public class PlaytimeDropItem : Item
+	{
+		public int drop_interval;
+
+		public bool use_drop_window;
+
+		public int drop_window;
+
+		public int drop_max_per_window;
+
+		public bool use_drop_limit;
+
+		public int drop_limit;
+	}
+
+	public int appid;
+
+	public Item[] items;
+}
+
+
+using Rust.UI;
+using Rust.Workshop;
+using UnityEngine;
+using UnityEngine.Events;
+
+public class WorkshopViewmodelControls : MonoBehaviour
+{
+	public RustButton Enabled;
+
+	public RustButton Ironsights;
+
+	public RustButton admire;
+
+	private IViewmodelWorkshopPreview currentViewmodel;
+
+	private void OnEnable()
+	{
+		//IL_0012: Unknown result type (might be due to invalid IL or missing references)
+		//IL_001c: Expected O, but got Unknown
+		admire.OnPressed.AddListener(new UnityAction(OnAdmirePressed));
+	}
+
+	private void OnDisable()
+	{
+		//IL_0012: Unknown result type (might be due to invalid IL or missing references)
+		//IL_001c: Expected O, but got Unknown
+		admire.OnPressed.RemoveListener(new UnityAction(OnAdmirePressed));
+	}
+
+	public void Clear()
+	{
+		Ironsights.Value = false;
+		currentViewmodel = null;
+	}
+
+	internal void DoUpdate(GameObject viewModel)
+	{
+		if ((Object)(object)viewModel == (Object)null)
+		{
+			((Component)this).gameObject.SetActive(false);
+			return;
+		}
+		((Component)this).gameObject.SetActive(true);
+		if (!Enabled.Value)
+		{
+			viewModel.SetActive(false);
+			return;
+		}
+		viewModel.SetActive(true);
+		Camera.main.fieldOfView = 85f;
+		IViewmodelWorkshopPreview viewmodelWorkshopPreview = default(IViewmodelWorkshopPreview);
+		if (viewModel.TryGetComponent<IViewmodelWorkshopPreview>(ref viewmodelWorkshopPreview))
+		{
+			currentViewmodel = viewmodelWorkshopPreview;
+		}
+	}
+
+	private void OnAdmirePressed()
+	{
+		_ = currentViewmodel;
+	}
+}
+
+
+using System;
+using Rust.Workshop;
+using UnityEngine;
+
+public class WorkshopIconLoader : MonoBehaviour
+{
+	public static Sprite Find(ulong workshopId, Sprite placeholder = null, Action callback = null)
+	{
+		Skin skin = WorkshopSkin.GetSkin(workshopId);
+		if (!skin.IconLoaded)
+		{
+			if (callback != null)
+			{
+				skin.OnIconLoaded = callback;
+			}
+			if ((Object)(object)placeholder != (Object)null)
+			{
+				return placeholder;
+			}
+		}
+		return skin.sprite;
+	}
+}
+
+
+using System.IO;
+using Facepunch.Utility;
+using Rust;
+using Rust.Workshop;
+using UnityEngine;
+
+public class WorkshopInterface : SingletonComponent<WorkshopInterface>
+{
+	internal WorkshopItemEditor Editor => SingletonComponent<WorkshopItemEditor>.Instance;
+
+	public void Exit()
+	{
+		Object.Destroy((Object)(object)((Component)this).gameObject);
+		Global.OpenMainMenu();
+	}
+
+	public void RenderAllIcons()
+	{
+		((Component)Editor).gameObject.SetActive(true);
+		if (!Directory.Exists("c:/test/icons"))
+		{
+			Directory.CreateDirectory("c:/test/icons");
+		}
+		Skinnable[] all = Skinnable.All;
+		foreach (Skinnable skinnable in all)
+		{
+			Editor.StartNewItem(skinnable.Name);
+			PropRenderer.RenderScreenshot(Editor.Prefab, "c:/test/icons/" + skinnable.Name + ".png", 512, 512, 4);
+			int num = 0;
+			Mesh[] meshDownloads = skinnable.MeshDownloads;
+			foreach (Mesh val in meshDownloads)
+			{
+				if ((Object)(object)val != (Object)null && val.isReadable)
+				{
+					Mesh.Export(val, $"c:/test/icons/{skinnable.Name}{num}.obj");
+					num++;
+				}
+			}
+		}
+		((Component)Editor).gameObject.SetActive(false);
+	}
+}
+
+
+using Rust.Workshop;
+
+public interface IViewmodelWorkshopPreview : IWorkshopPreview
+{
+}
+
+
+public interface IWorkshopPreview
+{
+}
+
+
+public interface IWorkshopPlayerPreview
+{
+}
+
+
+using System;
+using System.Collections;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Text.RegularExpressions;
+using Facepunch;
+using Facepunch.Extend;
+using Facepunch.Utility;
+using Newtonsoft.Json;
+using Rust;
+using Rust.Components.Camera;
+using Rust.UI;
+using Rust.Workshop;
+using Rust.Workshop.Editor;
+using TMPro;
+using UnityEngine;
+using UnityEngine.Serialization;
+using UnityEngine.UI;
+
+public class WorkshopItemEditor : SingletonComponent<WorkshopItemEditor>
+{
+	public static Action<bool, string> OnLoading;
+
+	private Publisher _publisher;
+
+	public Transform ItemSelectionButtonsParent;
+
+	public WorkshopItemSelectionButton ItemSelectionButtonPrefab;
+
+	public RustText SelectedItemTypeLabel;
+
+	public Scrollbar ItemSelectionScrollbar;
+
+	public InputField ItemTitleLabel;
+
+	public WorkshopViewmodelControls ViewmodelControls;
+
+	public GameObject MaterialTabHolder;
+
+	public GameObject FileDialogObject;
+
+	public GameObject[] EditorElements;
+
+	public GameObject[] SpecularOnlyElements;
+
+	public GameObject[] MetalnessOnlyElements;
+
+	public GameObject[] ClothOnlyElements;
+
+	public GameObject[] DetailOnlyElements;
+
+	public GameObject[] DirtOnlyElements;
+
+	public GameObject MaterialInformationPanel;
+
+	public List<RustText> TextureResolutionInfoRows;
+
+	public RustText ShortName;
+
+	private Toggle[] MaterialTabs;
+
+	[HideInInspector]
+	public int EditingMaterial;
+
+	[FormerlySerializedAs("item_position_a")]
+	public GameObject ItemSpawnPositionAnchor;
+
+	private List<WorkshopItemSelectionButton> selectionButtons = new List<WorkshopItemSelectionButton>();
+
+	private bool dofToggled = true;
+
+	private bool hiddenPlayerModel;
+
+	private ulong playerSeed = 585364905uL;
+
+	public static Action<GameObject> PrefabPreviewSpawned = null;
+
+	private static readonly Regex ModelCleanup = new Regex("(_mesh)?(_LOD0)?$", RegexOptions.IgnoreCase);
+
+	internal GameObject Prefab { get; set; }
+
+	internal GameObject ViewModel { get; set; }
+
+	internal Skinnable Skinnable { get; set; }
+
+	internal Skin Skin { get; set; }
+
+	internal ulong ItemId { get; set; }
+
+	protected WorkshopInterface Interface => ((Component)this).GetComponentInParent<WorkshopInterface>();
+
+	internal Publisher Publisher
+	{
+		get
+		{
+			if ((Object)(object)_publisher == (Object)null)
+			{
+				_publisher = ((Component)this).GetComponentInChildren<Publisher>(true);
+			}
+			return _publisher;
+		}
+	}
+
+	public FileDialog FileDialog => FileDialogObject.GetComponent<FileDialog>();
+
+	public string ItemTitle
+	{
+		get
+		{
+			return ItemTitleLabel.text;
+		}
+		set
+		{
+			ItemTitleLabel.text = value;
+		}
+	}
+
+	public string ChangeLog
+	{
+		get
+		{
+			return Publisher.ChangeLog.text;
+		}
+		set
+		{
+			Publisher.ChangeLog.text = value;
+		}
+	}
+
+	private bool isPlayerModelFemale => GetRandomFloatBasedOnUserID(playerSeed, 4332uL) > 0.5f;
+
+	private string SkinnableEntityPrefabName
+	{
+		get
+		{
+			if (string.IsNullOrEmpty(Skinnable.EntityFemalePrefabName) || !isPlayerModelFemale)
+			{
+				return Skinnable.EntityPrefabName;
+			}
+			return Skinnable.EntityFemalePrefabName;
+		}
+	}
+
+	internal static void Loading(bool v1, string v2, string v3, float v4)
+	{
+		OnLoading?.Invoke(v1, v2);
+	}
+
+	private void OnEnable()
+	{
+		if (selectionButtons == null)
+		{
+			selectionButtons = new List<WorkshopItemSelectionButton>();
+		}
+		foreach (WorkshopItemSelectionButton selectionButton in selectionButtons)
+		{
+			if ((Object)(object)selectionButton != (Object)null)
+			{
+				Object.Destroy((Object)(object)selectionButton);
+			}
+		}
+		selectionButtons.Clear();
+		foreach (string item in (from x in Skinnable.All
+			where !x.HideInWorkshopUpload
+			select x.Name into x
+			orderby x
+			select x).ToList())
+		{
+			WorkshopItemSelectionButton workshopItemSelectionButton = Object.Instantiate<WorkshopItemSelectionButton>(ItemSelectionButtonPrefab, ItemSelectionButtonsParent);
+			workshopItemSelectionButton.SetItemType(item, this);
+			selectionButtons.Add(workshopItemSelectionButton);
+		}
+		MaterialTabs = MaterialTabHolder.GetComponentsInChildren<Toggle>(true);
+		MaterialInformationPanel.SetActive(false);
+	}
+
+	private void ClearEditor()
+	{
+		if ((Object)(object)Prefab != (Object)null)
+		{
+			Object.Destroy((Object)(object)Prefab);
+			Prefab = null;
+		}
+		if ((Object)(object)ViewModel != (Object)null)
+		{
+			Object.Destroy((Object)(object)ViewModel);
+			ViewModel = null;
+			ViewmodelControls.Clear();
+		}
+		ItemId = 0uL;
+		((Component)this).GetComponent<WorkshopPlayerPreview>().Cleanup();
+		ItemTitle = "";
+		Skinnable = null;
+		ChangeLog = "";
+		Publisher.ClearCustomIcon();
+		Publisher.ClearCustomPreviewImages();
+		((Component)this).GetComponentInChildren<WorkshopView>(true).Clear();
+	}
+
+	public void StartNewItem(string type = "TShirt")
+	{
+		Skin = null;
+		ClearEditor();
+		LoadItemType(type);
+		OnImportFinished();
+		ShowEditor();
+		((TMP_Text)SelectedItemTypeLabel).text = type;
+	}
+
+	public IEnumerator StartViewingItem(IWorkshopContent item)
+	{
+		Skin = null;
+		ClearEditor();
+		HideEditor();
+		yield return ((MonoBehaviour)this).StartCoroutine(OpenItem(item));
+		OnImportFinished();
+	}
+
+	public IEnumerator StartEditingItem(IWorkshopContent item)
+	{
+		Skin = null;
+		ClearEditor();
+		ShowEditor();
+		yield return ((MonoBehaviour)this).StartCoroutine(OpenItem(item));
+		OnImportFinished();
+	}
+
+	private void HideEditor()
+	{
+		GameObject[] editorElements = EditorElements;
+		for (int i = 0; i < editorElements.Length; i++)
+		{
+			editorElements[i].SetActive(false);
+		}
+	}
+
+	private void ShowEditor()
+	{
+		GameObject[] editorElements = EditorElements;
+		for (int i = 0; i < editorElements.Length; i++)
+		{
+			editorElements[i].SetActive(true);
+		}
+	}
+
+	internal IEnumerator OpenItem(IWorkshopContent item)
+	{
+		if (!LoadItemType(item.Tags))
+		{
+			Debug.Log((object)("Couldn't LoadItemType (" + string.Join(";", item.Tags) + ")"));
+			ClearEditor();
+			Loading(v1: false, "", "", 0f);
+		}
+		yield break;
+	}
+
+	private void OnImportFinished()
+	{
+		if (Skin == null)
+		{
+			((Component)this).GetComponentInChildren<WorkshopView>(true).UpdateFrom(null);
+			return;
+		}
+		EditingMaterial = 0;
+		Skin.Skinnable = Skinnable;
+		Skin.Apply(Prefab);
+		UpdateMaterialRows();
+		InitScene();
+	}
+
+	internal Texture2D SetTexture(string paramName, string fullName, bool isNormalMap, bool skipSettingMaterialTexture = false)
+	{
+		//IL_001a: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0020: Expected O, but got Unknown
+		byte[] array = File.ReadAllBytes(fullName);
+		if (array == null)
+		{
+			throw new Exception("Couldn't Load Data");
+		}
+		Texture2D val = new Texture2D(2, 2, (TextureFormat)5, true, isNormalMap);
+		if (!ImageConversion.LoadImage(val, array))
+		{
+			throw new Exception("Couldn't Load Image");
+		}
+		((Object)val).name = fullName;
+		val = Texture.LimitSize(val, Skinnable.Groups[EditingMaterial].MaxTextureSize, Skinnable.Groups[EditingMaterial].MaxTextureSize, isNormalMap);
+		((Texture)val).anisoLevel = 16;
+		((Texture)val).filterMode = (FilterMode)2;
+		if (!skipSettingMaterialTexture)
+		{
+			SetTexture(paramName, (Texture)(object)val);
+		}
+		return val;
+	}
+
+	internal void SetFloat(string paramName, float value)
+	{
+		Skin.Materials[EditingMaterial].SetFloat(paramName, value);
+		if (paramName == "_Cutoff")
+		{
+			if (value > 0.1f)
+			{
+				Skin.Materials[EditingMaterial].SetOverrideTag("RenderType", "TransparentCutout");
+				Skin.Materials[EditingMaterial].EnableKeyword("_ALPHATEST_ON");
+				Skin.Materials[EditingMaterial].renderQueue = 2450;
+			}
+			else
+			{
+				Skin.Materials[EditingMaterial].SetOverrideTag("RenderType", "");
+				Skin.Materials[EditingMaterial].DisableKeyword("_ALPHATEST_ON");
+				Skin.Materials[EditingMaterial].renderQueue = -1;
+			}
+		}
+		if (paramName == "_MicrofiberFuzzIntensity")
+		{
+			if (value > 0.1f)
+			{
+				Skin.Materials[EditingMaterial].EnableKeyword("_MICROFIBERFUZZLAYER_ON");
+			}
+			else
+			{
+				Skin.Materials[EditingMaterial].DisableKeyword("_MICROFIBERFUZZLAYER_ON");
+			}
+		}
+	}
+
+	internal void SetColor(string paramName, Color val)
+	{
+		//IL_0013: Unknown result type (might be due to invalid IL or missing references)
+		Skin.Materials[EditingMaterial].SetColor(paramName, val);
+	}
+
+	internal void SetTexture(string paramName, Texture tex)
+	{
+		Skin.Materials[EditingMaterial].SetTexture(paramName, tex);
+		if (paramName == "_EmissionMap" && (Object)(object)tex != (Object)null)
+		{
+			Skin.Materials[EditingMaterial].EnableKeyword("_EMISSION");
+		}
+	}
+
+	private bool LoadItemType(IEnumerable<string> tags)
+	{
+		foreach (string tag in tags)
+		{
+			if (LoadItemType(tag))
+			{
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private bool LoadItemType(string v)
+	{
+		ClearEditor();
+		Skinnable = Skinnable.FindForItem(v);
+		if ((Object)(object)Skinnable == (Object)null)
+		{
+			return false;
+		}
+		Prefab = LoadForPreview(SkinnableEntityPrefabName);
+		PrefabPreviewSpawned?.Invoke(Prefab);
+		FocusCameraOnPrefab();
+		if (Skin == null)
+		{
+			Skin = new Skin();
+		}
+		Skin.Skinnable = Skinnable;
+		Skin.ReadDefaults();
+		return true;
+	}
+
+	public void FocusCameraOnPrefab(float addedDistance = 0f)
+	{
+		//IL_0012: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0017: Unknown result type (might be due to invalid IL or missing references)
+		//IL_002b: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0030: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0035: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0041: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0042: Unknown result type (might be due to invalid IL or missing references)
+		float workshopDefaultZoom = Skinnable.WorkshopDefaultZoom;
+		Vector3 val = Quaternion.Euler(Skinnable.WorkshopDefaultRotationOffset) * new Vector3(0.3f, 0.5f, 1f);
+		CameraEx.FocusOnRenderer(Camera.main, Prefab, val, Vector3.up, -1, workshopDefaultZoom + addedDistance);
+	}
+
+	private GameObject LoadForPreview(string entityPrefabName, bool preprocess = true)
+	{
+		//IL_0038: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0053: Unknown result type (might be due to invalid IL or missing references)
+		GameObject val = (preprocess ? Global.CreatePrefab(entityPrefabName) : Object.Instantiate<GameObject>(Global.LoadPrefab(entityPrefabName)));
+		RemoveComponents<Rigidbody>(val);
+		val.transform.position = ItemSpawnPositionAnchor.transform.position;
+		val.transform.rotation = ItemSpawnPositionAnchor.transform.rotation;
+		val.SetActive(true);
+		if (preprocess)
+		{
+			((Behaviour)val.AddComponent<DepthOfFieldFocusPoint>()).enabled = dofToggled;
+		}
+		return val;
+	}
+
+	public void SelectItemType(string type)
+	{
+		LoadItemType(type);
+		EditingMaterial = 0;
+		UpdateMaterialRows();
+		InitScene();
+		((TMP_Text)SelectedItemTypeLabel).text = type;
+	}
+
+	public void SearchItemTypes(string search)
+	{
+		search = search.ToLower().Trim();
+		foreach (WorkshopItemSelectionButton selectionButton in selectionButtons)
+		{
+			if (string.IsNullOrEmpty(search) || selectionButton.ItemIdentifier.ToLower().Contains(search))
+			{
+				((Component)selectionButton).gameObject.SetActive(true);
+			}
+			else
+			{
+				((Component)selectionButton).gameObject.SetActive(false);
+			}
+		}
+		if ((Object)(object)ItemSelectionScrollbar != (Object)null)
+		{
+			ItemSelectionScrollbar.value = 1f;
+		}
+	}
+
+	private void UpdateMaterialRows()
+	{
+		UpdateMaterialTabs();
+		UpdateMaterialInformation();
+		Material val = Skin.Materials[EditingMaterial];
+		if ((Object)(object)val == (Object)null)
+		{
+			return;
+		}
+		Material val2 = Skin.DefaultMaterials[EditingMaterial];
+		if ((Object)(object)val2 == (Object)null)
+		{
+			return;
+		}
+		if (!val.IsKeywordEnabled("_ALPHATEST_ON"))
+		{
+			val.SetFloat("_Cutoff", 0f);
+		}
+		if (!val2.IsKeywordEnabled("_ALPHATEST_ON"))
+		{
+			val2.SetFloat("_Cutoff", 0f);
+		}
+		MaterialRow[] componentsInChildren = ((Component)this).GetComponentsInChildren<MaterialRow>(true);
+		foreach (MaterialRow materialRow in componentsInChildren)
+		{
+			if (val.HasProperty(materialRow.ParamName))
+			{
+				materialRow.Read(val, val2);
+			}
+		}
+		bool flag = ((Object)val.shader).name.Contains("Specular") || (val.HasInt("_MaterialType") && val.GetInt("_MaterialType") == 1);
+		GameObject[] specularOnlyElements = SpecularOnlyElements;
+		for (int i = 0; i < specularOnlyElements.Length; i++)
+		{
+			specularOnlyElements[i].SetActive(flag);
+		}
+		specularOnlyElements = MetalnessOnlyElements;
+		for (int i = 0; i < specularOnlyElements.Length; i++)
+		{
+			specularOnlyElements[i].SetActive(!flag);
+		}
+		bool active = ((Object)val.shader).name.Contains("Cloth");
+		specularOnlyElements = ClothOnlyElements;
+		for (int i = 0; i < specularOnlyElements.Length; i++)
+		{
+			specularOnlyElements[i].SetActive(active);
+		}
+		bool active2 = val2.IsKeywordEnabled("_DETAILLAYER_ON");
+		specularOnlyElements = DetailOnlyElements;
+		for (int i = 0; i < specularOnlyElements.Length; i++)
+		{
+			specularOnlyElements[i].SetActive(active2);
+		}
+		bool active3 = val2.IsKeywordEnabled("_DIRTLAYER_ON");
+		specularOnlyElements = DirtOnlyElements;
+		for (int i = 0; i < specularOnlyElements.Length; i++)
+		{
+			specularOnlyElements[i].SetActive(active3);
+		}
+	}
+
+	private void UpdateMaterialTabs()
+	{
+		for (int i = 0; i < MaterialTabs.Length; i++)
+		{
+			if (Skinnable.Groups.Length < i + 1)
+			{
+				((Component)MaterialTabs[i]).gameObject.SetActive(false);
+				continue;
+			}
+			((Component)MaterialTabs[i]).gameObject.SetActive(true);
+			Text[] componentsInChildren = ((Component)MaterialTabs[i]).gameObject.GetComponentsInChildren<Text>(true);
+			for (int j = 0; j < componentsInChildren.Length; j++)
+			{
+				componentsInChildren[j].text = Skinnable.Groups[i].Name;
+			}
+		}
+	}
+
+	private void UpdateMaterialInformation()
+	{
+		for (int i = 0; i < TextureResolutionInfoRows.Count; i++)
+		{
+			if (Skinnable.Groups.Length < i + 1)
+			{
+				((Component)TextureResolutionInfoRows[i]).gameObject.SetActive(false);
+				continue;
+			}
+			((Component)TextureResolutionInfoRows[i]).gameObject.SetActive(true);
+			((TMP_Text)TextureResolutionInfoRows[i]).text = $"{Skinnable.Groups[i].Name}: ( {Skinnable.Groups[i].MaxTextureSize} x {Skinnable.Groups[i].MaxTextureSize} )";
+		}
+		((TMP_Text)ShortName).text = Skinnable.ItemName;
+	}
+
+	private void InitScene()
+	{
+		//IL_00e9: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0108: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0079: Unknown result type (might be due to invalid IL or missing references)
+		if (Skinnable.Category != Category.Deployable)
+		{
+			InitPlayerPreview(585364905uL, focus: true, hiddenPlayerModel);
+			if ((Object)(object)Prefab != (Object)null && (Object)(object)Skinnable != (Object)null)
+			{
+				Object.Destroy((Object)(object)Prefab);
+				Prefab = LoadForPreview(SkinnableEntityPrefabName, preprocess: false);
+				Prefab.transform.position = new Vector3(0f, 500f, 0f);
+				Skin.Apply(Prefab);
+			}
+		}
+		else
+		{
+			Skin.Apply(Prefab);
+		}
+		if (Object.op_Implicit((Object)(object)Skinnable.ViewmodelPrefab))
+		{
+			ViewModel = Global.CreatePrefab(Skinnable.ViewmodelPrefabName);
+			ViewModel.transform.position = ((Component)Camera.main).transform.position;
+			ViewModel.transform.rotation = ((Component)Camera.main).transform.rotation;
+			ViewModel.SetActive(true);
+			Skin.Apply(ViewModel);
+		}
+	}
+
+	private void InitPlayerPreview(ulong playerid, bool focus, bool invisible = false)
+	{
+		//IL_0098: Unknown result type (might be due to invalid IL or missing references)
+		playerSeed = playerid;
+		GameObject val = Global.CreatePrefab(SkinnableEntityPrefabName);
+		((Behaviour)val.AddComponent<DepthOfFieldFocusPoint>()).enabled = dofToggled;
+		val.SetActive(true);
+		Skin.Skinnable = Skinnable;
+		Skin.Apply(val);
+		((Component)this).GetComponent<WorkshopPlayerPreview>().Setup(val, playerid, focus, Skinnable.Category != Category.Weapon && Skinnable.Category != Category.Misc && Skinnable.Category != Category.Deployable, Skinnable.WorkshopDefaultZoom, Skinnable.WorkshopDefaultRotationOffset, invisible);
+	}
+
+	public static float GetRandomFloatBasedOnUserID(ulong steamid, ulong seed)
+	{
+		//IL_0000: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0005: Unknown result type (might be due to invalid IL or missing references)
+		//IL_001e: Unknown result type (might be due to invalid IL or missing references)
+		State state = Random.state;
+		Random.InitState((int)(seed + steamid));
+		float result = Random.Range(0f, 1f);
+		Random.state = state;
+		return result;
+	}
+
+	public void RandomizePlayerPreview()
+	{
+		if (Skinnable.Category != Category.Deployable)
+		{
+			ulong playerid = (ulong)Random.Range(0, int.MaxValue);
+			InitPlayerPreview(playerid, focus: false, hiddenPlayerModel);
+		}
+	}
+
+	public void DownloadModel()
+	{
+		((MonoBehaviour)this).StartCoroutine(DoDownloadModel());
+	}
+
+	private static void RemoveComponents<T>(GameObject prefab) where T : Component
+	{
+		T[] componentsInChildren = prefab.GetComponentsInChildren<T>();
+		for (int i = 0; i < componentsInChildren.Length; i++)
+		{
+			Object.Destroy((Object)(object)componentsInChildren[i]);
+		}
+	}
+
+	private IEnumerator DoDownloadModel()
+	{
+		yield return ((MonoBehaviour)this).StartCoroutine(FileDialog.Save((string)null, ".obj", "download_file", "", true, Skinnable.ItemName, false));
+		if (string.IsNullOrEmpty(FileDialog.result))
+		{
+			yield break;
+		}
+		Debug.Log((object)("Save Obj to " + FileDialog.result));
+		for (int i = 0; i < Skinnable.MeshDownloadPaths.Length; i++)
+		{
+			string text = Path.Combine(Application.streamingAssetsPath, Skinnable.MeshDownloadPaths[i]);
+			string text2 = FileDialog.result;
+			if (Skinnable.MeshDownloadPaths.Length > 1)
+			{
+				string extension = Path.GetExtension(text);
+				string text3 = ModelCleanup.Replace(Path.GetFileNameWithoutExtension(text), "");
+				string? directoryName = Path.GetDirectoryName(text2);
+				string fileNameWithoutExtension = Path.GetFileNameWithoutExtension(text2);
+				text2 = Path.Combine(directoryName, fileNameWithoutExtension + "_" + text3 + extension);
+			}
+			File.Copy(text, text2, overwrite: true);
+		}
+	}
+
+	private void Update()
+	{
+		Input.Frame();
+		Input.Update();
+	}
+
+	private void LateUpdate()
+	{
+		ViewmodelControls.DoUpdate(ViewModel);
+	}
+
+	public void SwitchMaterial(int i)
+	{
+		EditingMaterial = i;
+		UpdateMaterialRows();
+	}
+
+	public void ToggleDepthOfField(bool toggle)
+	{
+		dofToggled = toggle;
+		DepthOfFieldFocusPoint[] array = Object.FindObjectsOfType<DepthOfFieldFocusPoint>();
+		foreach (DepthOfFieldFocusPoint val in array)
+		{
+			if ((Object)(object)val != (Object)null)
+			{
+				((Behaviour)val).enabled = dofToggled;
+			}
+		}
+	}
+
+	public void HidePlayerModel(bool toggle)
+	{
+		hiddenPlayerModel = toggle;
+		if (Skinnable.Category != Category.Deployable)
+		{
+			InitPlayerPreview(playerSeed, focus: false, hiddenPlayerModel);
+		}
+	}
+
+	private Skin.Manifest LoadManifestFile(string folder)
+	{
+		string text = null;
+		if (folder != null)
+		{
+			string path = folder + "/manifest.txt";
+			if (File.Exists(path))
+			{
+				try
+				{
+					text = File.ReadAllText(path);
+				}
+				catch (Exception ex)
+				{
+					Debug.LogException(ex);
+				}
+			}
+			if (text != null)
+			{
+				return JsonConvert.DeserializeObject<Skin.Manifest>(text);
+			}
+		}
+		Debug.LogWarning((object)("Error while loading the manifest file from folder: " + folder + " (does the file exist?)"));
+		return null;
+	}
+
+	private void ApplyFromManifest(string folder, Skin.Manifest manifest)
+	{
+		//IL_010b: Unknown result type (might be due to invalid IL or missing references)
+		if (manifest == null || manifest.Groups == null)
+		{
+			return;
+		}
+		EditingMaterial = 0;
+		Skin.Manifest.Group[] groups = manifest.Groups;
+		Color val = default(Color);
+		foreach (Skin.Manifest.Group group in groups)
+		{
+			foreach (KeyValuePair<string, string> texture in group.Textures)
+			{
+				if (string.IsNullOrEmpty(texture.Value) || texture.Value == "none")
+				{
+					SetTexture(texture.Key, null);
+					continue;
+				}
+				string fullName = folder + "/" + texture.Value;
+				bool isNormalMap = texture.Key.Contains("BumpMap");
+				SetTexture(texture.Key, fullName, isNormalMap);
+			}
+			foreach (KeyValuePair<string, Skin.Manifest.ColorEntry> color in group.Colors)
+			{
+				((Color)(ref val))..ctor(color.Value.r, color.Value.g, color.Value.b);
+				SetColor(color.Key, val);
+			}
+			foreach (KeyValuePair<string, float> @float in group.Floats)
+			{
+				SetFloat(@float.Key, @float.Value);
+			}
+			EditingMaterial++;
+		}
+	}
+
+	private IEnumerator DoBulkImport()
+	{
+		yield return ((MonoBehaviour)this).StartCoroutine(FileDialog.Open((string)null, (string)null, "filedialog.selectimportfolder", "", false, true));
+		if (!string.IsNullOrEmpty(FileDialog.result))
+		{
+			Skin.Manifest manifest = LoadManifestFile(FileDialog.result);
+			if (manifest == null)
+			{
+				Debug.LogError((object)("No valid manifest found in folder: " + FileDialog.result + " (make sure the manifest.txt file exists)"));
+			}
+			else
+			{
+				ApplyFromManifest(FileDialog.result, manifest);
+			}
+		}
+	}
+
+	public void BulkImport()
+	{
+		((MonoBehaviour)this).StartCoroutine(DoBulkImport());
+	}
+}
+
+
+using Rust.UI;
+using Rust.Workshop.Editor;
+using UnityEngine;
+using UnityEngine.UI;
+
+public class ColorRow : MaterialRow
+{
+	public Button Reset;
+
+	public RustSlider Red;
+
+	public RustSlider Green;
+
+	public RustSlider Blue;
+
+	public GameObject ColourPickerGameObject;
+
+	private Color defaultColour;
+
+	private IWorkshopColourPicker colourPicker;
+
+	private TimeSince disableSlidersOnChanged;
+
+	private TimeSince disableColourPickerOnChanged;
+
+	public bool IsDefault
+	{
+		get
+		{
+			if (defaultColour.r == Red.Value && Green.Value == defaultColour.g)
+			{
+				return Blue.Value == defaultColour.b;
+			}
+			return false;
+		}
+	}
+
+	public void Update()
+	{
+		((Component)Reset).gameObject.SetActive(!IsDefault);
+	}
+
+	public override void Read(Material source, Material def)
+	{
+		//IL_0007: Unknown result type (might be due to invalid IL or missing references)
+		//IL_000c: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0013: Unknown result type (might be due to invalid IL or missing references)
+		//IL_002a: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0041: Unknown result type (might be due to invalid IL or missing references)
+		//IL_005a: Unknown result type (might be due to invalid IL or missing references)
+		//IL_005f: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0070: Unknown result type (might be due to invalid IL or missing references)
+		Color color = source.GetColor(ParamName);
+		Red.Value = color.r * 255f;
+		Green.Value = color.g * 255f;
+		Blue.Value = color.b * 255f;
+		defaultColour = def.GetColor(ParamName);
+		base.Editor.SetColor(ParamName, color);
+	}
+
+	public void ResetToDefault()
+	{
+		//IL_0061: Unknown result type (might be due to invalid IL or missing references)
+		Red.Value = defaultColour.r * 255f;
+		Green.Value = defaultColour.g * 255f;
+		Blue.Value = defaultColour.b * 255f;
+		base.Editor.SetColor(ParamName, defaultColour);
+	}
+
+	public void OnChanged()
+	{
+		//IL_0001: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0019: Unknown result type (might be due to invalid IL or missing references)
+		//IL_001e: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0069: Unknown result type (might be due to invalid IL or missing references)
+		if (!(TimeSince.op_Implicit(disableSlidersOnChanged) < 0.1f))
+		{
+			disableColourPickerOnChanged = TimeSince.op_Implicit(0f);
+			Color val = default(Color);
+			((Color)(ref val))..ctor(Red.Value / 255f, Green.Value / 255f, Blue.Value / 255f);
+			base.Editor.SetColor(ParamName, val);
+		}
+	}
+}
+
+
+using Rust.UI;
+using Rust.Workshop.Editor;
+using UnityEngine;
+using UnityEngine.UI;
+
+public class FloatRow : MaterialRow
+{
+	public Button Reset;
+
+	public RustSlider Slider;
+
+	private float Default;
+
+	public bool IsDefault => Default == Slider.Value;
+
+	public void Update()
+	{
+		((Component)Reset).gameObject.SetActive(!IsDefault);
+	}
+
+	public override void Read(Material source, Material def)
+	{
+		float @float = source.GetFloat(ParamName);
+		Slider.Value = @float;
+		Default = def.GetFloat(ParamName);
+		base.Editor.SetFloat(ParamName, @float);
+	}
+
+	public void ResetToDefault()
+	{
+		Slider.Value = Default;
+		base.Editor.SetFloat(ParamName, Default);
+	}
+
+	public void OnChanged()
+	{
+		base.Editor.SetFloat(ParamName, Slider.Value);
+	}
+}
+
+
+public interface IWorkshopColourPicker
+{
+}
+
+
+using Rust.Workshop;
+using UnityEngine;
+
+public class MaterialRow : MonoBehaviour
+{
+	public string ParamName;
+
+	protected WorkshopItemEditor Editor => ((Component)this).GetComponentInParent<WorkshopItemEditor>();
+
+	public virtual void Read(Material source, Material def)
+	{
+	}
+}
+
+
+using System;
+using System.Collections;
+using System.IO;
+using System.Threading;
+using Facepunch.Extend;
+using Facepunch.Utility;
+using Rust;
+using Rust.UI;
+using Rust.Workshop.Editor;
+using TMPro;
+using UnityEngine;
+using UnityEngine.UI;
+
+public class TextureRow : MaterialRow
+{
+	private string Filename;
+
+	public bool IsNormalMap;
+
+	public RawImage TargetImage;
+
+	public RustText FilenameLabel;
+
+	public Button Reset;
+
+	public Button Clear;
+
+	[HideInInspector]
+	public bool HasChanges;
+
+	private Texture Default;
+
+	private FileSystemWatcher watcher;
+
+	public bool IsDefault => (Object)(object)Default == (Object)(object)TargetImage.texture;
+
+	public bool IsClear => (Object)(object)TargetImage.texture == (Object)null;
+
+	public void Update()
+	{
+		((Component)Reset).gameObject.SetActive(!IsDefault);
+		((Component)Clear).gameObject.SetActive(!IsClear);
+		lock (this)
+		{
+			if (HasChanges)
+			{
+				try
+				{
+					Load(Filename);
+					HasChanges = false;
+					return;
+				}
+				catch
+				{
+					Thread.Sleep(10);
+					return;
+				}
+			}
+		}
+	}
+
+	public void SetFilenameText(string filename, Texture texture = null)
+	{
+		((TMP_Text)FilenameLabel).text = StringExtensions.TruncateFilename(filename, 48, (string)null);
+		if ((Object)(object)texture != (Object)null)
+		{
+			RustText filenameLabel = FilenameLabel;
+			((TMP_Text)filenameLabel).text = ((TMP_Text)filenameLabel).text + $" ({texture.width} x {texture.height})";
+		}
+	}
+
+	public void OnDisable()
+	{
+		if (!Application.isQuitting)
+		{
+			StopWatching();
+		}
+	}
+
+	public void OpenFileBrowser()
+	{
+		((MonoBehaviour)this).StartCoroutine(BrowseForTexture());
+	}
+
+	public IEnumerator BrowseForTexture()
+	{
+		int num = base.Editor.Skinnable.Groups[base.Editor.EditingMaterial]?.MaxTextureSize ?? (-1);
+		string text = ((num > 0) ? $" ( {num} x {num} ) " : "");
+		yield return ((MonoBehaviour)this).StartCoroutine(base.Editor.FileDialog.Open((string)null, ".png|.jpg", "open_texture_suffixed", text, true, false));
+		if (base.Editor.FileDialog.result == null)
+		{
+			yield break;
+		}
+		FileInfo fileInfo = new FileInfo(base.Editor.FileDialog.result);
+		try
+		{
+			Load(fileInfo.FullName);
+		}
+		catch (Exception ex)
+		{
+			Debug.LogWarning((object)("Couldn't load texture: " + ex.Message));
+		}
+	}
+
+	public void Load(string fullname)
+	{
+		StopWatching();
+		FileInfo fileInfo = new FileInfo(fullname);
+		if (fileInfo.Exists)
+		{
+			Texture2D val = base.Editor.SetTexture(ParamName, fileInfo.FullName, IsNormalMap);
+			if (Object.op_Implicit((Object)(object)val))
+			{
+				SetTexture((Texture)(object)val);
+				StartWatching();
+			}
+		}
+	}
+
+	public void SetTexture(Texture tex)
+	{
+		TargetImage.texture = tex;
+		if ((Object)(object)tex != (Object)null)
+		{
+			Filename = ((Object)tex).name;
+			SetFilenameText(Filename, tex);
+		}
+		if (IsDefault)
+		{
+			Filename = "Default";
+			SetFilenameText(Filename, Default);
+		}
+		if ((Object)(object)tex == (Object)null)
+		{
+			Filename = "None";
+			SetFilenameText(Filename);
+		}
+	}
+
+	public override void Read(Material source, Material def)
+	{
+		StopWatching();
+		Texture texture = source.GetTexture(ParamName);
+		Default = def.GetTexture(ParamName);
+		SetTexture(texture);
+	}
+
+	public void OpenFileLocation()
+	{
+		if (!IsDefault)
+		{
+			Os.OpenFolder(Filename);
+		}
+	}
+
+	public void SaveFile()
+	{
+		if (!((Object)(object)TargetImage.texture == (Object)null))
+		{
+			((MonoBehaviour)this).StartCoroutine(DoSaveFile());
+		}
+	}
+
+	private IEnumerator DoSaveFile()
+	{
+		yield return ((MonoBehaviour)this).StartCoroutine(base.Editor.FileDialog.Save((string)null, ".png", "download_file", "", true, ((Object)TargetImage.texture).name, false));
+		if (!string.IsNullOrEmpty(base.Editor.FileDialog.result))
+		{
+			Debug.Log((object)("Save Png to " + base.Editor.FileDialog.result));
+			Texture val = TargetImage.texture;
+			Texture2D val2 = (Texture2D)val;
+			bool num = IsNormalMap && (int)val2.format != 5 && (int)val2.format != 4;
+			if (num)
+			{
+				val = (Texture)(object)Texture.CreateReadableCopy((Texture2D)(object)((val is Texture2D) ? val : null), 0, 0, false);
+				Texture.DecompressNormals((Texture2D)(object)((val is Texture2D) ? val : null));
+			}
+			Texture.SaveAsPng(val, base.Editor.FileDialog.result);
+			if (num)
+			{
+				Object.Destroy((Object)(object)val);
+			}
+		}
+	}
+
+	public void ResetToDefault()
+	{
+		StopWatching();
+		SetTexture(Default);
+		base.Editor.SetTexture(ParamName, Default);
+	}
+
+	public void ResetToClear()
+	{
+		StopWatching();
+		SetTexture(null);
+		base.Editor.SetTexture(ParamName, null);
+	}
+
+	public void StartWatching()
+	{
+		StopWatching();
+		FileInfo fileInfo = new FileInfo(Filename);
+		if (fileInfo.Exists)
+		{
+			watcher = new FileSystemWatcher();
+			watcher.Path = fileInfo.Directory.FullName;
+			watcher.Filter = fileInfo.Name;
+			watcher.NotifyFilter = NotifyFilters.Size | NotifyFilters.LastWrite;
+			watcher.Changed += delegate(object a, FileSystemEventArgs e)
+			{
+				FileChanged(e.FullPath);
+			};
+			watcher.EnableRaisingEvents = true;
+		}
+	}
+
+	public void FileChanged(string name)
+	{
+		lock (this)
+		{
+			HasChanges = true;
+		}
+	}
+
+	public void StopWatching()
+	{
+		if (watcher != null)
+		{
+			watcher.Dispose();
+			watcher = null;
+		}
+	}
+}
+
+
+public interface IWorkshopScreenshotCamera
+{
+}
+
+
+using System;
+using System.Collections;
+using System.Collections.Generic;
+using System.IO;
+using System.Threading.Tasks;
+using Facepunch.Extend;
+using Facepunch.Utility;
+using Newtonsoft.Json;
+using Rust;
+using Rust.UI;
+using Rust.Workshop;
+using Steamworks;
+using Steamworks.Data;
+using Steamworks.Ugc;
+using TMPro;
+using UnityEngine;
+using UnityEngine.UI;
+
+public class Publisher : MonoBehaviour
+{
+	public InputField Description;
+
+	public InputField ChangeLog;
+
+	public Button PublishButton;
+
+	public Texture2D IconBackground;
+
+	public static Action PreIconRender;
+
+	public static Action PostIconRender;
+
+	[Header("Screenshot Anchor References")]
+	public List<Transform> DeployableScreenshotAnchors;
+
+	public List<Transform> ClothingScreenshotAnchors;
+
+	public List<Transform> WeaponScreenshotAnchors;
+
+	public Transform FirstPersonViewScreenshotAnchor;
+
+	[Header("Scene Control References")]
+	public GameObject screenshotCamera;
+
+	public RustButton flashlightToggle;
+
+	public RustButton rainToggle;
+
+	public RustButton fogToggle;
+
+	public RustButton spotlightToggle;
+
+	public RustButton depthOfFieldToggle;
+
+	public RustButton hidePlayerToggle;
+
+	public RustButton firstPersonToggle;
+
+	public RustButton adsToggle;
+
+	public Slider timeSlider;
+
+	[Header("Custom Image References")]
+	public RawImage customIconImage;
+
+	public RustText customIconLabel;
+
+	public WorkshopPreviewImageButton customPreviewButtonPrefab;
+
+	public Transform customPreviewButtonsContainer;
+
+	private Skinnable Skinnable;
+
+	private Skin Skin;
+
+	private ulong ItemId;
+
+	private string Title;
+
+	private GameObject Prefab;
+
+	private List<string> AutomatedScreenshotPaths = new List<string>();
+
+	private static readonly int API_SEND_CHUNK_SIZE = 3;
+
+	private FileInfo customIconFile;
+
+	private Texture customIconTexture;
+
+	private List<WorkshopPreviewImageButton> customPreviews = new List<WorkshopPreviewImageButton>();
+
+	protected WorkshopItemEditor Editor => SingletonComponent<WorkshopItemEditor>.Instance;
+
+	public void StartExport()
+	{
+		DoExport(publishToSteam: true, openFolder: false);
+	}
+
+	public void Update()
+	{
+		((Selectable)PublishButton).interactable = CanPublish();
+	}
+
+	public bool CanPublish()
+	{
+		if (Editor.ItemTitle.Length == 0)
+		{
+			return false;
+		}
+		return true;
+	}
+
+	private async Task DoExport(bool publishToSteam, bool openFolder, string forceFolderName = null)
+	{
+		_ = 1;
+		try
+		{
+			Skinnable = Editor.Skinnable;
+			Skin = Editor.Skin;
+			ItemId = Editor.ItemId;
+			Title = Editor.ItemTitle;
+			Prefab = Editor.Prefab;
+			WorkshopItemEditor.Loading(v1: true, "Exporting..", "", 0f);
+			string tempFolder = Path.GetTempFileName();
+			File.Delete(tempFolder);
+			Directory.CreateDirectory(tempFolder);
+			if (forceFolderName != null)
+			{
+				tempFolder = forceFolderName;
+			}
+			Debug.Log((object)tempFolder);
+			await ExportToFolder(tempFolder, openFolder);
+			if (publishToSteam)
+			{
+				await PublishToSteam(tempFolder);
+			}
+			if (forceFolderName != tempFolder)
+			{
+				Directory.Delete(tempFolder, recursive: true);
+			}
+		}
+		catch (Exception ex)
+		{
+			Debug.LogException(ex);
+		}
+		finally
+		{
+			WorkshopItemEditor.Loading(v1: false, "", "", 0f);
+		}
+	}
+
+	private async Task ExportToFolder(string folder, bool openFolder)
+	{
+		Skin.Manifest data = new Skin.Manifest
+		{
+			ItemType = Skinnable.Name,
+			Version = 3,
+			Groups = new Skin.Manifest.Group[Skin.Materials.Length],
+			PublishDate = DateTime.UtcNow,
+			AuthorId = SteamId.op_Implicit(SteamClient.SteamId)
+		};
+		for (int i = 0; i < Skin.Materials.Length; i++)
+		{
+			data.Groups[i] = new Skin.Manifest.Group();
+			Material mat = Skin.Materials[i];
+			Skin.Manifest.Group group = data.Groups[i];
+			bool isCloth = ((Object)mat.shader).name.Contains("Cloth");
+			bool hasDetailLayer = mat.IsKeywordEnabled("_DETAILLAYER_ON");
+			bool hasDirtLayer = mat.IsKeywordEnabled("_DIRTLAYER_ON");
+			bool isSpecular = ((Object)mat.shader).name.Contains("Specular") || mat.GetInt("_MaterialType") == 1;
+			await ExportTexture(group.Textures, folder, i, "_MainTex", mat, Skin.DefaultMaterials[i]);
+			await ExportTexture(group.Textures, folder, i, "_OcclusionMap", mat, Skin.DefaultMaterials[i]);
+			if (!isSpecular)
+			{
+				await ExportTexture(group.Textures, folder, i, "_MetallicGlossMap", mat, Skin.DefaultMaterials[i]);
+			}
+			else
+			{
+				await ExportTexture(group.Textures, folder, i, "_SpecGlossMap", mat, Skin.DefaultMaterials[i]);
+			}
+			await ExportTexture(group.Textures, folder, i, "_BumpMap", mat, Skin.DefaultMaterials[i], isNormalMap: true);
+			await ExportTexture(group.Textures, folder, i, "_EmissionMap", mat, Skin.DefaultMaterials[i]);
+			if (isCloth)
+			{
+				await ExportTexture(group.Textures, folder, i, "_MicrofiberFuzzMask", mat, Skin.DefaultMaterials[i]);
+			}
+			if (hasDetailLayer)
+			{
+				await ExportTexture(group.Textures, folder, i, "_DetailAlbedoMap", mat, Skin.DefaultMaterials[i]);
+				await ExportTexture(group.Textures, folder, i, "_DetailMask", mat, Skin.DefaultMaterials[i]);
+				await ExportTexture(group.Textures, folder, i, "_DetailNormalMap", mat, Skin.DefaultMaterials[i], isNormalMap: true);
+				await ExportTexture(group.Textures, folder, i, "_DetailOcclusionMap", mat, Skin.DefaultMaterials[i]);
+			}
+			if (hasDirtLayer)
+			{
+				await ExportTexture(group.Textures, folder, i, "_DirtColor", mat, Skin.DefaultMaterials[i]);
+			}
+			group.Floats.Add("_Cutoff", mat.GetFloat("_Cutoff"));
+			group.Floats.Add("_BumpScale", mat.GetFloat("_BumpScale"));
+			group.Floats.Add("_Glossiness", mat.GetFloat("_Glossiness"));
+			if (!isSpecular)
+			{
+				group.Floats.Add("_Metallic", mat.GetFloat("_Metallic"));
+			}
+			group.Floats.Add("_OcclusionStrength", mat.GetFloat("_OcclusionStrength"));
+			if (isCloth)
+			{
+				group.Floats.Add("_MicrofiberFuzzIntensity", mat.GetFloat("_MicrofiberFuzzIntensity"));
+				group.Floats.Add("_MicrofiberFuzzScatter", mat.GetFloat("_MicrofiberFuzzScatter"));
+				group.Floats.Add("_MicrofiberFuzzOcclusion", mat.GetFloat("_MicrofiberFuzzOcclusion"));
+			}
+			if (hasDetailLayer)
+			{
+				group.Floats.Add("_DetailNormalMapScale", mat.GetFloat("_DetailNormalMapScale"));
+				group.Floats.Add("_DetailOcclusionStrength", mat.GetFloat("_DetailOcclusionStrength"));
+				group.Floats.Add("_DetailOverlaySmoothness", mat.GetFloat("_DetailOverlaySmoothness"));
+				group.Floats.Add("_DetailOverlaySpecular", mat.GetFloat("_DetailOverlaySpecular"));
+			}
+			if (hasDirtLayer)
+			{
+				group.Floats.Add("_DirtAmount", mat.GetFloat("_DirtAmount"));
+			}
+			group.Colors.Add("_Color", new Skin.Manifest.ColorEntry(mat.GetColor("_Color")));
+			if (isSpecular)
+			{
+				group.Colors.Add("_SpecColor", new Skin.Manifest.ColorEntry(mat.GetColor("_SpecColor")));
+			}
+			group.Colors.Add("_EmissionColor", new Skin.Manifest.ColorEntry(mat.GetColor("_EmissionColor")));
+			if (isCloth)
+			{
+				group.Colors.Add("_MicrofiberFuzzColor", new Skin.Manifest.ColorEntry(mat.GetColor("_MicrofiberFuzzColor")));
+			}
+			if (hasDetailLayer)
+			{
+				group.Colors.Add("_DetailColor", new Skin.Manifest.ColorEntry(mat.GetColor("_DetailColor")));
+			}
+		}
+		PreIconRender?.Invoke();
+		await Task.Delay(TimeSpan.FromSeconds(1.0));
+		WorkshopItemEditor.Loading(v1: true, "Exporting Screenshots - Icons", "", 0f);
+		PropRenderer.RenderScreenshot(Prefab, folder + "/icon.png", 512, 512, 4);
+		if (customIconFile == null)
+		{
+			CreateWorkshopIcon(folder);
+		}
+		else
+		{
+			Debug.Log((object)("Using custom icon: " + customIconFile.FullName));
+			Texture obj = customIconTexture;
+			byte[] bytes = ImageConversion.EncodeToPNG((Texture2D)(object)((obj is Texture2D) ? obj : null));
+			File.WriteAllBytes(folder + "/workshop_icon.png", bytes);
+		}
+		int num = 0;
+		foreach (WorkshopPreviewImageButton customPreview in customPreviews)
+		{
+			if (!((Object)(object)customPreview == (Object)null) && !((Object)(object)customPreview.texture == (Object)null))
+			{
+				Texture texture = customPreview.texture;
+				byte[] bytes2 = ImageConversion.EncodeToJPG((Texture2D)(object)((texture is Texture2D) ? texture : null));
+				File.WriteAllBytes(folder + $"/custom_preview_{num}.jpg", bytes2);
+				num++;
+			}
+		}
+		PostIconRender?.Invoke();
+		string contents = JsonConvert.SerializeObject((object)data, (Formatting)1);
+		File.WriteAllText(folder + "/manifest.txt", contents);
+		if (openFolder)
+		{
+			Os.OpenFolder(folder);
+		}
+	}
+
+	private void CreateWorkshopIcon(string folder)
+	{
+		//IL_000c: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0012: Expected O, but got Unknown
+		//IL_0034: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0039: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0045: Expected O, but got Unknown
+		//IL_0045: Unknown result type (might be due to invalid IL or missing references)
+		//IL_004c: Expected O, but got Unknown
+		//IL_004c: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0053: Expected O, but got Unknown
+		//IL_0076: Expected O, but got Unknown
+		Texture2D val = new Texture2D(512, 512, (TextureFormat)5, false);
+		ImageConversion.LoadImage(val, File.ReadAllBytes(folder + "/icon.png"));
+		RenderTexture val2 = new RenderTexture(512, 512, 0);
+		RenderTextureEx.Blit(val2, (Texture)(object)IconBackground);
+		RenderTextureEx.BlitWithAlphaBlending(val2, (Texture)(object)val);
+		RenderTextureEx.ToTexture(val2, (Texture)(object)val);
+		File.WriteAllBytes(bytes: ImageConversion.EncodeToPNG(val), path: folder + "/workshop_icon.png");
+		Object.DestroyImmediate((Object)(object)val);
+		Object.DestroyImmediate((Object)val2);
+	}
+
+	private async Task PublishToSteam(string folder)
+	{
+		Editor val = default(Editor);
+		if (ItemId == 0L)
+		{
+			val = Editor.NewMicrotransactionFile;
+		}
+		else
+		{
+			((Editor)(ref val))..ctor(PublishedFileId.op_Implicit(ItemId));
+		}
+		Editor val2 = ((Editor)(ref val)).WithContent(folder);
+		val2 = ((Editor)(ref val2)).WithPreviewFile(folder + "/workshop_icon.png");
+		val2 = ((Editor)(ref val2)).WithTitle(Title);
+		val2 = ((Editor)(ref val2)).WithTag("Version3");
+		val2 = ((Editor)(ref val2)).WithTag(Skinnable.Name);
+		val2 = ((Editor)(ref val2)).WithTag("Skin");
+		val = ((Editor)(ref val2)).WithPublicVisibility();
+		if (!string.IsNullOrEmpty(Description.text))
+		{
+			val = ((Editor)(ref val)).WithDescription(Description.text);
+		}
+		if (!string.IsNullOrEmpty(ChangeLog.text))
+		{
+			val = ((Editor)(ref val)).WithChangeLog(ChangeLog.text);
+		}
+		WorkshopItemEditor.Loading(v1: true, "Publishing To Steam", "", 0f);
+		PublishResult result = await ((Editor)(ref val)).SubmitAsync((IProgress<float>)null, (Action<PublishResult>)null);
+		PublishedFileId fileId;
+		if (!((PublishResult)(ref result)).Success)
+		{
+			Debug.LogError((object)("Error: " + ((object)(Result)(ref result.Result)/*cast due to .constrained prefix*/).ToString()));
+		}
+		else
+		{
+			fileId = result.FileId;
+			Debug.Log((object)("Published File: " + ((object)(PublishedFileId)(ref fileId)/*cast due to .constrained prefix*/).ToString()));
+		}
+		Item? item = await SteamUGC.QueryFileAsync(result.FileId);
+		if (!item.HasValue)
+		{
+			Debug.Log((object)"Error Retrieving item information!");
+			return;
+		}
+		if (((PublishResult)(ref result)).Success && AutomatedScreenshotPaths != null)
+		{
+			List<List<string>> list = ListEx.ChunkBy<string>(AutomatedScreenshotPaths, API_SEND_CHUNK_SIZE);
+			foreach (List<string> chunk in list)
+			{
+				val = new Editor(result.FileId);
+				foreach (string item2 in chunk)
+				{
+					val = ((Editor)(ref val)).AddAdditionalPreviewFile(item2, (ItemPreviewType)0);
+				}
+				result = await ((Editor)(ref val)).SubmitAsync((IProgress<float>)null, (Action<PublishResult>)null);
+				Debug.Log((object)$"Updated Workshop Item with [{chunk.Count}] screenshots, result: [{result.Result}]");
+			}
+		}
+		if (((PublishResult)(ref result)).Success && customPreviews != null)
+		{
+			int previewIndex = 0;
+			foreach (WorkshopPreviewImageButton customPreview in customPreviews)
+			{
+				if (!((Object)(object)customPreview == (Object)null) && !((Object)(object)customPreview.texture == (Object)null))
+				{
+					val = new Editor(result.FileId);
+					val = ((Editor)(ref val)).AddAdditionalPreviewFile($"{folder}/custom_preview_{previewIndex}.jpg", (ItemPreviewType)0);
+					result = await ((Editor)(ref val)).SubmitAsync((IProgress<float>)null, (Action<PublishResult>)null);
+					previewIndex++;
+					if (!((PublishResult)(ref result)).Success)
+					{
+						Debug.LogError((object)("Error adding custom preview image: " + ((object)(Result)(ref result.Result)/*cast due to .constrained prefix*/).ToString()));
+						continue;
+					}
+					fileId = result.FileId;
+					Debug.Log((object)("Added custom preview image: " + ((object)(PublishedFileId)(ref fileId)/*cast due to .constrained prefix*/).ToString()));
+				}
+			}
+		}
+		WorkshopItemEditor editor = Editor;
+		Item value = item.Value;
+		editor.ItemId = PublishedFileId.op_Implicit(((Item)(ref value)).Id);
+		WorkshopItemEditor editor2 = Editor;
+		value = item.Value;
+		editor2.ItemTitle = ((Item)(ref value)).Title;
+		ChangeLog.text = "";
+		value = item.Value;
+		Application.OpenURL(((Item)(ref value)).Url);
+	}
+
+	private async Task ExportTexture(Dictionary<string, string> data, string folder, int group, string paramname, Material mat, Material defaultMat, bool isNormalMap = false)
+	{
+		WorkshopItemEditor.Loading(v1: true, "Exporting Texture " + paramname, "", 0f);
+		Texture texture = mat.GetTexture(paramname);
+		Texture texture2 = defaultMat.GetTexture(paramname);
+		if (!((Object)(object)texture == (Object)(object)texture2))
+		{
+			if ((Object)(object)texture == (Object)null)
+			{
+				data.Add(paramname, "none");
+				return;
+			}
+			texture = (Texture)(object)Texture.LimitSize((Texture2D)texture, Skinnable.Groups[group].MaxTextureSize, Skinnable.Groups[group].MaxTextureSize, isNormalMap);
+			string text = string.Format("{0}{1}{2}", paramname, group, ".png");
+			data.Add(paramname, text);
+			Texture.SaveAsPng(texture, folder + "/" + text);
+			await Task.Delay(1);
+		}
+	}
+
+	public void Export()
+	{
+		DoExport();
+	}
+
+	public async Task DoExport()
+	{
+		string text = await Editor.FileDialog.SaveAsync((string)null, (string)null, "save_file", "", true, Editor.Skinnable?.ItemName.Replace(".", ""));
+		if (text != null && !File.Exists(text))
+		{
+			if (!Directory.Exists(text))
+			{
+				Directory.CreateDirectory(text);
+			}
+			await DoExport(publishToSteam: false, openFolder: true, text);
+		}
+	}
+
+	public void OpenFileBrowserForCustomIcon()
+	{
+		((MonoBehaviour)this).StartCoroutine(BrowseForCustomIcon());
+	}
+
+	public IEnumerator BrowseForCustomIcon()
+	{
+		yield return ((MonoBehaviour)this).StartCoroutine(Editor.FileDialog.Open((string)null, ".png|.jpg", "open_file", "", true, false));
+		if (Editor.FileDialog.result == null)
+		{
+			yield break;
+		}
+		try
+		{
+			customIconFile = new FileInfo(Editor.FileDialog.result);
+			customIconTexture = (Texture)(object)Editor.SetTexture("CustomIcon", customIconFile.FullName, isNormalMap: false, skipSettingMaterialTexture: true);
+			SetTextureName(customIconTexture);
+			SetTexturePreview(customIconTexture);
+		}
+		catch
+		{
+			Debug.LogError((object)"Error loading custom icon file from dialog.");
+		}
+	}
+
+	public void OpenCustomIconFileLocation()
+	{
+		if (customIconFile != null)
+		{
+			Os.OpenFolder(customIconFile.DirectoryName);
+		}
+	}
+
+	private void SetTextureName(Texture texture)
+	{
+		if ((Object)(object)texture == (Object)null)
+		{
+			((TMP_Text)customIconLabel).text = "None";
+			return;
+		}
+		((TMP_Text)customIconLabel).text = StringExtensions.TruncateFilename(((Object)texture).name, 48, (string)null);
+		RustText obj = customIconLabel;
+		((TMP_Text)obj).text = ((TMP_Text)obj).text + $" ({texture.width} x {texture.height})";
+	}
+
+	private void SetTexturePreview(Texture texture)
+	{
+		customIconImage.texture = texture;
+	}
+
+	public void ClearCustomIcon()
+	{
+		customIconFile = null;
+		customIconTexture = null;
+		SetTextureName(null);
+		SetTexturePreview(null);
+	}
+
+	public void OpenFileBrowserForCustomPreview()
+	{
+		((MonoBehaviour)this).StartCoroutine(BrowseForCustomPreview());
+	}
+
+	public IEnumerator BrowseForCustomPreview()
+	{
+		yield return ((MonoBehaviour)this).StartCoroutine(Editor.FileDialog.Open((string)null, ".png|.jpg", "open_file", "", true, false));
+		if (Editor.FileDialog.result == null)
+		{
+			yield break;
+		}
+		try
+		{
+			WorkshopPreviewImageButton workshopPreviewImageButton = Object.Instantiate<WorkshopPreviewImageButton>(customPreviewButtonPrefab, customPreviewButtonsContainer);
+			workshopPreviewImageButton.publisher = this;
+			workshopPreviewImageButton.SetFile(new FileInfo(Editor.FileDialog.result));
+			customPreviews.Add(workshopPreviewImageButton);
+		}
+		catch
+		{
+			Debug.LogError((object)"Error loading custom preview file from dialog.");
+		}
+	}
+
+	public void ClearCustomPreviewImages()
+	{
+		foreach (WorkshopPreviewImageButton customPreview in customPreviews)
+		{
+			Object.Destroy((Object)(object)((Component)customPreview).gameObject);
+		}
+		customPreviews.Clear();
+	}
+
+	public void RemoveCustomPreview(WorkshopPreviewImageButton button)
+	{
+		customPreviews.Remove(button);
+	}
+
+	public void OpenDocumentationTips()
+	{
+		SafeOpenURL("https://wiki.facepunch.com/rust/Creating_Skins");
+	}
+
+	public static void SafeOpenURL(string url)
+	{
+		Debug.Log((object)("Opening " + url));
+		SteamFriends.OpenWebOverlay(url, false);
+	}
+}
+
+
+using UnityEngine;
+
+public class WorkshopCameraKeybindAnchor : MonoBehaviour
+{
+	public KeyCode holdKey = (KeyCode)306;
+
+	public KeyCode pressKey;
+}
+
+
+using Facepunch.Extend;
+using Rust;
+using Rust.Workshop;
+using UnityEngine;
+
+internal class WorkshopPlayerPreview : MonoBehaviour
+{
+	public static GameObject Instance;
+
+	protected WorkshopInterface Interface => ((Component)this).GetComponentInParent<WorkshopInterface>();
+
+	public void Setup(GameObject ClothingPrefab, ulong id, bool focus, bool IsClothing, float additionalZoom = 0f, Vector3 rotationOffset = default(Vector3), bool invisible = false)
+	{
+		//IL_0024: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0038: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0082: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00a5: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00b4: Unknown result type (might be due to invalid IL or missing references)
+		Cleanup();
+		Instance = Global.CreatePrefab("assets/prefabs/player/player_model.prefab");
+		Instance.transform.position = Vector3.zero;
+		Instance.transform.rotation = Quaternion.identity;
+		Instance.SetActive(true);
+		ClothingPrefab.transform.SetParent(Instance.transform);
+		ClothingPrefab.SetActive(false);
+		Instance.transform.position = SingletonComponent<WorkshopItemEditor>.Instance.ItemSpawnPositionAnchor.transform.position;
+		Instance.transform.rotation = SingletonComponent<WorkshopItemEditor>.Instance.ItemSpawnPositionAnchor.transform.rotation;
+		if (focus)
+		{
+			FocusCameraOnPreview(additionalZoom, rotationOffset);
+		}
+	}
+
+	public static void FocusCameraOnPreview(float additionalZoom = 0f, Vector3 rotationOffset = default(Vector3))
+	{
+		//IL_0024: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0027: Unknown result type (might be due to invalid IL or missing references)
+		//IL_002d: Unknown result type (might be due to invalid IL or missing references)
+		//IL_004c: Unknown result type (might be due to invalid IL or missing references)
+		//IL_004d: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0035: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0036: Unknown result type (might be due to invalid IL or missing references)
+		//IL_003b: Unknown result type (might be due to invalid IL or missing references)
+		//IL_003c: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0041: Unknown result type (might be due to invalid IL or missing references)
+		if (!((Object)(object)Instance == (Object)null))
+		{
+			Vector3 val = default(Vector3);
+			((Vector3)(ref val))..ctor(0.3f, 0.1f, 1f);
+			if (rotationOffset != default(Vector3))
+			{
+				val = Quaternion.Euler(rotationOffset) * val;
+			}
+			CameraEx.FocusOnRenderer(Camera.main, Instance, val, Vector3.up, -1, additionalZoom);
+		}
+	}
+
+	public void Cleanup()
+	{
+		if ((Object)(object)Instance != (Object)null)
+		{
+			Object.Destroy((Object)(object)Instance);
+			Instance = null;
+		}
+	}
+
+	private void OnDisable()
+	{
+		if (!Application.isQuitting)
+		{
+			Cleanup();
+		}
+	}
+}
+
+
+using Facepunch.Extend;
+using Rust.Platform.Steam;
+using Rust.Workshop;
+using Steamworks.Ugc;
+using TMPro;
+using UnityEngine;
+
+public class WorkshopView : MonoBehaviour
+{
+	public TextMeshProUGUI Title;
+
+	public TextMeshProUGUI AuthorName;
+
+	public GameObject VotingPanel;
+
+	private IWorkshopContent item;
+
+	protected WorkshopInterface Interface => ((Component)this).GetComponentInParent<WorkshopInterface>();
+
+	protected WorkshopItemEditor Editor => Interface.Editor;
+
+	private void Awake()
+	{
+		VotingPanel.SetActive(false);
+	}
+
+	public void Update()
+	{
+		if (item != null && string.IsNullOrEmpty(((TMP_Text)AuthorName).text))
+		{
+			((TMP_Text)AuthorName).text = StringExtensions.Truncate(item.Owner.UserName, 32, (string)null).ToUpper();
+			VotingPanel.SetActive(true);
+		}
+	}
+
+	public void UpdateFrom(IWorkshopContent item)
+	{
+		this.item = item;
+		if (this.item != null)
+		{
+			((TMP_Text)Title).text = StringExtensions.Truncate(item.Title, 24, (string)null).ToUpper();
+			((TMP_Text)AuthorName).text = StringExtensions.Truncate(item.Owner.UserName, 32, (string)null).ToUpper();
+			VotingPanel.SetActive(true);
+		}
+		else
+		{
+			((TMP_Text)Title).text = "FAILED TO LOAD SKIN";
+			((TMP_Text)AuthorName).text = "";
+		}
+	}
+
+	public void OnVoteUp()
+	{
+		//IL_0019: Unknown result type (might be due to invalid IL or missing references)
+		//IL_001e: Unknown result type (might be due to invalid IL or missing references)
+		if (item != null)
+		{
+			IWorkshopContent obj = item;
+			SteamWorkshopContent val = (SteamWorkshopContent)(object)((obj is SteamWorkshopContent) ? obj : null);
+			if (val != null)
+			{
+				Item value = val.Value;
+				((Item)(ref value)).Vote(true);
+			}
+			UpdateFrom(item);
+		}
+	}
+
+	public void OnVoteDown()
+	{
+		//IL_0019: Unknown result type (might be due to invalid IL or missing references)
+		//IL_001e: Unknown result type (might be due to invalid IL or missing references)
+		if (item != null)
+		{
+			IWorkshopContent obj = item;
+			SteamWorkshopContent val = (SteamWorkshopContent)(object)((obj is SteamWorkshopContent) ? obj : null);
+			if (val != null)
+			{
+				Item value = val.Value;
+				((Item)(ref value)).Vote(false);
+			}
+			UpdateFrom(item);
+		}
+	}
+
+	public void OpenWeb()
+	{
+		if (item != null)
+		{
+			IWorkshopContent obj = item;
+			Application.OpenURL((obj != null) ? obj.Url : null);
+		}
+	}
+
+	internal void Clear()
+	{
+		item = null;
+		((TMP_Text)Title).text = "";
+		((TMP_Text)AuthorName).text = "";
+		VotingPanel.SetActive(false);
+	}
+}
+
+
+using System.Collections;
+using Facepunch.Utility;
+using Rust.Workshop;
+using Rust.Workshop.Import;
+using UnityEngine;
+
+internal class ImportVersion1 : SingletonComponent<ImportVersion1>
+{
+	internal IEnumerator DoImport(IWorkshopContent item, Skin skin)
+	{
+		WorkshopItemEditor.Loading(v1: true, "Downloading..", "", 0f);
+		if (!item.IsInstalled)
+		{
+			item.Download();
+			while (item.IsDownloading)
+			{
+				yield return null;
+			}
+			WorkshopItemEditor.Loading(v1: true, "Installing..", "", 0f);
+			while (!item.IsInstalled)
+			{
+				yield return null;
+			}
+		}
+		Os.OpenFolder(item.Directory);
+		WorkshopItemEditor.Loading(v1: true, "Unable To Import", "", 0f);
+		yield return (object)new WaitForSeconds(5f);
+	}
+}
+
+
+using System;
+using System.Collections;
+using System.IO;
+using Facepunch.Utility;
+using Rust;
+using Rust.Workshop;
+using Rust.Workshop.Import;
+using UnityEngine;
+
+internal class ImportVersion2 : SingletonComponent<ImportVersion2>
+{
+	private AssetBundle Bundle;
+
+	public void OnDisable()
+	{
+		if (!Application.isQuitting && (Object)(object)Bundle != (Object)null)
+		{
+			Bundle.Unload(true);
+			Bundle = null;
+			Debug.Log((object)"CLEANUP BUNDLE");
+		}
+	}
+
+	internal IEnumerator DoImport(IWorkshopContent item, Skin skin)
+	{
+		if ((Object)(object)Bundle != (Object)null)
+		{
+			Bundle.Unload(true);
+			Bundle = null;
+		}
+		WorkshopItemEditor.Loading(v1: true, "Downloading..", "", 0f);
+		if (!item.IsInstalled)
+		{
+			item.Download();
+			while (item.IsDownloading)
+			{
+				yield return null;
+			}
+			while (!item.IsInstalled)
+			{
+				yield return null;
+			}
+		}
+		string text = item.Directory + "/bundle";
+		if (File.Exists(text))
+		{
+			yield return ((MonoBehaviour)this).StartCoroutine(LoadItem(item.Directory, text, skin));
+			yield break;
+		}
+		Debug.LogWarning((object)"No Bundle Found!");
+		Os.OpenFolder(item.Directory);
+		yield return (object)new WaitForSeconds(5f);
+	}
+
+	public IEnumerator LoadItem(string Folder, string BundleName, Skin skin)
+	{
+		AssetBundleCreateRequest request = AssetBundle.LoadFromFileAsync(BundleName);
+		yield return (object)new WaitUntil((Func<bool>)(() => ((AsyncOperation)request).isDone));
+		if ((Object)(object)request.assetBundle == (Object)null)
+		{
+			Debug.LogWarning((object)"Asset bundle is null!");
+			yield break;
+		}
+		Bundle = request.assetBundle;
+		WorkshopSkinBase asset = request.assetBundle.LoadAsset<WorkshopSkinBase>("Meta.asset");
+		if ((Object)(object)asset == (Object)null)
+		{
+			string[] allAssetNames = request.assetBundle.GetAllAssetNames();
+			foreach (string text in allAssetNames)
+			{
+				asset = request.assetBundle.LoadAsset<WorkshopSkinBase>(text);
+				if ((Object)(object)asset != (Object)null)
+				{
+					break;
+				}
+			}
+		}
+		if ((Object)(object)asset == (Object)null)
+		{
+			Os.OpenFolder(Folder);
+			yield return (object)new WaitForSeconds(5f);
+			yield break;
+		}
+		yield return ((MonoBehaviour)this).StartCoroutine(ProcessMaterial(0, asset.skinMaterial0, skin));
+		yield return ((MonoBehaviour)this).StartCoroutine(ProcessMaterial(1, asset.skinMaterial1, skin));
+		yield return ((MonoBehaviour)this).StartCoroutine(ProcessMaterial(2, asset.skinMaterial2, skin));
+		yield return ((MonoBehaviour)this).StartCoroutine(ProcessMaterial(3, asset.skinMaterial3, skin));
+	}
+
+	private IEnumerator ProcessMaterial(int v, Material inputMaterial, Skin skin)
+	{
+		if ((Object)(object)inputMaterial == (Object)null || skin.Materials.Length <= v)
+		{
+			yield break;
+		}
+		yield return null;
+		ImportTexture("_MainTex", inputMaterial, skin.Materials[v], normal: false, skin, v);
+		ImportTexture("_BumpMap", inputMaterial, skin.Materials[v], normal: true, skin, v);
+		ImportTexture("_OcclusionMap", inputMaterial, skin.Materials[v], normal: false, skin, v);
+		if ((Object)(object)ImportTexture("_SpecGlossMap", inputMaterial, skin.Materials[v], normal: false, skin, v) == (Object)null)
+		{
+			Texture2D val = ImportTexture("_MetallicGlossMap", inputMaterial, skin.Materials[v], normal: false, skin, v, "_SpecGlossMap");
+			if ((Object)(object)val != (Object)null)
+			{
+				ConvertMetalToSpec(val, skin.Materials[v]);
+			}
+		}
+	}
+
+	private Texture2D ImportTexture(string name, Material inputMaterial, Material outputMaterial, bool normal, Skin skin, int group, string targetName = null)
+	{
+		if (targetName == null)
+		{
+			targetName = name;
+		}
+		Texture texture = outputMaterial.GetTexture(name);
+		Texture texture2 = inputMaterial.GetTexture(name);
+		if ((Object)(object)texture2 == (Object)null)
+		{
+			return null;
+		}
+		if ((Object)(object)texture == (Object)null || ((Object)texture2).name == ((Object)texture).name)
+		{
+			return null;
+		}
+		texture2 = (Texture)(object)Texture.LimitSize((Texture2D)(object)((texture2 is Texture2D) ? texture2 : null), skin.Skinnable.Groups[group].MaxTextureSize, skin.Skinnable.Groups[group].MaxTextureSize, normal);
+		outputMaterial.SetTexture(targetName, texture2);
+		return (Texture2D)(object)((texture2 is Texture2D) ? texture2 : null);
+	}
+
+	private Texture2D ConvertMetalToSpec(Texture2D tex, Material outputMaterial)
+	{
+		//IL_009f: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0016: Unknown result type (might be due to invalid IL or missing references)
+		//IL_001b: Unknown result type (might be due to invalid IL or missing references)
+		//IL_001c: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0037: Unknown result type (might be due to invalid IL or missing references)
+		//IL_003d: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0043: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0049: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0057: Unknown result type (might be due to invalid IL or missing references)
+		tex = Texture.CreateReadableCopy(tex, 0, 0, false);
+		Color val = default(Color);
+		for (int i = 0; i < ((Texture)tex).height; i++)
+		{
+			for (int j = 0; j < ((Texture)tex).width; j++)
+			{
+				Color pixel = tex.GetPixel(j, i);
+				if (pixel.a == 0f)
+				{
+					pixel.a = 0.007843138f;
+				}
+				((Color)(ref val))..ctor(pixel.r, pixel.r, pixel.r, pixel.a);
+				tex.SetPixel(j, i, val);
+			}
+		}
+		tex.Apply();
+		outputMaterial.SetTexture("_SpecGlossMap", (Texture)(object)tex);
+		outputMaterial.SetFloat("_Glossiness", 1f);
+		outputMaterial.SetColor("_SpecColor", Color.white);
+		return tex;
+	}
+}
+
+
+using System.Collections;
+using Rust.Workshop;
+using Rust.Workshop.Import;
+using UnityEngine;
+
+internal class ImportVersion3 : SingletonComponent<ImportVersion3>
+{
+	internal IEnumerator DoImport(IWorkshopContent item, Skin skin, bool compressTexturesOnLoad = true)
+	{
+		WorkshopItemEditor.Loading(v1: true, "Downloading..", "", 0f);
+		yield return ((MonoBehaviour)this).StartCoroutine(DownloadFromWorkshop(item));
+		if (!item.IsInstalled || item.Directory == null)
+		{
+			Debug.Log((object)"Error opening item, not downloaded properly.");
+			Debug.Log((object)("item.Directory: " + item.Directory));
+			Debug.Log((object)("item.Installed: " + item.IsInstalled));
+		}
+		else
+		{
+			WorkshopItemEditor.Loading(v1: true, "Loading..", "Reloading Textures", 0f);
+			yield return ((MonoBehaviour)this).StartCoroutine(skin.LoadIcon(item.WorkshopId, item.Directory));
+			yield return ((MonoBehaviour)this).StartCoroutine(skin.LoadAssets(item.WorkshopId, item.Directory, null, compressTexturesOnLoad));
+		}
+	}
+
+	private IEnumerator DownloadFromWorkshop(IWorkshopContent item)
+	{
+		item.Download();
+		while (item.IsDownloading)
+		{
+			yield return null;
+		}
+		while (!item.IsInstalled)
+		{
+			yield return null;
+		}
+	}
+}
+
+
+using System;
+using UnityEngine;
+
+[Serializable]
+public class Group
+{
+	public string Name = "MAIN";
+
+	public Material Material;
+
+	public int MaxTextureSize = 1024;
+}
+
+
+public enum SkinType
+{
+	TShirt,
+	Pants,
+	SleepingBag,
+	Hoodie,
+	LongTShirt,
+	Cap,
+	Beenie,
+	Boots,
+	Jacket,
+	Balaclava,
+	Boonie,
+	SnowJacket,
+	Bandana,
+	AK47,
+	BoltRifle,
+	Revolver,
+	Rock,
+	Hammer,
+	PipeShotgun,
+	PumpShotgun,
+	SemiAutoPistol,
+	Thompson,
+	WoodStorage,
+	BucketHat,
+	BurlapGloves,
+	BurlapPants,
+	BurlapShirt
+}
+
+
+private struct MonoScriptData
+{
+	public byte[] FilePathsData;
+
+	public byte[] TypesData;
+
+	public int TotalTypes;
+
+	public int TotalFiles;
+
+	public bool IsEditorOnly;
+}
+
+
+using System;
+using System.Collections.Generic;
+using UnityEngine;
+
+[JsonModel]
+public class Manifest
+{
+	[JsonModel]
+	public class Group
+	{
+		public Dictionary<string, string> Textures { get; set; } = new Dictionary<string, string>();
+
+		public Dictionary<string, float> Floats { get; set; } = new Dictionary<string, float>();
+
+		public Dictionary<string, ColorEntry> Colors { get; set; } = new Dictionary<string, ColorEntry>();
+	}
+
+	[JsonModel]
+	public class ColorEntry
+	{
+		public float r { get; set; }
+
+		public float g { get; set; }
+
+		public float b { get; set; }
+
+		public ColorEntry(Color c)
+		{
+			//IL_0007: Unknown result type (might be due to invalid IL or missing references)
+			//IL_0013: Unknown result type (might be due to invalid IL or missing references)
+			//IL_001f: Unknown result type (might be due to invalid IL or missing references)
+			r = c.r;
+			g = c.g;
+			b = c.b;
+		}
+	}
+
+	public int Version { get; set; }
+
+	public string ItemType { get; set; }
+
+	public ulong AuthorId { get; set; }
+
+	public DateTime PublishDate { get; set; }
+
+	public Group[] Groups { get; set; }
+}
+
+
+using System;
+using Newtonsoft.Json;
+
+public class Item
+{
+	public string name;
+
+	public uint itemdefid;
+
+	public string type;
+
+	public string price_category;
+
+	public string icon_url;
+
+	public string icon_url_large;
+
+	public bool marketable;
+
+	public bool tradable;
+
+	public bool commodity;
+
+	public string market_hash_name;
+
+	public string market_name;
+
+	public string bundle;
+
+	public string description;
+
+	public string workshopid;
+
+	public string itemshortname;
+
+	public string tags;
+
+	public string store_tags;
+
+	public string store_images;
+
+	public string exchange;
+
+	public bool store_hidden;
+
+	public string background_color;
+
+	public string name_color;
+
+	[NonSerialized]
+	public DropChance dropChance;
+
+	[NonSerialized]
+	public Price priceCategory;
+
+	public string workshopdownload;
+
+	[JsonProperty(/*Could not decode attribute arguments.*/)]
+	public int? purchase_limit;
+
+	[JsonIgnore]
+	public double Price => (double)priceCategory / 100.0;
+}
+
+
+public class PlaytimeDropItem : Item
+{
+	public int drop_interval;
+
+	public bool use_drop_window;
+
+	public int drop_window;
+
+	public int drop_max_per_window;
+
+	public bool use_drop_limit;
+
+	public int drop_limit;
+}
+
+
+using System.Collections.Generic;
+
+[JsonModel]
+public class Group
+{
+	public Dictionary<string, string> Textures { get; set; } = new Dictionary<string, string>();
+
+	public Dictionary<string, float> Floats { get; set; } = new Dictionary<string, float>();
+
+	public Dictionary<string, ColorEntry> Colors { get; set; } = new Dictionary<string, ColorEntry>();
+}
+
+
+using UnityEngine;
+
+[JsonModel]
+public class ColorEntry
+{
+	public float r { get; set; }
+
+	public float g { get; set; }
+
+	public float b { get; set; }
+
+	public ColorEntry(Color c)
+	{
+		//IL_0007: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0013: Unknown result type (might be due to invalid IL or missing references)
+		//IL_001f: Unknown result type (might be due to invalid IL or missing references)
+		r = c.r;
+		g = c.g;
+		b = c.b;
+	}
+}
+
+
