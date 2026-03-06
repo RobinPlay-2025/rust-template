@@ -13,11 +13,19 @@ public class WorkshopSkin : MonoBehaviour
 {
 	public const float DefaultTimeout = 60f;
 
+	public const float DefaultUnloadDelay = 120f;
+
 	public static bool AllowApply = true;
 
 	public static bool AllowUnload = true;
 
 	public static float DownloadTimeout = 60f;
+
+	private static float _unloadDelay = 120f;
+
+	private static WaitForSeconds waitForUnloadDelay = new WaitForSeconds(120f);
+
+	private static Dictionary<ulong, Coroutine> PendingUnloads = new Dictionary<ulong, Coroutine>();
 
 	private static WaitForSeconds waitForSeconds = new WaitForSeconds(1f);
 
@@ -45,14 +53,32 @@ public class WorkshopSkin : MonoBehaviour
 
 	private Skin AppliedSkin;
 
+	public static float UnloadDelay
+	{
+		get
+		{
+			return _unloadDelay;
+		}
+		set
+		{
+			//IL_0007: Unknown result type (might be due to invalid IL or missing references)
+			//IL_0011: Expected O, but got Unknown
+			_unloadDelay = value;
+			waitForUnloadDelay = new WaitForSeconds(value);
+		}
+	}
+
 	public static int QueuedCount => ItemQueue.Count + SkinQueue.Count;
 
 	public static int LoadedCount => ItemCache.Count + SkinCache.Count;
+
+	public static int PendingUnloadCount => PendingUnloads.Count;
 
 	[RuntimeInitializeOnLoadMethod(/*Could not decode attribute arguments.*/)]
 	private static void ResetStaticFields()
 	{
 		RefreshQueue = new ListDictionary<ulong, ListHashSet<WorkshopSkin>>();
+		PendingUnloads = new Dictionary<ulong, Coroutine>();
 		ItemQueue = new Queue<ulong>();
 		SkinQueue = new Queue<ulong>();
 		ItemCache = new ListDictionary<ulong, IWorkshopContent>();
@@ -77,7 +103,9 @@ public class WorkshopSkin : MonoBehaviour
 		stringBuilder.Append(count3);
 		stringBuilder.Append(" in cache + ");
 		stringBuilder.Append(count4);
-		stringBuilder.Append(" in queue");
+		stringBuilder.Append(" in queue + ");
+		stringBuilder.Append(PendingUnloads.Count);
+		stringBuilder.Append(" pending unload");
 		stringBuilder.AppendLine();
 		stringBuilder.AppendLine();
 		if (ItemCache.Count > 0)
@@ -93,6 +121,7 @@ public class WorkshopSkin : MonoBehaviour
 				val.AddColumn("assets_loaded");
 				val.AddColumn("requests");
 				val.AddColumn("references");
+				val.AddColumn("pending_unload");
 				val.AddColumn("memory");
 				foreach (KeyValuePair<ulong, IWorkshopContent> item in ItemCache)
 				{
@@ -110,8 +139,9 @@ public class WorkshopSkin : MonoBehaviour
 					string text5 = ((skin != null && skin.AssetsLoaded) ? "+" : "-");
 					string text6 = ((val2 != null) ? val2.Count.ToString() : "0");
 					string text7 = ((skin != null) ? skin.references.ToString() : "0");
-					string text8 = ((skin != null) ? num2.ToString("0.0 MB") : "0.0 MB");
-					val.AddRow(new string[9]
+					string text8 = (PendingUnloads.ContainsKey(key) ? "+" : "-");
+					string text9 = ((skin != null) ? num2.ToString("0.0 MB") : "0.0 MB");
+					val.AddRow(new string[10]
 					{
 						key.ToString(),
 						text,
@@ -121,7 +151,8 @@ public class WorkshopSkin : MonoBehaviour
 						text5,
 						text6,
 						text7,
-						text8
+						text8,
+						text9
 					});
 					num += num2;
 				}
@@ -433,8 +464,7 @@ public class WorkshopSkin : MonoBehaviour
 			}
 			else if (AppliedSkin.references == 0 && !RefreshQueue.Contains(AppliedWorkshopID) && AllowUnload && AppliedSkin.AssetsRequested)
 			{
-				AppliedSkin.AssetsRequested = false;
-				LoadOrUnloadSkinAssets(AppliedWorkshopID, OnRefreshFail);
+				ScheduleDelayedUnload(AppliedWorkshopID);
 			}
 		}
 		AppliedSkin = skin;
@@ -442,6 +472,35 @@ public class WorkshopSkin : MonoBehaviour
 		if (AppliedSkin != null)
 		{
 			AppliedSkin.references++;
+			CancelDelayedUnload(workshopId);
+		}
+	}
+
+	private static void ScheduleDelayedUnload(ulong workshopId)
+	{
+		CancelDelayedUnload(workshopId);
+		Coroutine value = ((MonoBehaviour)Global.Runner).StartCoroutine(DelayedUnloadCoroutine(workshopId));
+		PendingUnloads[workshopId] = value;
+	}
+
+	private static void CancelDelayedUnload(ulong workshopId)
+	{
+		if (PendingUnloads.TryGetValue(workshopId, out var value))
+		{
+			((MonoBehaviour)Global.Runner).StopCoroutine(value);
+			PendingUnloads.Remove(workshopId);
+		}
+	}
+
+	private static IEnumerator DelayedUnloadCoroutine(ulong workshopId)
+	{
+		yield return waitForUnloadDelay;
+		PendingUnloads.Remove(workshopId);
+		Skin skin = default(Skin);
+		if (AllowUnload && SkinCache.TryGetValue(workshopId, ref skin))
+		{
+			skin.AssetsRequested = false;
+			LoadOrUnloadSkinAssets(workshopId, null);
 		}
 	}
 }
@@ -1428,6 +1487,7 @@ using Rust.Workshop;
 using Rust.Workshop.Editor;
 using TMPro;
 using UnityEngine;
+using UnityEngine.Events;
 using UnityEngine.Serialization;
 using UnityEngine.UI;
 
@@ -1437,6 +1497,8 @@ public class WorkshopItemEditor : SingletonComponent<WorkshopItemEditor>
 
 	private Publisher _publisher;
 
+	public WorkshopItemAnimator ItemAnimatorButtons;
+
 	public Transform ItemSelectionButtonsParent;
 
 	public WorkshopItemSelectionButton ItemSelectionButtonPrefab;
@@ -1444,6 +1506,8 @@ public class WorkshopItemEditor : SingletonComponent<WorkshopItemEditor>
 	public RustText SelectedItemTypeLabel;
 
 	public Scrollbar ItemSelectionScrollbar;
+
+	public RustButton ToggleFXButton;
 
 	public InputField ItemTitleLabel;
 
@@ -1593,7 +1657,9 @@ public class WorkshopItemEditor : SingletonComponent<WorkshopItemEditor>
 		if ((Object)(object)Prefab != (Object)null)
 		{
 			Object.Destroy((Object)(object)Prefab);
+			ItemAnimatorButtons.ClearButtons();
 			Prefab = null;
+			CheckWorkshopFX();
 		}
 		if ((Object)(object)ViewModel != (Object)null)
 		{
@@ -1774,6 +1840,8 @@ public class WorkshopItemEditor : SingletonComponent<WorkshopItemEditor>
 			return false;
 		}
 		Prefab = LoadForPreview(SkinnableEntityPrefabName);
+		ItemAnimatorButtons.Setup(Prefab);
+		CheckWorkshopFX();
 		PrefabPreviewSpawned?.Invoke(Prefab);
 		FocusCameraOnPrefab();
 		if (Skin == null)
@@ -1940,9 +2008,9 @@ public class WorkshopItemEditor : SingletonComponent<WorkshopItemEditor>
 
 	private void InitScene()
 	{
-		//IL_00e9: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0108: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0079: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0103: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0122: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0093: Unknown result type (might be due to invalid IL or missing references)
 		if (Skinnable.Category != Category.Deployable)
 		{
 			InitPlayerPreview(585364905uL, focus: true, hiddenPlayerModel);
@@ -1950,6 +2018,8 @@ public class WorkshopItemEditor : SingletonComponent<WorkshopItemEditor>
 			{
 				Object.Destroy((Object)(object)Prefab);
 				Prefab = LoadForPreview(SkinnableEntityPrefabName, preprocess: false);
+				ItemAnimatorButtons.Setup(Prefab);
+				CheckWorkshopFX();
 				Prefab.transform.position = new Vector3(0f, 500f, 0f);
 				Skin.Apply(Prefab);
 			}
@@ -2075,6 +2145,41 @@ public class WorkshopItemEditor : SingletonComponent<WorkshopItemEditor>
 		if (Skinnable.Category != Category.Deployable)
 		{
 			InitPlayerPreview(playerSeed, focus: false, hiddenPlayerModel);
+		}
+	}
+
+	private void CheckWorkshopFX()
+	{
+		bool active = (Object)(object)Prefab != (Object)null && Prefab.GetComponentsInChildren<WorkshopFXControls>().Length != 0;
+		((Component)ToggleFXButton).gameObject.SetActive(active);
+		ToggleFXButton.Toggle(true, true, true);
+	}
+
+	public void ToggleWorkshopFX(bool toggle)
+	{
+		if ((Object)(object)Prefab == (Object)null)
+		{
+			return;
+		}
+		WorkshopFXControls[] componentsInChildren = Prefab.GetComponentsInChildren<WorkshopFXControls>();
+		foreach (WorkshopFXControls workshopFXControls in componentsInChildren)
+		{
+			if (toggle)
+			{
+				UnityEvent onEnable = workshopFXControls.OnEnable;
+				if (onEnable != null)
+				{
+					onEnable.Invoke();
+				}
+			}
+			else
+			{
+				UnityEvent onDisable = workshopFXControls.OnDisable;
+				if (onDisable != null)
+				{
+					onDisable.Invoke();
+				}
+			}
 		}
 	}
 
@@ -2568,6 +2673,7 @@ using Steamworks.Data;
 using Steamworks.Ugc;
 using TMPro;
 using UnityEngine;
+using UnityEngine.Events;
 using UnityEngine.UI;
 
 public class Publisher : MonoBehaviour
@@ -2787,6 +2893,45 @@ public class Publisher : MonoBehaviour
 			if (hasDetailLayer)
 			{
 				group.Colors.Add("_DetailColor", new Skin.Manifest.ColorEntry(mat.GetColor("_DetailColor")));
+			}
+		}
+		WorkshopAnimatorControls[] componentsInChildren = Prefab.GetComponentsInChildren<WorkshopAnimatorControls>(true);
+		foreach (WorkshopAnimatorControls workshopAnimatorControls in componentsInChildren)
+		{
+			foreach (WorkshopAnimatorControls.WorkshopAnimatorControlSettings setting in workshopAnimatorControls.settings)
+			{
+				switch (setting.controlType)
+				{
+				case WorkshopAnimatorControls.WorkshopAnimatorControlType.Boolean:
+					workshopAnimatorControls.animator.SetBool(setting.parameterName, setting.defaultValue == 1);
+					break;
+				case WorkshopAnimatorControls.WorkshopAnimatorControlType.Trigger:
+					if (setting.defaultValue == 1)
+					{
+						workshopAnimatorControls.animator.SetTrigger(setting.parameterName);
+					}
+					break;
+				}
+			}
+		}
+		WorkshopFXControls[] componentsInChildren2 = Prefab.GetComponentsInChildren<WorkshopFXControls>(true);
+		foreach (WorkshopFXControls workshopFXControls in componentsInChildren2)
+		{
+			if (workshopFXControls.enabledForExport)
+			{
+				UnityEvent onEnable = workshopFXControls.OnEnable;
+				if (onEnable != null)
+				{
+					onEnable.Invoke();
+				}
+			}
+			else
+			{
+				UnityEvent onDisable = workshopFXControls.OnDisable;
+				if (onDisable != null)
+				{
+					onDisable.Invoke();
+				}
 			}
 		}
 		PreIconRender?.Invoke();
@@ -3554,6 +3699,34 @@ public enum SkinType
 	BurlapGloves,
 	BurlapPants,
 	BurlapShirt
+}
+
+
+public enum WorkshopAnimatorControlType
+{
+	Boolean,
+	Trigger
+}
+
+
+using System;
+using Rust.UI;
+using UnityEngine;
+
+[Serializable]
+public struct WorkshopAnimatorControlSettings
+{
+	public string parameterName;
+
+	public WorkshopAnimatorControlType controlType;
+
+	[Tooltip("Casted to int, 0 for false bool, 1 for true, 1 for activated trigger")]
+	public int defaultValue;
+
+	public Icons icon;
+
+	[LocalizationToken]
+	public string Token;
 }
 
 

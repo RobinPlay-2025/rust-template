@@ -192,13 +192,9 @@ public abstract class ObjectWorkQueue
 
 	public TimeSpan TotalExecutionTime;
 
-	public int LastProcessedCount;
-
-	public TimeSpan LastExecutionTime;
-
 	public int HashSetMaxLength;
 
-	public int LastQueueLength { get; protected set; }
+	public WorkQueueTelemStats Stats;
 
 	public abstract int QueueLength { get; }
 }
@@ -207,6 +203,7 @@ public abstract class ObjectWorkQueue
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using Facepunch;
 using UnityEngine;
 
 public abstract class ObjectWorkQueue<T> : ObjectWorkQueue
@@ -238,9 +235,8 @@ public abstract class ObjectWorkQueue<T> : ObjectWorkQueue
 
 	public void RunQueue(double maximumMilliseconds)
 	{
-		LastExecutionTime = default(TimeSpan);
-		LastProcessedCount = 0;
-		base.LastQueueLength = QueueLength;
+		Stats.Clear();
+		Stats.BudgetTime = ((maximumMilliseconds >= 1000.0) ? default(TimeSpan) : TimeSpanExt.FromMicroseconds(maximumMilliseconds));
 		if (queue.Count == 0)
 		{
 			return;
@@ -253,7 +249,7 @@ public abstract class ObjectWorkQueue<T> : ObjectWorkQueue
 		{
 			while (queue.Count > 0)
 			{
-				LastProcessedCount++;
+				Stats.ProcessedCount++;
 				TotalProcessedCount++;
 				T val2 = queue.Dequeue();
 				containerTest.Remove(val2);
@@ -266,8 +262,6 @@ public abstract class ObjectWorkQueue<T> : ObjectWorkQueue
 					break;
 				}
 			}
-			LastExecutionTime = stopwatch.Elapsed;
-			TotalExecutionTime += LastExecutionTime;
 		}
 		finally
 		{
@@ -277,6 +271,10 @@ public abstract class ObjectWorkQueue<T> : ObjectWorkQueue
 		{
 			Clear();
 		}
+		Stats.QueueCount = Stats.ProcessedCount;
+		Stats.QueueCount += QueueLength;
+		Stats.ExecutionTime = stopwatch.Elapsed;
+		TotalExecutionTime += Stats.ExecutionTime;
 	}
 
 	public void Add(T entity)
@@ -319,7 +317,37 @@ public abstract class ObjectWorkQueue<T> : ObjectWorkQueue
 
 	public string Info()
 	{
-		return $"{QueueLength:n0}, lastCount: {LastProcessedCount:n0}, totCount: {TotalProcessedCount:n0}, totMS: {TotalExecutionTime:n0} ";
+		return $"{QueueLength:n0}, lastCount: {Stats.ProcessedCount:n0}, totCount: {TotalProcessedCount:n0}, totMS: {TotalExecutionTime:n0} ";
+	}
+}
+
+
+using System;
+
+public struct WorkQueueTelemStats
+{
+	public TimeSpan ExecutionTime;
+
+	public TimeSpan BudgetTime;
+
+	public int ProcessedCount;
+
+	public int QueueCount;
+
+	public void Clear()
+	{
+		ExecutionTime = default(TimeSpan);
+		BudgetTime = default(TimeSpan);
+		ProcessedCount = 0;
+		QueueCount = 0;
+	}
+
+	public void Append(WorkQueueTelemStats otherStats)
+	{
+		ExecutionTime += otherStats.ExecutionTime;
+		BudgetTime += otherStats.BudgetTime;
+		ProcessedCount += otherStats.ProcessedCount;
+		QueueCount += otherStats.QueueCount;
 	}
 }
 
@@ -335,11 +363,9 @@ public abstract class PersistentObjectWorkQueue
 
 	public TimeSpan WarningThreshold = TimeSpan.FromMilliseconds(200.0);
 
+	public WorkQueueTelemStats Stats;
+
 	public TimeSpan TotalExecutionTime;
-
-	public TimeSpan LastExecutionTime;
-
-	public int LastProcessedCount;
 
 	public abstract int ListLength { get; }
 }
@@ -347,6 +373,7 @@ public abstract class PersistentObjectWorkQueue
 
 using System;
 using System.Diagnostics;
+using Facepunch;
 
 public abstract class PersistentObjectWorkQueue<T> : PersistentObjectWorkQueue
 {
@@ -371,15 +398,17 @@ public abstract class PersistentObjectWorkQueue<T> : PersistentObjectWorkQueue
 
 	public void RunList(double maximumMilliseconds)
 	{
+		Stats.Clear();
+		Stats.BudgetTime = ((maximumMilliseconds >= 1000.0) ? default(TimeSpan) : TimeSpanExt.FromMicroseconds(maximumMilliseconds));
 		if (workList.Count == 0)
 		{
 			return;
 		}
+		Stats.QueueCount = workList.Count;
 		TimeWarning val = TimeWarning.New(Name, (int)WarningThreshold.TotalMilliseconds);
 		try
 		{
-			stopwatch.Reset();
-			stopwatch.Start();
+			stopwatch.Restart();
 			int count = workList.Count;
 			T[] buffer = workList.Values.Buffer;
 			if (currentIndex >= workList.Count)
@@ -387,10 +416,9 @@ public abstract class PersistentObjectWorkQueue<T> : PersistentObjectWorkQueue
 				currentIndex = 0;
 			}
 			int num = currentIndex;
-			LastProcessedCount = 0;
-			while (LastProcessedCount < count)
+			while (Stats.ProcessedCount < count)
 			{
-				LastProcessedCount++;
+				Stats.ProcessedCount++;
 				T val2 = buffer[currentIndex];
 				if (val2 != null)
 				{
@@ -406,13 +434,13 @@ public abstract class PersistentObjectWorkQueue<T> : PersistentObjectWorkQueue
 					break;
 				}
 			}
-			LastExecutionTime = stopwatch.Elapsed;
-			TotalExecutionTime += LastExecutionTime;
 		}
 		finally
 		{
 			((IDisposable)val)?.Dispose();
 		}
+		Stats.ExecutionTime = stopwatch.Elapsed;
+		TotalExecutionTime += Stats.ExecutionTime;
 	}
 
 	public void Add(T entity)
@@ -452,7 +480,7 @@ public abstract class PersistentObjectWorkQueue<T> : PersistentObjectWorkQueue
 
 	public string Info()
 	{
-		return $"{ListLength:n0}, lastCount: {LastProcessedCount:n0}, lastMS: {LastExecutionTime.TotalMilliseconds:R}, totMS: {TotalExecutionTime.TotalMilliseconds:n0}";
+		return $"{ListLength:n0}, lastCount: {Stats.ProcessedCount:n0}, lastMS: {Stats.ExecutionTime.TotalMilliseconds:R}, totMS: {TotalExecutionTime.TotalMilliseconds:n0}";
 	}
 
 	public void RunOnAll(Action<T> target)
@@ -478,6 +506,7 @@ public abstract class PersistentObjectWorkQueue<T> : PersistentObjectWorkQueue
 
 using System;
 using System.Diagnostics;
+using Facepunch;
 
 public abstract class PersistentObjectWorkQueueListBacked<T> : PersistentObjectWorkQueue
 {
@@ -497,26 +526,27 @@ public abstract class PersistentObjectWorkQueueListBacked<T> : PersistentObjectW
 
 	public void RunList(double maximumMilliseconds)
 	{
+		Stats.Clear();
+		Stats.BudgetTime = ((maximumMilliseconds >= 1000.0) ? default(TimeSpan) : TimeSpanExt.FromMicroseconds(maximumMilliseconds));
 		if (ListLength == 0)
 		{
 			return;
 		}
+		int listLength = ListLength;
 		TimeWarning val = TimeWarning.New(Name, (int)WarningThreshold.TotalMilliseconds);
 		try
 		{
-			stopwatch.Reset();
-			stopwatch.Start();
-			int listLength = ListLength;
+			stopwatch.Restart();
 			BufferList<T> assignedList = AssignedList;
 			if (currentIndex >= listLength)
 			{
 				currentIndex = 0;
 			}
 			int num = currentIndex;
-			LastProcessedCount = 0;
-			while (LastProcessedCount < listLength)
+			Stats.ProcessedCount = 0;
+			while (Stats.ProcessedCount < listLength)
 			{
-				LastProcessedCount++;
+				Stats.ProcessedCount++;
 				T val2 = assignedList[currentIndex];
 				if (val2 != null)
 				{
@@ -532,20 +562,21 @@ public abstract class PersistentObjectWorkQueueListBacked<T> : PersistentObjectW
 					break;
 				}
 			}
-			LastExecutionTime = stopwatch.Elapsed;
-			TotalExecutionTime += LastExecutionTime;
 		}
 		finally
 		{
 			((IDisposable)val)?.Dispose();
 		}
+		Stats.QueueCount = listLength;
+		Stats.ExecutionTime = stopwatch.Elapsed;
+		TotalExecutionTime += Stats.ExecutionTime;
 	}
 
 	protected abstract void RunJob(T entity);
 
 	public string Info()
 	{
-		return $"{ListLength:n0}, lastCount: {LastProcessedCount:n0}, lastMS: {LastExecutionTime.TotalMilliseconds:R}, totMS: {TotalExecutionTime.TotalMilliseconds:n0}";
+		return $"{ListLength:n0}, lastCount: {Stats.ProcessedCount:n0}, lastMS: {Stats.ExecutionTime.TotalMilliseconds:R}, totMS: {TotalExecutionTime.TotalMilliseconds:n0}";
 	}
 
 	public void RunOnAll(Action<T> target)
@@ -6552,7 +6583,7 @@ internal class UnitySourceGeneratedAssemblyMonoScriptTypes_v1
 			111, 108, 108, 101, 99, 116, 105, 111, 110, 115,
 			92, 79, 98, 106, 101, 99, 116, 87, 111, 114,
 			107, 81, 117, 101, 117, 101, 46, 99, 115, 0,
-			0, 0, 3, 0, 0, 0, 68, 92, 65, 115,
+			0, 0, 4, 0, 0, 0, 68, 92, 65, 115,
 			115, 101, 116, 115, 92, 80, 108, 117, 103, 105,
 			110, 115, 92, 82, 117, 115, 116, 46, 71, 108,
 			111, 98, 97, 108, 92, 67, 111, 108, 108, 101,
@@ -6837,7 +6868,7 @@ internal class UnitySourceGeneratedAssemblyMonoScriptTypes_v1
 			85, 110, 115, 97, 102, 101, 76, 105, 115, 116,
 			65, 99, 99, 101, 115, 115, 46, 99, 115
 		};
-		result.TypesData = new byte[1963]
+		result.TypesData = new byte[1988]
 		{
 			0, 0, 0, 0, 16, 82, 117, 115, 116, 124,
 			65, 112, 112, 108, 105, 99, 97, 116, 105, 111,
@@ -6853,192 +6884,194 @@ internal class UnitySourceGeneratedAssemblyMonoScriptTypes_v1
 			124, 79, 98, 106, 101, 99, 116, 87, 111, 114,
 			107, 81, 117, 101, 117, 101, 1, 0, 0, 0,
 			16, 124, 79, 98, 106, 101, 99, 116, 87, 111,
-			114, 107, 81, 117, 101, 117, 101, 1, 0, 0,
-			0, 26, 124, 80, 101, 114, 115, 105, 115, 116,
-			101, 110, 116, 79, 98, 106, 101, 99, 116, 87,
-			111, 114, 107, 81, 117, 101, 117, 101, 1, 0,
-			0, 0, 26, 124, 80, 101, 114, 115, 105, 115,
-			116, 101, 110, 116, 79, 98, 106, 101, 99, 116,
-			87, 111, 114, 107, 81, 117, 101, 117, 101, 0,
-			0, 0, 0, 36, 124, 80, 101, 114, 115, 105,
-			115, 116, 101, 110, 116, 79, 98, 106, 101, 99,
-			116, 87, 111, 114, 107, 81, 117, 101, 117, 101,
-			76, 105, 115, 116, 66, 97, 99, 107, 101, 100,
-			1, 0, 0, 0, 15, 124, 87, 111, 114, 108,
-			100, 83, 112, 97, 99, 101, 71, 114, 105, 100,
-			1, 0, 0, 0, 15, 124, 87, 111, 114, 108,
-			100, 83, 112, 97, 99, 101, 71, 114, 105, 100,
-			0, 0, 0, 0, 45, 82, 117, 115, 116, 46,
-			67, 111, 109, 112, 111, 110, 101, 110, 116, 115,
-			46, 67, 97, 109, 101, 114, 97, 124, 68, 101,
-			112, 116, 104, 79, 102, 70, 105, 101, 108, 100,
-			70, 111, 99, 117, 115, 80, 111, 105, 110, 116,
-			0, 0, 0, 0, 39, 82, 117, 115, 116, 46,
-			67, 111, 109, 112, 111, 110, 101, 110, 116, 115,
-			46, 67, 97, 109, 101, 114, 97, 124, 76, 105,
-			103, 104, 116, 105, 110, 103, 79, 118, 101, 114,
-			114, 105, 100, 101, 0, 0, 0, 0, 33, 82,
-			117, 115, 116, 46, 67, 111, 109, 112, 111, 110,
-			101, 110, 116, 115, 124, 78, 117, 108, 108, 77,
-			111, 110, 111, 66, 101, 104, 97, 118, 105, 111,
-			117, 114, 0, 0, 0, 0, 39, 82, 117, 115,
-			116, 46, 67, 111, 109, 112, 111, 110, 101, 110,
-			116, 115, 46, 85, 116, 105, 108, 105, 116, 121,
-			124, 79, 110, 79, 98, 106, 101, 99, 116, 68,
-			105, 115, 97, 98, 108, 101, 0, 0, 0, 0,
-			38, 82, 117, 115, 116, 46, 67, 111, 109, 112,
-			111, 110, 101, 110, 116, 115, 46, 85, 116, 105,
-			108, 105, 116, 121, 124, 79, 110, 79, 98, 106,
-			101, 99, 116, 69, 110, 97, 98, 108, 101, 0,
-			0, 0, 0, 4, 124, 67, 82, 67, 0, 0,
-			0, 0, 11, 82, 117, 115, 116, 124, 76, 97,
-			121, 101, 114, 115, 0, 0, 0, 0, 18, 82,
-			117, 115, 116, 46, 76, 97, 121, 101, 114, 115,
-			124, 83, 101, 114, 118, 101, 114, 0, 0, 0,
-			0, 18, 82, 117, 115, 116, 46, 76, 97, 121,
-			101, 114, 115, 124, 67, 108, 105, 101, 110, 116,
-			0, 0, 0, 0, 16, 82, 117, 115, 116, 46,
-			76, 97, 121, 101, 114, 115, 124, 77, 97, 115,
-			107, 0, 0, 0, 0, 8, 124, 70, 108, 111,
-			97, 116, 69, 120, 0, 0, 0, 0, 17, 85,
-			110, 105, 116, 121, 69, 110, 103, 105, 110, 101,
-			124, 73, 110, 116, 69, 120, 0, 0, 0, 0,
-			7, 124, 76, 105, 115, 116, 69, 120, 0, 0,
-			0, 0, 18, 85, 110, 105, 116, 121, 69, 110,
-			103, 105, 110, 101, 124, 77, 97, 116, 104, 69,
-			120, 0, 0, 0, 0, 16, 124, 83, 116, 114,
-			105, 110, 103, 66, 117, 105, 108, 100, 101, 114,
-			69, 120, 0, 0, 0, 0, 20, 85, 110, 105,
-			116, 121, 69, 110, 103, 105, 110, 101, 124, 83,
-			116, 114, 105, 110, 103, 69, 120, 0, 0, 0,
-			0, 21, 85, 110, 105, 116, 121, 69, 110, 103,
-			105, 110, 101, 124, 86, 101, 99, 116, 111, 114,
-			50, 69, 120, 0, 0, 0, 0, 21, 85, 110,
+			114, 107, 81, 117, 101, 117, 101, 0, 0, 0,
+			0, 20, 124, 87, 111, 114, 107, 81, 117, 101,
+			117, 101, 84, 101, 108, 101, 109, 83, 116, 97,
+			116, 115, 1, 0, 0, 0, 26, 124, 80, 101,
+			114, 115, 105, 115, 116, 101, 110, 116, 79, 98,
+			106, 101, 99, 116, 87, 111, 114, 107, 81, 117,
+			101, 117, 101, 1, 0, 0, 0, 26, 124, 80,
+			101, 114, 115, 105, 115, 116, 101, 110, 116, 79,
+			98, 106, 101, 99, 116, 87, 111, 114, 107, 81,
+			117, 101, 117, 101, 0, 0, 0, 0, 36, 124,
+			80, 101, 114, 115, 105, 115, 116, 101, 110, 116,
+			79, 98, 106, 101, 99, 116, 87, 111, 114, 107,
+			81, 117, 101, 117, 101, 76, 105, 115, 116, 66,
+			97, 99, 107, 101, 100, 1, 0, 0, 0, 15,
+			124, 87, 111, 114, 108, 100, 83, 112, 97, 99,
+			101, 71, 114, 105, 100, 1, 0, 0, 0, 15,
+			124, 87, 111, 114, 108, 100, 83, 112, 97, 99,
+			101, 71, 114, 105, 100, 0, 0, 0, 0, 45,
+			82, 117, 115, 116, 46, 67, 111, 109, 112, 111,
+			110, 101, 110, 116, 115, 46, 67, 97, 109, 101,
+			114, 97, 124, 68, 101, 112, 116, 104, 79, 102,
+			70, 105, 101, 108, 100, 70, 111, 99, 117, 115,
+			80, 111, 105, 110, 116, 0, 0, 0, 0, 39,
+			82, 117, 115, 116, 46, 67, 111, 109, 112, 111,
+			110, 101, 110, 116, 115, 46, 67, 97, 109, 101,
+			114, 97, 124, 76, 105, 103, 104, 116, 105, 110,
+			103, 79, 118, 101, 114, 114, 105, 100, 101, 0,
+			0, 0, 0, 33, 82, 117, 115, 116, 46, 67,
+			111, 109, 112, 111, 110, 101, 110, 116, 115, 124,
+			78, 117, 108, 108, 77, 111, 110, 111, 66, 101,
+			104, 97, 118, 105, 111, 117, 114, 0, 0, 0,
+			0, 39, 82, 117, 115, 116, 46, 67, 111, 109,
+			112, 111, 110, 101, 110, 116, 115, 46, 85, 116,
+			105, 108, 105, 116, 121, 124, 79, 110, 79, 98,
+			106, 101, 99, 116, 68, 105, 115, 97, 98, 108,
+			101, 0, 0, 0, 0, 38, 82, 117, 115, 116,
+			46, 67, 111, 109, 112, 111, 110, 101, 110, 116,
+			115, 46, 85, 116, 105, 108, 105, 116, 121, 124,
+			79, 110, 79, 98, 106, 101, 99, 116, 69, 110,
+			97, 98, 108, 101, 0, 0, 0, 0, 4, 124,
+			67, 82, 67, 0, 0, 0, 0, 11, 82, 117,
+			115, 116, 124, 76, 97, 121, 101, 114, 115, 0,
+			0, 0, 0, 18, 82, 117, 115, 116, 46, 76,
+			97, 121, 101, 114, 115, 124, 83, 101, 114, 118,
+			101, 114, 0, 0, 0, 0, 18, 82, 117, 115,
+			116, 46, 76, 97, 121, 101, 114, 115, 124, 67,
+			108, 105, 101, 110, 116, 0, 0, 0, 0, 16,
+			82, 117, 115, 116, 46, 76, 97, 121, 101, 114,
+			115, 124, 77, 97, 115, 107, 0, 0, 0, 0,
+			8, 124, 70, 108, 111, 97, 116, 69, 120, 0,
+			0, 0, 0, 17, 85, 110, 105, 116, 121, 69,
+			110, 103, 105, 110, 101, 124, 73, 110, 116, 69,
+			120, 0, 0, 0, 0, 7, 124, 76, 105, 115,
+			116, 69, 120, 0, 0, 0, 0, 18, 85, 110,
 			105, 116, 121, 69, 110, 103, 105, 110, 101, 124,
-			86, 101, 99, 116, 111, 114, 51, 69, 120, 0,
-			0, 0, 0, 21, 85, 110, 105, 116, 121, 69,
-			110, 103, 105, 110, 101, 124, 86, 101, 99, 116,
-			111, 114, 52, 69, 120, 0, 0, 0, 0, 11,
-			82, 117, 115, 116, 124, 71, 108, 111, 98, 97,
-			108, 0, 0, 0, 0, 20, 124, 72, 111, 114,
-			105, 122, 111, 110, 116, 97, 108, 65, 116, 116,
-			114, 105, 98, 117, 116, 101, 0, 0, 0, 0,
-			24, 124, 73, 67, 117, 115, 116, 111, 109, 77,
-			97, 116, 101, 114, 105, 97, 108, 82, 101, 112,
-			108, 97, 99, 101, 114, 0, 0, 0, 0, 12,
-			82, 117, 115, 116, 124, 73, 69, 110, 116, 105,
-			116, 121, 0, 0, 0, 0, 29, 82, 117, 115,
-			116, 46, 73, 109, 97, 103, 101, 69, 102, 102,
-			101, 99, 116, 115, 124, 73, 99, 111, 110, 79,
-			117, 116, 108, 105, 110, 101, 0, 0, 0, 0,
-			24, 124, 73, 110, 115, 112, 101, 99, 116, 111,
-			114, 70, 108, 97, 103, 115, 65, 116, 116, 114,
-			105, 98, 117, 116, 101, 0, 0, 0, 0, 21,
-			70, 97, 99, 101, 112, 117, 110, 99, 104, 124,
-			73, 110, 115, 116, 97, 110, 116, 105, 97, 116,
-			101, 0, 0, 0, 0, 17, 124, 73, 69, 100,
-			105, 116, 111, 114, 67, 111, 109, 112, 111, 110,
-			101, 110, 116, 0, 0, 0, 0, 17, 124, 73,
-			83, 101, 114, 118, 101, 114, 67, 111, 109, 112,
-			111, 110, 101, 110, 116, 0, 0, 0, 0, 17,
-			124, 73, 67, 108, 105, 101, 110, 116, 67, 111,
-			109, 112, 111, 110, 101, 110, 116, 0, 0, 0,
-			0, 18, 124, 73, 80, 114, 101, 102, 97, 98,
-			80, 114, 101, 80, 114, 111, 99, 101, 115, 115,
-			0, 0, 0, 0, 19, 124, 73, 80, 114, 101,
-			102, 97, 98, 80, 111, 115, 116, 80, 114, 111,
-			99, 101, 115, 115, 0, 0, 0, 0, 17, 124,
-			73, 80, 114, 101, 102, 97, 98, 80, 114, 111,
-			99, 101, 115, 115, 111, 114, 0, 0, 0, 0,
-			19, 124, 73, 83, 101, 114, 118, 101, 114, 67,
-			111, 109, 112, 111, 110, 101, 110, 116, 69, 120,
-			0, 0, 0, 0, 19, 124, 73, 67, 108, 105,
+			77, 97, 116, 104, 69, 120, 0, 0, 0, 0,
+			16, 124, 83, 116, 114, 105, 110, 103, 66, 117,
+			105, 108, 100, 101, 114, 69, 120, 0, 0, 0,
+			0, 20, 85, 110, 105, 116, 121, 69, 110, 103,
+			105, 110, 101, 124, 83, 116, 114, 105, 110, 103,
+			69, 120, 0, 0, 0, 0, 21, 85, 110, 105,
+			116, 121, 69, 110, 103, 105, 110, 101, 124, 86,
+			101, 99, 116, 111, 114, 50, 69, 120, 0, 0,
+			0, 0, 21, 85, 110, 105, 116, 121, 69, 110,
+			103, 105, 110, 101, 124, 86, 101, 99, 116, 111,
+			114, 51, 69, 120, 0, 0, 0, 0, 21, 85,
+			110, 105, 116, 121, 69, 110, 103, 105, 110, 101,
+			124, 86, 101, 99, 116, 111, 114, 52, 69, 120,
+			0, 0, 0, 0, 11, 82, 117, 115, 116, 124,
+			71, 108, 111, 98, 97, 108, 0, 0, 0, 0,
+			20, 124, 72, 111, 114, 105, 122, 111, 110, 116,
+			97, 108, 65, 116, 116, 114, 105, 98, 117, 116,
+			101, 0, 0, 0, 0, 24, 124, 73, 67, 117,
+			115, 116, 111, 109, 77, 97, 116, 101, 114, 105,
+			97, 108, 82, 101, 112, 108, 97, 99, 101, 114,
+			0, 0, 0, 0, 12, 82, 117, 115, 116, 124,
+			73, 69, 110, 116, 105, 116, 121, 0, 0, 0,
+			0, 29, 82, 117, 115, 116, 46, 73, 109, 97,
+			103, 101, 69, 102, 102, 101, 99, 116, 115, 124,
+			73, 99, 111, 110, 79, 117, 116, 108, 105, 110,
+			101, 0, 0, 0, 0, 24, 124, 73, 110, 115,
+			112, 101, 99, 116, 111, 114, 70, 108, 97, 103,
+			115, 65, 116, 116, 114, 105, 98, 117, 116, 101,
+			0, 0, 0, 0, 21, 70, 97, 99, 101, 112,
+			117, 110, 99, 104, 124, 73, 110, 115, 116, 97,
+			110, 116, 105, 97, 116, 101, 0, 0, 0, 0,
+			17, 124, 73, 69, 100, 105, 116, 111, 114, 67,
+			111, 109, 112, 111, 110, 101, 110, 116, 0, 0,
+			0, 0, 17, 124, 73, 83, 101, 114, 118, 101,
+			114, 67, 111, 109, 112, 111, 110, 101, 110, 116,
+			0, 0, 0, 0, 17, 124, 73, 67, 108, 105,
 			101, 110, 116, 67, 111, 109, 112, 111, 110, 101,
-			110, 116, 69, 120, 0, 0, 0, 0, 18, 124,
-			73, 80, 114, 111, 112, 82, 101, 110, 100, 101,
-			114, 78, 111, 116, 105, 102, 121, 0, 0, 0,
-			0, 21, 82, 117, 115, 116, 124, 73, 110, 100,
-			105, 114, 101, 99, 116, 76, 105, 103, 104, 116,
-			105, 110, 103, 0, 0, 0, 0, 40, 82, 117,
-			115, 116, 46, 73, 110, 100, 105, 114, 101, 99,
-			116, 76, 105, 103, 104, 116, 105, 110, 103, 124,
-			65, 109, 98, 105, 101, 110, 116, 80, 114, 111,
-			98, 101, 80, 97, 114, 97, 109, 115, 0, 0,
-			0, 0, 20, 124, 77, 97, 116, 101, 114, 105,
-			97, 108, 82, 101, 112, 108, 97, 99, 101, 109,
-			101, 110, 116, 0, 0, 0, 0, 5, 124, 65,
-			65, 66, 66, 0, 0, 0, 0, 8, 124, 67,
-			97, 112, 115, 117, 108, 101, 0, 0, 0, 0,
-			9, 124, 67, 121, 108, 105, 110, 100, 101, 114,
-			0, 0, 0, 0, 4, 124, 71, 74, 75, 0,
-			0, 0, 0, 8, 124, 83, 105, 109, 112, 108,
-			101, 120, 0, 0, 0, 0, 5, 124, 76, 105,
-			110, 101, 0, 0, 0, 0, 6, 124, 77, 97,
-			116, 104, 120, 0, 0, 0, 0, 4, 124, 79,
-			66, 66, 0, 0, 0, 0, 7, 124, 83, 101,
-			101, 100, 69, 120, 0, 0, 0, 0, 11, 124,
-			83, 101, 101, 100, 82, 97, 110, 100, 111, 109,
-			0, 0, 0, 0, 7, 124, 83, 112, 104, 101,
-			114, 101, 0, 0, 0, 0, 9, 124, 84, 114,
-			105, 97, 110, 103, 108, 101, 0, 0, 0, 0,
-			20, 70, 97, 99, 101, 112, 117, 110, 99, 104,
-			124, 79, 98, 106, 101, 99, 116, 80, 111, 111,
-			108, 0, 0, 0, 0, 24, 70, 97, 99, 101,
-			112, 117, 110, 99, 104, 124, 71, 97, 109, 101,
-			79, 98, 106, 101, 99, 116, 80, 111, 111, 108,
-			0, 0, 0, 0, 17, 82, 117, 115, 116, 124,
-			80, 114, 111, 112, 82, 101, 110, 100, 101, 114,
-			101, 114, 0, 0, 0, 0, 36, 82, 117, 115,
-			116, 46, 80, 114, 111, 112, 82, 101, 110, 100,
-			101, 114, 101, 114, 124, 83, 107, 105, 110, 86,
-			105, 101, 119, 101, 114, 83, 101, 116, 116, 105,
-			110, 103, 115, 0, 0, 0, 0, 22, 82, 117,
-			115, 116, 124, 80, 114, 111, 112, 82, 101, 110,
-			100, 101, 114, 101, 114, 68, 101, 98, 117, 103,
-			0, 0, 0, 0, 13, 82, 117, 115, 116, 124,
-			80, 114, 111, 116, 111, 99, 111, 108, 0, 0,
-			0, 0, 20, 82, 117, 115, 116, 46, 82, 101,
-			103, 105, 115, 116, 114, 121, 124, 69, 110, 116,
-			105, 116, 121, 1, 0, 0, 0, 14, 70, 97,
-			99, 101, 112, 117, 110, 99, 104, 124, 84, 105,
-			99, 107, 1, 0, 0, 0, 20, 70, 97, 99,
-			101, 112, 117, 110, 99, 104, 46, 84, 105, 99,
-			107, 124, 69, 110, 116, 114, 121, 1, 0, 0,
-			0, 14, 70, 97, 99, 101, 112, 117, 110, 99,
-			104, 124, 84, 105, 99, 107, 1, 0, 0, 0,
-			20, 70, 97, 99, 101, 112, 117, 110, 99, 104,
-			46, 84, 105, 99, 107, 124, 69, 110, 116, 114,
-			121, 0, 0, 0, 0, 20, 70, 97, 99, 101,
+			110, 116, 0, 0, 0, 0, 18, 124, 73, 80,
+			114, 101, 102, 97, 98, 80, 114, 101, 80, 114,
+			111, 99, 101, 115, 115, 0, 0, 0, 0, 19,
+			124, 73, 80, 114, 101, 102, 97, 98, 80, 111,
+			115, 116, 80, 114, 111, 99, 101, 115, 115, 0,
+			0, 0, 0, 17, 124, 73, 80, 114, 101, 102,
+			97, 98, 80, 114, 111, 99, 101, 115, 115, 111,
+			114, 0, 0, 0, 0, 19, 124, 73, 83, 101,
+			114, 118, 101, 114, 67, 111, 109, 112, 111, 110,
+			101, 110, 116, 69, 120, 0, 0, 0, 0, 19,
+			124, 73, 67, 108, 105, 101, 110, 116, 67, 111,
+			109, 112, 111, 110, 101, 110, 116, 69, 120, 0,
+			0, 0, 0, 18, 124, 73, 80, 114, 111, 112,
+			82, 101, 110, 100, 101, 114, 78, 111, 116, 105,
+			102, 121, 0, 0, 0, 0, 21, 82, 117, 115,
+			116, 124, 73, 110, 100, 105, 114, 101, 99, 116,
+			76, 105, 103, 104, 116, 105, 110, 103, 0, 0,
+			0, 0, 40, 82, 117, 115, 116, 46, 73, 110,
+			100, 105, 114, 101, 99, 116, 76, 105, 103, 104,
+			116, 105, 110, 103, 124, 65, 109, 98, 105, 101,
+			110, 116, 80, 114, 111, 98, 101, 80, 97, 114,
+			97, 109, 115, 0, 0, 0, 0, 20, 124, 77,
+			97, 116, 101, 114, 105, 97, 108, 82, 101, 112,
+			108, 97, 99, 101, 109, 101, 110, 116, 0, 0,
+			0, 0, 5, 124, 65, 65, 66, 66, 0, 0,
+			0, 0, 8, 124, 67, 97, 112, 115, 117, 108,
+			101, 0, 0, 0, 0, 9, 124, 67, 121, 108,
+			105, 110, 100, 101, 114, 0, 0, 0, 0, 4,
+			124, 71, 74, 75, 0, 0, 0, 0, 8, 124,
+			83, 105, 109, 112, 108, 101, 120, 0, 0, 0,
+			0, 5, 124, 76, 105, 110, 101, 0, 0, 0,
+			0, 6, 124, 77, 97, 116, 104, 120, 0, 0,
+			0, 0, 4, 124, 79, 66, 66, 0, 0, 0,
+			0, 7, 124, 83, 101, 101, 100, 69, 120, 0,
+			0, 0, 0, 11, 124, 83, 101, 101, 100, 82,
+			97, 110, 100, 111, 109, 0, 0, 0, 0, 7,
+			124, 83, 112, 104, 101, 114, 101, 0, 0, 0,
+			0, 9, 124, 84, 114, 105, 97, 110, 103, 108,
+			101, 0, 0, 0, 0, 20, 70, 97, 99, 101,
+			112, 117, 110, 99, 104, 124, 79, 98, 106, 101,
+			99, 116, 80, 111, 111, 108, 0, 0, 0, 0,
+			24, 70, 97, 99, 101, 112, 117, 110, 99, 104,
+			124, 71, 97, 109, 101, 79, 98, 106, 101, 99,
+			116, 80, 111, 111, 108, 0, 0, 0, 0, 17,
+			82, 117, 115, 116, 124, 80, 114, 111, 112, 82,
+			101, 110, 100, 101, 114, 101, 114, 0, 0, 0,
+			0, 36, 82, 117, 115, 116, 46, 80, 114, 111,
+			112, 82, 101, 110, 100, 101, 114, 101, 114, 124,
+			83, 107, 105, 110, 86, 105, 101, 119, 101, 114,
+			83, 101, 116, 116, 105, 110, 103, 115, 0, 0,
+			0, 0, 22, 82, 117, 115, 116, 124, 80, 114,
+			111, 112, 82, 101, 110, 100, 101, 114, 101, 114,
+			68, 101, 98, 117, 103, 0, 0, 0, 0, 13,
+			82, 117, 115, 116, 124, 80, 114, 111, 116, 111,
+			99, 111, 108, 0, 0, 0, 0, 20, 82, 117,
+			115, 116, 46, 82, 101, 103, 105, 115, 116, 114,
+			121, 124, 69, 110, 116, 105, 116, 121, 1, 0,
+			0, 0, 14, 70, 97, 99, 101, 112, 117, 110,
+			99, 104, 124, 84, 105, 99, 107, 1, 0, 0,
+			0, 20, 70, 97, 99, 101, 112, 117, 110, 99,
+			104, 46, 84, 105, 99, 107, 124, 69, 110, 116,
+			114, 121, 1, 0, 0, 0, 14, 70, 97, 99,
+			101, 112, 117, 110, 99, 104, 124, 84, 105, 99,
+			107, 1, 0, 0, 0, 20, 70, 97, 99, 101,
 			112, 117, 110, 99, 104, 46, 84, 105, 99, 107,
-			43, 124, 76, 105, 115, 116, 0, 0, 0, 0,
-			23, 70, 97, 99, 101, 112, 117, 110, 99, 104,
-			124, 84, 105, 99, 107, 67, 111, 109, 112, 111,
-			110, 101, 110, 116, 0, 0, 0, 0, 21, 82,
-			117, 115, 116, 124, 65, 115, 121, 110, 99, 84,
-			101, 120, 116, 117, 114, 101, 76, 111, 97, 100,
-			0, 0, 0, 0, 19, 124, 78, 97, 116, 105,
-			118, 101, 65, 114, 114, 97, 121, 85, 116, 105,
-			108, 105, 116, 121, 0, 0, 0, 0, 11, 124,
-			84, 101, 120, 116, 66, 117, 102, 102, 101, 114,
-			0, 0, 0, 0, 10, 124, 84, 101, 120, 116,
-			84, 97, 98, 108, 101, 0, 0, 0, 0, 23,
-			84, 101, 120, 116, 84, 97, 98, 108, 101, 124,
-			82, 111, 119, 86, 97, 108, 117, 101, 85, 110,
-			105, 111, 110, 0, 0, 0, 0, 18, 84, 101,
-			120, 116, 84, 97, 98, 108, 101, 124, 82, 111,
-			119, 86, 97, 108, 117, 101, 0, 0, 0, 0,
-			16, 84, 101, 120, 116, 84, 97, 98, 108, 101,
-			124, 67, 111, 108, 117, 109, 110, 0, 0, 0,
-			0, 17, 124, 85, 110, 115, 97, 102, 101, 76,
-			105, 115, 116, 65, 99, 99, 101, 115, 115, 0,
-			0, 0, 0, 39, 85, 110, 115, 97, 102, 101,
-			76, 105, 115, 116, 65, 99, 99, 101, 115, 115,
-			124, 76, 105, 115, 116, 80, 114, 105, 118, 97,
-			116, 101, 70, 105, 101, 108, 100, 65, 99, 99,
-			101, 115, 115
+			124, 69, 110, 116, 114, 121, 0, 0, 0, 0,
+			20, 70, 97, 99, 101, 112, 117, 110, 99, 104,
+			46, 84, 105, 99, 107, 43, 124, 76, 105, 115,
+			116, 0, 0, 0, 0, 23, 70, 97, 99, 101,
+			112, 117, 110, 99, 104, 124, 84, 105, 99, 107,
+			67, 111, 109, 112, 111, 110, 101, 110, 116, 0,
+			0, 0, 0, 21, 82, 117, 115, 116, 124, 65,
+			115, 121, 110, 99, 84, 101, 120, 116, 117, 114,
+			101, 76, 111, 97, 100, 0, 0, 0, 0, 19,
+			124, 78, 97, 116, 105, 118, 101, 65, 114, 114,
+			97, 121, 85, 116, 105, 108, 105, 116, 121, 0,
+			0, 0, 0, 11, 124, 84, 101, 120, 116, 66,
+			117, 102, 102, 101, 114, 0, 0, 0, 0, 10,
+			124, 84, 101, 120, 116, 84, 97, 98, 108, 101,
+			0, 0, 0, 0, 23, 84, 101, 120, 116, 84,
+			97, 98, 108, 101, 124, 82, 111, 119, 86, 97,
+			108, 117, 101, 85, 110, 105, 111, 110, 0, 0,
+			0, 0, 18, 84, 101, 120, 116, 84, 97, 98,
+			108, 101, 124, 82, 111, 119, 86, 97, 108, 117,
+			101, 0, 0, 0, 0, 16, 84, 101, 120, 116,
+			84, 97, 98, 108, 101, 124, 67, 111, 108, 117,
+			109, 110, 0, 0, 0, 0, 17, 124, 85, 110,
+			115, 97, 102, 101, 76, 105, 115, 116, 65, 99,
+			99, 101, 115, 115, 0, 0, 0, 0, 39, 85,
+			110, 115, 97, 102, 101, 76, 105, 115, 116, 65,
+			99, 99, 101, 115, 115, 124, 76, 105, 115, 116,
+			80, 114, 105, 118, 97, 116, 101, 70, 105, 101,
+			108, 100, 65, 99, 99, 101, 115, 115
 		};
 		result.TotalFiles = 54;
-		result.TotalTypes = 84;
+		result.TotalTypes = 85;
 		result.IsEditorOnly = false;
 		return result;
 	}
@@ -8649,6 +8682,27 @@ public static class Vector3Ex
 		Vector2 val = new Vector2(v.x, v.z);
 		return ((Vector2)(ref val)).normalized.XZ3D();
 	}
+
+	public static Vector3 GetProjectedPointOnLine(Vector3 A, Vector3 B, Vector3 P)
+	{
+		//IL_0000: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0001: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0002: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0007: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0008: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0009: Unknown result type (might be due to invalid IL or missing references)
+		//IL_000e: Unknown result type (might be due to invalid IL or missing references)
+		//IL_000f: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0010: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0015: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0016: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0017: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0018: Unknown result type (might be due to invalid IL or missing references)
+		Vector3 val = P - A;
+		Vector3 val2 = B - A;
+		Vector3 val3 = Vector3.Project(val, val2);
+		return A + val3;
+	}
 }
 
 
@@ -8907,7 +8961,7 @@ public static class Layers
 
 	public const int PlannerPlacement = 161546496;
 
-	public const int IndustrialPipeObstruction = 2162944;
+	public const int IndustrialPipeObstruction = 136380672;
 
 	public const int Solid = 1218652417;
 
@@ -9220,8 +9274,8 @@ public static class Global
 
 	public static void Init()
 	{
-		LaunchCountThisVersion = PlayerPrefs.GetInt($"launch{2621}", 0) + 1;
-		PlayerPrefs.SetInt($"launch{2621}", LaunchCountThisVersion);
+		LaunchCountThisVersion = PlayerPrefs.GetInt($"launch{2622}", 0) + 1;
+		PlayerPrefs.SetInt($"launch{2622}", LaunchCountThisVersion);
 	}
 }
 
@@ -9483,7 +9537,9 @@ public class PropRenderer : MonoBehaviour, IClientComponent
 			}
 			Pool.FreeUnmanaged<Transform>(ref list2);
 		}
-		return list.ToArray();
+		GameObject[] result = list.ToArray();
+		Pool.FreeUnmanaged<GameObject>(ref list);
+		return result;
 	}
 
 	public void CopySettingsTo(PropRenderer target)
@@ -9866,19 +9922,19 @@ public class PropRendererDebug : MonoBehaviour
 
 public static class Protocol
 {
-	public const int network = 2621;
+	public const int network = 2622;
 
-	public const int save = 281;
+	public const int save = 282;
 
 	public const int report = 1;
 
-	public const int persistance = 10;
+	public const int persistance = 11;
 
 	public const int analytics_db = 1;
 
 	public const int ping = 1;
 
-	public static string printable => 2621 + "." + 281 + "." + 1;
+	public static string printable => 2622 + "." + 282 + "." + 1;
 }
 
 
