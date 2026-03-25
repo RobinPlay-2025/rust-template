@@ -20,10 +20,14 @@ Write-Host "==========================================" -ForegroundColor Yellow
 
 # 0. Подготовка Git
 if (!(Test-Path ".git")) {
-    Write-Step "Подготовка репозитория..."
+    Write-Step "Подготовка репозитория для обновлений..."
     git init 2>$null >$null
-    git config user.email "rustr@example.com" 2>$null >$null
-    git config user.name "RustR" 2>$null >$null
+    # Проверяем, настроен ли пользователь в Git. Если нет — ставим временные заглушки.
+    $gitUser = git config user.name
+    if (!$gitUser) {
+        git config user.email "template-user@example.com" 2>$null >$null
+        git config user.name "Rust-Template User" 2>$null >$null
+    }
     git remote add origin https://github.com/RobinPlay-2025/rust-template.git 2>$null >$null
 }
 
@@ -64,8 +68,10 @@ $newCommits = (git log HEAD..FETCH_HEAD --oneline 2>$null | Out-String).Trim()
 if (!$newCommits) {
     Write-Host "[OK] У вас уже установлена самая актуальная версия библиотек и системных файлов шаблона." -ForegroundColor Green
 } else {
+    Write-Host ">>> Загрузка новых библиотек и файлов (может занять время)..." -ForegroundColor Magenta
     # Пробуем обновиться, предпочитая локальные файлы при конфликтах (кроме Managed)
-    git pull origin main --allow-unrelated-histories -X ours 2>$null >$null
+    # Здесь мы не скрываем вывод, чтобы пользователь видел прогресс загрузки
+    git pull origin main --allow-unrelated-histories -X ours --progress 2>$null
 
     # Если после pull остались конфликты (например, в Managed)
     if (Test-Path ".git/MERGE_HEAD") {
