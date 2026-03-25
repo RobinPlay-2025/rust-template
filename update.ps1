@@ -58,18 +58,26 @@ if ($hasChanges) {
 # 2. Обновление
 Write-Step "2. Получение обновлений с GitHub..."
 git fetch origin main 2>$null >$null
-# Пробуем обновиться, предпочитая локальные файлы при конфликтах (кроме Managed)
-git pull origin main --allow-unrelated-histories -X ours 2>$null >$null
 
-# Если после pull остались конфликты (например, в Managed)
-if (Test-Path ".git/MERGE_HEAD") {
-    # Для библиотек Managed всегда берем версию из шаблона
-    git checkout --theirs Managed/* 2>$null >$null
-    git add Managed/* 2>$null >$null
-    # Завершаем слияние
-    git commit -m "Updated libraries from template" 2>$null >$null
+# Проверяем, есть ли новые коммиты на GitHub
+$localHash = git rev-parse HEAD
+$remoteHash = git rev-parse origin/main
+if ($localHash -eq $remoteHash) {
+    Write-Host "[OK] У вас уже установлена последняя версия шаблона." -ForegroundColor Green
+} else {
+    # Пробуем обновиться, предпочитая локальные файлы при конфликтах (кроме Managed)
+    git pull origin main --allow-unrelated-histories -X ours 2>$null >$null
+
+    # Если после pull остались конфликты (например, в Managed)
+    if (Test-Path ".git/MERGE_HEAD") {
+        # Для библиотек Managed всегда берем версию из шаблона
+        git checkout --theirs Managed/* 2>$null >$null
+        git add Managed/* 2>$null >$null
+        # Завершаем слияние
+        git commit -m "Updated libraries from template" 2>$null >$null
+    }
+    Write-Host "[OK] Шаблон успешно обновлен." -ForegroundColor Green
 }
-Write-Host "[OK] Шаблон успешно обновлен." -ForegroundColor Green
 
 # 3. Восстановление
 Write-Step "3. Восстановление ваших изменений..."
