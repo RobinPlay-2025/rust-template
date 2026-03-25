@@ -43,10 +43,12 @@ if ($LASTEXITCODE -ne 0) {
 
 # 1. Сохранение изменений
 Write-Step "1. Сохранение ваших изменений..."
+$stashed = $false
 $dateStr = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
 $stashRes = git stash push -m "Auto-update $dateStr" 2>$null
 if ($stashRes -like "*Saved working directory*") {
     Write-Host "[OK] Изменения временно сохранены." -ForegroundColor Green
+    $stashed = $true
 } else {
     Write-Host "[OK] Нет изменений для сохранения." -ForegroundColor Green
 }
@@ -69,8 +71,7 @@ Write-Host "[OK] Шаблон успешно обновлен." -ForegroundColor
 
 # 3. Восстановление
 Write-Step "3. Восстановление ваших изменений..."
-$lastStash = git stash list -n 1 2>$null
-if ($lastStash -like "*Auto-update*") {
+if ($stashed) {
     git stash pop 2>$null >$null
     if ($LASTEXITCODE -ne 0) {
         Write-Host "[!] Есть конфликты в ваших плагинах. Они сохранены в Git Stash." -ForegroundColor Yellow
