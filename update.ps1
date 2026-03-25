@@ -44,9 +44,11 @@ if ($LASTEXITCODE -ne 0) {
 # 1. Сохранение изменений
 Write-Step "1. Сохранение ваших изменений..."
 $stashed = $false
-$dateStr = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
-$stashRes = git stash push -m "Auto-update $dateStr" 2>$null
-if ($stashRes -like "*Saved working directory*") {
+# Проверяем, есть ли что сохранять (измененные файлы)
+$hasChanges = (git status --porcelain)
+if ($hasChanges) {
+    $dateStr = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
+    git stash push -m "Auto-update $dateStr" 2>$null >$null
     Write-Host "[OK] Изменения временно сохранены." -ForegroundColor Green
     $stashed = $true
 } else {
