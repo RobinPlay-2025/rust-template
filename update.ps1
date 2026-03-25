@@ -1,5 +1,5 @@
 # Скрипт для безопасного обновления шаблона rust-template
-# CHANGE: Добавлена проверка на наличие git-репозитория и автоматическая инициализация
+# CHANGE: Добавлена поддержка --allow-unrelated-histories для первого запуска
 
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 $OutputEncoding = [System.Text.Encoding]::UTF8
@@ -24,32 +24,41 @@ if ($LASTEXITCODE -ne 0) {
 # Проверка, является ли папка репозиторием
 if (!(Test-Path ".git")) {
     Write-Host "[!] ВНИМАНИЕ: Папка не является Git-репозиторием." -ForegroundColor Yellow
-    Write-Host "Попытка восстановить привязку к GitHub..." -ForegroundColor Gray
+    Write-Host "Инициализация и привязка к GitHub..." -ForegroundColor Gray
     
     git init
+    git config user.email "rustr@example.com"
+    git config user.name "RustR"
     git remote add origin https://github.com/RobinPlay-2025/rust-template.git
     git fetch origin main
-    # Мягко привязываем текущие файлы к ветке main
-    git checkout -b main
+}
+
+# Проверяем, есть ли коммиты
+git rev-parse HEAD >$null 2>&1
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "[!] Первый запуск: Создание базового состояния..." -ForegroundColor Gray
+    git add .
+    git commit -m "Initial local state"
+    git branch -M main
     git branch --set-upstream-to=origin/main main
-    Write-Host "[OK] Репозиторий успешно инициализирован." -ForegroundColor Green
 }
 
 # 1. Сохраняем локальные изменения
 Write-Step "1. Сохранение локальных изменений (git stash)..."
 $dateStr = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
 $stashMsg = "Auto-update $dateStr"
-git stash push -m "$stashMsg"
+$stashRes = git stash push -m "$stashMsg"
+Write-Host $stashRes
 
 # 2. Получаем последние обновления
 Write-Step "2. Получение обновлений (git pull)..."
 git fetch origin main
-git pull origin main --rebase 2>&1
+# Используем --allow-unrelated-histories для первого слияния
+git pull origin main --allow-unrelated-histories -X ours 2>&1
 
 # 3. Возвращаем локальные изменения назад
 Write-Step "3. Восстановление локальных изменений (git stash pop)..."
-$lastStash = git stash list -n 1
-if ($lastStash -like "*$stashMsg*") {
+if ($stashRes -notlike "*No local changes*") {
     git stash pop
     if ($LASTEXITCODE -ne 0) {
         Write-Host ""
