@@ -42,27 +42,27 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 # 1. Сохранение изменений
-Write-Step "1. Сохранение ваших изменений..."
+Write-Step "1. Подготовка ваших файлов к безопасному обновлению..."
 $stashed = $false
 # Проверяем, есть ли что сохранять (только измененные/удаленные файлы, игнорируем untracked)
 $changes = (git status --porcelain -uno 2>$null | Out-String).Trim()
 if ($changes) {
     $dateStr = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
     git stash push -m "Auto-update $dateStr" 2>$null >$null
-    Write-Host "[OK] Изменения временно сохранены." -ForegroundColor Green
+    Write-Host "[OK] Ваши измененные плагины и файлы временно сохранены в безопасный бэкап." -ForegroundColor Green
     $stashed = $true
 } else {
-    Write-Host "[OK] Нет изменений для сохранения." -ForegroundColor Green
+    Write-Host "[OK] Изменений в ваших файлах не обнаружено, бэкап не требуется." -ForegroundColor Green
 }
 
 # 2. Обновление
-Write-Step "2. Получение обновлений с GitHub..."
+Write-Step "2. Проверка новых библиотек и файлов шаблона на GitHub..."
 git fetch origin main 2>$null >$null
 
 # Проверяем, есть ли новые коммиты на GitHub, которых нет у нас
 $newCommits = (git log HEAD..FETCH_HEAD --oneline 2>$null | Out-String).Trim()
 if (!$newCommits) {
-    Write-Host "[OK] У вас уже установлена последняя версия шаблона." -ForegroundColor Green
+    Write-Host "[OK] У вас уже установлена самая актуальная версия библиотек и системных файлов шаблона." -ForegroundColor Green
 } else {
     # Пробуем обновиться, предпочитая локальные файлы при конфликтах (кроме Managed)
     git pull origin main --allow-unrelated-histories -X ours 2>$null >$null
@@ -75,20 +75,20 @@ if (!$newCommits) {
         # Завершаем слияние
         git commit -m "Updated libraries from template" 2>$null >$null
     }
-    Write-Host "[OK] Шаблон успешно обновлен." -ForegroundColor Green
+    Write-Host "[OK] Библиотеки в Managed/ и системные файлы шаблона успешно обновлены до последней версии." -ForegroundColor Green
 }
 
 # 3. Восстановление
-Write-Step "3. Восстановление ваших изменений..."
+Write-Step "3. Возврат ваших плагинов и правок в рабочую область..."
 if ($stashed) {
     git stash pop 2>$null >$null
     if ($LASTEXITCODE -ne 0) {
-        Write-Host "[!] Есть конфликты в ваших плагинах. Они сохранены в Git Stash." -ForegroundColor Yellow
+        Write-Host "[!] Внимание: Есть конфликты в ваших файлах. Git сохранил их в Stash для ручного разбора." -ForegroundColor Yellow
     } else {
-        Write-Host "[OK] Ваши изменения возвращены." -ForegroundColor Green
+        Write-Host "[OK] Все ваши плагины и правки успешно возвращены на свои места." -ForegroundColor Green
     }
 } else {
-    Write-Host "[OK] Нет изменений для восстановления." -ForegroundColor Green
+    Write-Host "[OK] Ваши файлы не перемещались (обновление прошло без вмешательства в ваш код)." -ForegroundColor Green
 }
 
 Write-Host ""
