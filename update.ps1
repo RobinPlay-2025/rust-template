@@ -44,9 +44,9 @@ if ($LASTEXITCODE -ne 0) {
 # 1. Сохранение изменений
 Write-Step "1. Сохранение ваших изменений..."
 $stashed = $false
-# Проверяем, есть ли что сохранять (измененные файлы)
-$hasChanges = (git status --porcelain)
-if ($hasChanges) {
+# Проверяем, есть ли что сохранять (только измененные/удаленные файлы, игнорируем untracked)
+$hasChanges = git status --porcelain -uno 2>$null
+if ($null -ne $hasChanges -and $hasChanges.Count -gt 0) {
     $dateStr = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
     git stash push -m "Auto-update $dateStr" 2>$null >$null
     Write-Host "[OK] Изменения временно сохранены." -ForegroundColor Green
@@ -59,11 +59,9 @@ if ($hasChanges) {
 Write-Step "2. Получение обновлений с GitHub..."
 git fetch origin main 2>$null >$null
 
-# Проверяем, есть ли новые коммиты на GitHub через FETCH_HEAD
-$localHash = git rev-parse HEAD 2>$null
-$remoteHash = git rev-parse FETCH_HEAD 2>$null
-
-if ($null -eq $remoteHash -or $localHash -eq $remoteHash) {
+# Проверяем, является ли текущая версия (HEAD) актуальной относительно GitHub (FETCH_HEAD)
+git merge-base --is-ancestor FETCH_HEAD HEAD 2>$null
+if ($LASTEXITCODE -eq 0) {
     Write-Host "[OK] У вас уже установлена последняя версия шаблона." -ForegroundColor Green
 } else {
     # Пробуем обновиться, предпочитая локальные файлы при конфликтах (кроме Managed)
