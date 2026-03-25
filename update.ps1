@@ -59,10 +59,11 @@ if ($hasChanges) {
 Write-Step "2. Получение обновлений с GitHub..."
 git fetch origin main 2>$null >$null
 
-# Проверяем, есть ли новые коммиты на GitHub
-$localHash = git rev-parse HEAD
-$remoteHash = git rev-parse origin/main
-if ($localHash -eq $remoteHash) {
+# Проверяем, есть ли новые коммиты на GitHub через FETCH_HEAD
+$localHash = git rev-parse HEAD 2>$null
+$remoteHash = git rev-parse FETCH_HEAD 2>$null
+
+if ($null -eq $remoteHash -or $localHash -eq $remoteHash) {
     Write-Host "[OK] У вас уже установлена последняя версия шаблона." -ForegroundColor Green
 } else {
     # Пробуем обновиться, предпочитая локальные файлы при конфликтах (кроме Managed)
