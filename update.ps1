@@ -1,6 +1,9 @@
 # Скрипт для безопасного обновления шаблона rust-template
 # Сохраняет ваши изменения, подтягивает обновления с GitHub и возвращает изменения назад.
 
+$OutputEncoding = [System.Text.Encoding]::UTF8
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+
 Write-Host "--- Обновление rust-template с GitHub ---" -ForegroundColor Cyan
 
 # 1. Сохраняем локальные изменения (если вы меняли файлы шаблона, например .csproj или конфиги)
