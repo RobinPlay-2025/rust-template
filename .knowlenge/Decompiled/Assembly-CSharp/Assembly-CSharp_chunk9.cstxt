@@ -1,5 +1,2305 @@
 using UnityEngine;
 
+public class WaterWheelMountable : BaseMountable
+{
+	public static readonly Phrase NeedSustenance = new Phrase("waterwheel.needSustenance", "Too hungry to use...");
+
+	public const Flags PlayerRunningInside = Flags.Reserved11;
+
+	public float caloriesRequired = 10f;
+
+	public float calorieDrainPerMinute = 10f;
+
+	public float hydrationDrainPerMinute = 10f;
+
+	private ElectricWaterWheel _waterWheel;
+
+	private static readonly int PushingWaterwheel = Animator.StringToHash("pushingWaterWheel");
+
+	private TimeSince lastToastWarning;
+
+	private ElectricWaterWheel waterWheel
+	{
+		get
+		{
+			if ((Object)(object)_waterWheel == (Object)null)
+			{
+				_waterWheel = GetParentEntity() as ElectricWaterWheel;
+			}
+			return _waterWheel;
+		}
+	}
+
+	public override void PlayerServerInput(InputState inputState, BasePlayer player)
+	{
+		//IL_002d: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0056: Unknown result type (might be due to invalid IL or missing references)
+		//IL_005b: Unknown result type (might be due to invalid IL or missing references)
+		base.PlayerServerInput(inputState, player);
+		bool flag = inputState.IsDown(BUTTON.FORWARD);
+		bool flag2 = player.metabolism.calories.value < caloriesRequired;
+		if (flag2 && TimeSince.op_Implicit(lastToastWarning) > 2f)
+		{
+			player.ShowToast(GameTip.Styles.Red_Normal, NeedSustenance, false);
+			lastToastWarning = TimeSince.op_Implicit(0f);
+		}
+		if (flag && !flag2)
+		{
+			player.metabolism.calories.value -= calorieDrainPerMinute / 60f * Time.deltaTime;
+			player.metabolism.hydration.value -= hydrationDrainPerMinute / 60f * Time.deltaTime;
+			player.metabolism.SendChangesToClient();
+		}
+		SetFlag(Flags.Reserved11, AnyMounted() && !flag2 && flag);
+	}
+
+	public override void OnPlayerDismounted(BasePlayer player)
+	{
+		base.OnPlayerDismounted(player);
+		SetFlag(Flags.Reserved11, b: false);
+	}
+
+	public override void AttemptMount(BasePlayer player, bool doMountChecks = true)
+	{
+		//IL_0007: Unknown result type (might be due to invalid IL or missing references)
+		if (IsMountingFromOpenSide(((Component)player).transform.position))
+		{
+			base.AttemptMount(player, doMountChecks);
+		}
+	}
+
+	public bool IsMountingFromOpenSide(Vector3 position)
+	{
+		//IL_0000: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0007: Unknown result type (might be due to invalid IL or missing references)
+		//IL_000c: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0011: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0014: Unknown result type (might be due to invalid IL or missing references)
+		//IL_001f: Unknown result type (might be due to invalid IL or missing references)
+		Vector3 val = position - mountAnchor.position;
+		return Vector3.Dot(((Vector3)(ref val)).normalized, ((Component)this).transform.forward) > 0.2f;
+	}
+}
+
+
+using System;
+using Facepunch;
+using Oxide.Core;
+using ProtoBuf;
+using UnityEngine;
+
+public class ElectricWindmill : IOEntity
+{
+	public Animator animator;
+
+	public int maxPowerGeneration = 100;
+
+	public Transform vaneRot;
+
+	public Transform sailsRot;
+
+	public SoundDefinition wooshSound;
+
+	public Transform wooshOrigin;
+
+	private float cachedHeight;
+
+	public float serverWindSpeed;
+
+	public override int MaximalPowerOutput()
+	{
+		return maxPowerGeneration;
+	}
+
+	public override bool IsRootEntity()
+	{
+		return true;
+	}
+
+	public Vector3 GetWindAimDir(float time)
+	{
+		//IL_003d: Unknown result type (might be due to invalid IL or missing references)
+		float num = time / 3600f * 360f;
+		int num2 = 10;
+		Vector3 val = default(Vector3);
+		((Vector3)(ref val))..ctor(Mathf.Sin(num * (MathF.PI / 180f)) * (float)num2, 0f, Mathf.Cos(num * (MathF.PI / 180f)) * (float)num2);
+		return ((Vector3)(ref val)).normalized;
+	}
+
+	public override int ConsumptionAmount()
+	{
+		return 0;
+	}
+
+	public override void ServerInit()
+	{
+		//IL_002d: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0032: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0037: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0081: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0096: Unknown result type (might be due to invalid IL or missing references)
+		//IL_005d: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0069: Unknown result type (might be due to invalid IL or missing references)
+		base.ServerInit();
+		((FacepunchBehaviour)this).InvokeRandomized((Action)WindUpdate, 1f, 20f, 2f);
+		if (GamePhysics.Trace(new Ray(((Component)this).transform.position, Vector3.down), 0f, out var hitInfo, 10f, 8454144, (QueryTriggerInteraction)1, this))
+		{
+			cachedHeight = ((Component)this).transform.position.y - ((RaycastHit)(ref hitInfo)).point.y;
+		}
+		else
+		{
+			cachedHeight = ((Component)this).transform.position.y - TerrainMeta.HeightMap.GetHeight(((Component)this).transform.position);
+		}
+	}
+
+	public bool AmIVisible()
+	{
+		//IL_0009: Unknown result type (might be due to invalid IL or missing references)
+		//IL_000e: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0018: Unknown result type (might be due to invalid IL or missing references)
+		//IL_001d: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0022: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0024: Unknown result type (might be due to invalid IL or missing references)
+		//IL_002b: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0032: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0037: Unknown result type (might be due to invalid IL or missing references)
+		//IL_004f: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0054: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0056: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0057: Unknown result type (might be due to invalid IL or missing references)
+		//IL_005a: Unknown result type (might be due to invalid IL or missing references)
+		//IL_005f: Unknown result type (might be due to invalid IL or missing references)
+		int num = 15;
+		Vector3 val = ((Component)this).transform.position + Vector3.up * 6f;
+		if (!IsVisible(val + ((Component)this).transform.up * (float)num, (float)(num + 1)))
+		{
+			return false;
+		}
+		Vector3 windAimDir = GetWindAimDir(Time.time);
+		if (!IsVisible(val + windAimDir * (float)num, (float)(num + 1)))
+		{
+			return false;
+		}
+		return true;
+	}
+
+	public void WindUpdate()
+	{
+		if (Interface.CallHook("OnWindmillUpdate", (object)this) == null)
+		{
+			serverWindSpeed = (AmIVisible() ? GetWindSpeedScale() : 0f);
+			int num = Mathf.FloorToInt((float)maxPowerGeneration * serverWindSpeed);
+			bool num2 = currentEnergy != num;
+			currentEnergy = num;
+			if (num2)
+			{
+				MarkDirty();
+			}
+			SendNetworkUpdate();
+			Interface.CallHook("OnWindmillUpdated", (object)this);
+		}
+	}
+
+	public float GetWindSpeedScale()
+	{
+		//IL_0012: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0028: Unknown result type (might be due to invalid IL or missing references)
+		float num = Time.time / 600f;
+		float num2 = ((Component)this).transform.position.x / 512f;
+		float num3 = ((Component)this).transform.position.z / 512f;
+		float num4 = Mathf.PerlinNoise(num2 + num, num3 + num * 0.1f);
+		float num5 = cachedHeight;
+		if (num5 < 0f)
+		{
+			num5 = 0f;
+		}
+		return Mathf.Clamp01(Mathf.InverseLerp(0f, 50f, num5) * 0.5f + num4);
+	}
+
+	public override int GetPassthroughAmount(int outputSlot = 0)
+	{
+		if (outputSlot != 0)
+		{
+			return 0;
+		}
+		return currentEnergy;
+	}
+
+	public override void Save(SaveInfo info)
+	{
+		base.Save(info);
+		if (!info.forDisk)
+		{
+			if (info.msg.ioEntity == null)
+			{
+				info.msg.ioEntity = Pool.Get<IOEntity>();
+			}
+			info.msg.ioEntity.genericFloat1 = Time.time;
+			info.msg.ioEntity.genericFloat2 = serverWindSpeed;
+		}
+	}
+
+	public override void Load(LoadInfo info)
+	{
+		base.Load(info);
+	}
+}
+
+
+using System.Collections.Generic;
+using UnityEngine;
+
+public class BounceLight : MonoBehaviour
+{
+	public Light masterLight;
+
+	public float maxBounceLightDistance;
+
+	public float maxBounceLightSpawnRange;
+
+	public List<Light> bouncedLights = new List<Light>();
+
+	public GameObject bounceLightPrefab;
+
+	public int maxBounceLights = 64;
+
+	public float placementBias = 0.2f;
+
+	public float radiusFraction = 2f;
+
+	public float minPlacementDistance;
+
+	public float bounceIntensityOverrideScale = 1f;
+
+	public float mergeDist = 1f;
+}
+
+
+using ProtoBuf;
+
+public class ItemModBeehiveNucleus : ItemMod
+{
+	public override void OnVirginItem(Item item, BasePlayer creatingPlayer)
+	{
+		//IL_0009: Unknown result type (might be due to invalid IL or missing references)
+		//IL_000e: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0015: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0021: Expected O, but got Unknown
+		base.OnVirginItem(item, creatingPlayer);
+		item.instanceData = new InstanceData
+		{
+			ShouldPool = false,
+			dataInt = 0
+		};
+	}
+}
+
+
+using ProtoBuf;
+using UnityEngine;
+
+public class NucleusGradeItemSwap : ItemModSwap
+{
+	public ItemDefinition NucleusItem;
+
+	protected override void AugmentItem(Item item)
+	{
+		//IL_0014: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0019: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0020: Unknown result type (might be due to invalid IL or missing references)
+		//IL_002c: Expected O, but got Unknown
+		if ((Object)(object)item.info == (Object)(object)NucleusItem)
+		{
+			item.instanceData = new InstanceData
+			{
+				ShouldPool = false,
+				dataInt = 0
+			};
+		}
+	}
+}
+
+
+using System.Collections.Generic;
+
+public static class NucleusGrading
+{
+	public enum NucleusGrade
+	{
+		Grade3,
+		Grade2,
+		Grade1
+	}
+
+	private static readonly Dictionary<NucleusGrade, float> NucleusXpThresholds = new Dictionary<NucleusGrade, float>
+	{
+		{
+			NucleusGrade.Grade3,
+			0f
+		},
+		{
+			NucleusGrade.Grade2,
+			200f
+		},
+		{
+			NucleusGrade.Grade1,
+			600f
+		}
+	};
+
+	public static float GetXpThreshold(NucleusGrade grade)
+	{
+		return NucleusXpThresholds[grade];
+	}
+
+	public static string GetGradeAsString(NucleusGrade grade)
+	{
+		return grade switch
+		{
+			NucleusGrade.Grade3 => "3", 
+			NucleusGrade.Grade2 => "2", 
+			NucleusGrade.Grade1 => "1", 
+			_ => "0", 
+		};
+	}
+
+	public static NucleusGrade XpToGrade(float xp)
+	{
+		if (xp >= NucleusXpThresholds[NucleusGrade.Grade1])
+		{
+			return NucleusGrade.Grade1;
+		}
+		if (xp >= NucleusXpThresholds[NucleusGrade.Grade2])
+		{
+			return NucleusGrade.Grade2;
+		}
+		return NucleusGrade.Grade3;
+	}
+
+	public static float XpToNextGrade(float currentXp)
+	{
+		NucleusGrade key;
+		switch (XpToGrade(currentXp))
+		{
+		case NucleusGrade.Grade3:
+			key = NucleusGrade.Grade2;
+			break;
+		case NucleusGrade.Grade2:
+			key = NucleusGrade.Grade1;
+			break;
+		default:
+			return 0f;
+		}
+		return NucleusXpThresholds[key] - currentXp;
+	}
+}
+
+
+public enum NucleusGrade
+{
+	Grade3,
+	Grade2,
+	Grade1
+}
+
+
+using System.Text;
+using Rust.UI;
+
+public class NucleusInformationPanel : ItemInformationPanel
+{
+	public InfoBar xpDisplay;
+
+	public RustText gradeLabel;
+
+	public RustText nextLevelLabel;
+
+	public static readonly Phrase GradePhrase = new Phrase("nucleus.grade", "GRADE {0}");
+
+	public static readonly Phrase XPPhrase = new Phrase("nucleus.xp", "{0} XP");
+
+	public static readonly Phrase XPRequiredPhrase = new Phrase("nucleus.required", "{0} XP REQUIRED");
+
+	public static readonly Phrase MaxPhrase = new Phrase("nucleus.max", "MAX LEVEL");
+
+	private static StringBuilder builder;
+}
+
+
+using UnityEngine;
+
+public class FoodIcon : MonoBehaviour, IEditorComponent
+{
+	public ItemDefinition FoodItem;
+}
+
+
+using UnityEngine;
+
+public class InstrumentStateBehaviour : StateMachineBehaviour
+{
+}
+
+
+using UnityEngine;
+
+public class InstrumentViewmodel : MonoBehaviour
+{
+	public Animator ViewAnimator;
+
+	public bool UpdateA = true;
+
+	public bool UpdateB = true;
+
+	public bool UpdateC = true;
+
+	public bool UpdateD = true;
+
+	public bool UpdateE = true;
+
+	public bool UpdateF = true;
+
+	public bool UpdateG = true;
+
+	public bool UpdateRecentlyPlayed = true;
+
+	public bool UpdatePlayedNoteTrigger;
+
+	public bool UseTriggers;
+
+	private readonly int note_a = Animator.StringToHash("play_A");
+
+	private readonly int note_b = Animator.StringToHash("play_B");
+
+	private readonly int note_c = Animator.StringToHash("play_C");
+
+	private readonly int note_d = Animator.StringToHash("play_D");
+
+	private readonly int note_e = Animator.StringToHash("play_E");
+
+	private readonly int note_f = Animator.StringToHash("play_F");
+
+	private readonly int note_g = Animator.StringToHash("play_G");
+
+	private readonly int recentlyPlayedHash = Animator.StringToHash("recentlyPlayed");
+
+	private readonly int playedNoteHash = Animator.StringToHash("playedNote");
+
+	public void UpdateSlots(InstrumentKeyController.AnimationSlot currentSlot, bool recentlyPlayed, bool playedNoteThisFrame)
+	{
+		if (!((Object)(object)ViewAnimator == (Object)null))
+		{
+			if (UpdateA)
+			{
+				UpdateState(note_a, currentSlot == InstrumentKeyController.AnimationSlot.One);
+			}
+			if (UpdateB)
+			{
+				UpdateState(note_b, currentSlot == InstrumentKeyController.AnimationSlot.Two);
+			}
+			if (UpdateC)
+			{
+				UpdateState(note_c, currentSlot == InstrumentKeyController.AnimationSlot.Three);
+			}
+			if (UpdateD)
+			{
+				UpdateState(note_d, currentSlot == InstrumentKeyController.AnimationSlot.Four);
+			}
+			if (UpdateE)
+			{
+				UpdateState(note_e, currentSlot == InstrumentKeyController.AnimationSlot.Five);
+			}
+			if (UpdateF)
+			{
+				UpdateState(note_f, currentSlot == InstrumentKeyController.AnimationSlot.Six);
+			}
+			if (UpdateG)
+			{
+				UpdateState(note_g, currentSlot == InstrumentKeyController.AnimationSlot.Seven);
+			}
+			if (UpdateRecentlyPlayed)
+			{
+				ViewAnimator.SetBool(recentlyPlayedHash, recentlyPlayed);
+			}
+			if (UpdatePlayedNoteTrigger && playedNoteThisFrame)
+			{
+				ViewAnimator.SetTrigger(playedNoteHash);
+			}
+		}
+	}
+
+	private void UpdateState(int param, bool state)
+	{
+		if (!UseTriggers)
+		{
+			ViewAnimator.SetBool(param, state);
+		}
+		else if (state)
+		{
+			ViewAnimator.SetTrigger(param);
+		}
+	}
+}
+
+
+public class PaintableReactiveTarget : ReactiveTarget
+{
+}
+
+
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using Facepunch.Rust;
+using Oxide.Core;
+using UnityEngine;
+
+public class BigWheelGame : SpinnerWheel
+{
+	public float baseSpeed = 180f;
+
+	public float offset = 3.852f;
+
+	public AnimationCurve decelerationCurve;
+
+	public AnimationCurve speedCurve;
+
+	public HitNumber[] hitNumbers;
+
+	private float targetAngle;
+
+	private float minimumSpinTime;
+
+	private bool isSpinning;
+
+	private bool decelerating;
+
+	private float elapsedTime;
+
+	private Random random;
+
+	[ServerVar]
+	public static float spinFrequencySeconds = 45f;
+
+	public int spinNumber;
+
+	protected int targetNumber;
+
+	public int lastPaidSpinNumber = -1;
+
+	public List<BigWheelBettingTerminal> terminals = new List<BigWheelBettingTerminal>();
+
+	public override bool AllowPlayerSpins()
+	{
+		return false;
+	}
+
+	public override bool CanUpdateSign(BasePlayer player)
+	{
+		return false;
+	}
+
+	public override void ServerInit()
+	{
+		base.ServerInit();
+		((FacepunchBehaviour)this).Invoke((Action)InitBettingTerminals, 3f);
+		((FacepunchBehaviour)this).Invoke((Action)DoSpin, 10f);
+	}
+
+	public void DoSpin()
+	{
+		int seed = Random.Range(int.MinValue, int.MaxValue);
+		random = new Random(seed);
+		targetNumber = random.Next(0, hitNumbers.Length);
+		targetAngle = 0f - 360f / (float)hitNumbers.Length * (float)targetNumber + offset;
+		targetAngle += (float)(random.NextDouble() * 12.0 - 6.0);
+		minimumSpinTime = (float)(random.NextDouble() * 5.0 + 13.0);
+		elapsedTime = 0f;
+		isSpinning = true;
+		decelerating = false;
+		spinNumber++;
+		SetTerminalsLocked(isLocked: true);
+	}
+
+	public void SetTerminalsLocked(bool isLocked)
+	{
+		foreach (BigWheelBettingTerminal terminal in terminals)
+		{
+			if (!((Object)(object)terminal == (Object)null) && terminal.inventory != null)
+			{
+				terminal.inventory.SetLocked(isLocked);
+			}
+		}
+	}
+
+	public void RemoveTerminal(BigWheelBettingTerminal terminal)
+	{
+		terminals.Remove(terminal);
+	}
+
+	public void InitBettingTerminals()
+	{
+		//IL_0011: Unknown result type (might be due to invalid IL or missing references)
+		terminals.Clear();
+		Vis.Entities(((Component)this).transform.position, 30f, terminals, 256, (QueryTriggerInteraction)2);
+		terminals = terminals.Distinct().ToList();
+	}
+
+	public float GetMaxSpinSpeed(float time)
+	{
+		return baseSpeed * speedCurve.Evaluate(time / minimumSpinTime);
+	}
+
+	public override void Update_Server()
+	{
+		//IL_0024: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00df: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0089: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0105: Unknown result type (might be due to invalid IL or missing references)
+		if (!isSpinning)
+		{
+			return;
+		}
+		float deltaTime = Time.deltaTime;
+		elapsedTime += deltaTime;
+		float num = NormalizeAngle(wheel.localEulerAngles.y);
+		float num2 = NormalizeAngle(targetAngle);
+		float num3 = (num2 - num + 360f) % 360f;
+		if (!decelerating && (elapsedTime < minimumSpinTime || num3 < 120f))
+		{
+			float maxSpinSpeed = GetMaxSpinSpeed(elapsedTime);
+			wheel.Rotate(((Component)this).transform.up, maxSpinSpeed * deltaTime, (Space)0);
+		}
+		else
+		{
+			decelerating = true;
+			float num4 = decelerationCurve.Evaluate(num3 / 180f);
+			float num5 = GetMaxSpinSpeed(elapsedTime) * num4 * deltaTime;
+			if (num5 > num3)
+			{
+				num5 = num3;
+			}
+			wheel.Rotate(((Component)this).transform.up, num5, (Space)0);
+			if (num3 < 0.1f)
+			{
+				wheel.localRotation = Quaternion.Euler(0f, num2, 0f);
+				isSpinning = false;
+				if (spinNumber > lastPaidSpinNumber)
+				{
+					Payout();
+					lastPaidSpinNumber = spinNumber;
+					QueueSpin();
+				}
+			}
+		}
+		SendNetworkUpdate();
+	}
+
+	private float NormalizeAngle(float angle)
+	{
+		angle %= 360f;
+		if (angle < 0f)
+		{
+			angle += 360f;
+		}
+		return angle;
+	}
+
+	public float SpinSpacing()
+	{
+		return spinFrequencySeconds;
+	}
+
+	public void QueueSpin()
+	{
+		foreach (BigWheelBettingTerminal terminal in terminals)
+		{
+			terminal.ClientRPC(RpcTarget.NetworkGroup("SetTimeUntilNextSpin"), SpinSpacing());
+		}
+		((FacepunchBehaviour)this).Invoke((Action)DoSpin, SpinSpacing());
+	}
+
+	public void Payout()
+	{
+		HitNumber currentHitType = GetCurrentHitType();
+		Guid value = Guid.NewGuid();
+		foreach (BigWheelBettingTerminal terminal in terminals)
+		{
+			if (terminal.isClient || (Object)(object)terminal == (Object)null || terminal.inventory == null)
+			{
+				continue;
+			}
+			bool flag = false;
+			bool flag2 = false;
+			Item slot = terminal.inventory.GetSlot((int)currentHitType.hitType);
+			if (slot != null)
+			{
+				int num = currentHitType.ColorToMultiplier(currentHitType.hitType);
+				int amount = slot.amount;
+				if (Interface.CallHook("OnBigWheelWin", (object)this, (object)slot, (object)terminal, (object)num) == null)
+				{
+					slot.amount += slot.amount * num;
+					slot.RemoveFromContainer();
+					slot.MoveToContainer(terminal.inventory, 5);
+					flag = true;
+					Analytics.Azure.OnGamblingResult(terminal.lastPlayer, terminal, amount, slot.amount, value);
+				}
+			}
+			for (int i = 0; i < 5; i++)
+			{
+				Item slot2 = terminal.inventory.GetSlot(i);
+				if (slot2 != null && Interface.CallHook("OnBigWheelLoss", (object)this, (object)slot2, (object)terminal) == null)
+				{
+					Analytics.Azure.OnGamblingResult(terminal.lastPlayer, terminal, slot2.amount, 0, value);
+					slot2.Remove();
+					flag2 = true;
+				}
+			}
+			if (flag || flag2)
+			{
+				terminal.ClientRPC(RpcTarget.NetworkGroup("WinOrLoseSound"), flag);
+			}
+		}
+		ItemManager.DoRemoves();
+		SetTerminalsLocked(isLocked: false);
+	}
+
+	public HitNumber GetCurrentHitType()
+	{
+		return hitNumbers[targetNumber];
+	}
+}
+
+
+using UnityEngine;
+
+public class HitNumber : MonoBehaviour
+{
+	public enum HitType
+	{
+		Yellow,
+		Green,
+		Blue,
+		Purple,
+		Red
+	}
+
+	public HitType hitType;
+
+	public int ColorToMultiplier(HitType type)
+	{
+		return type switch
+		{
+			HitType.Yellow => 1, 
+			HitType.Green => 3, 
+			HitType.Blue => 5, 
+			HitType.Purple => 10, 
+			HitType.Red => 20, 
+			_ => 0, 
+		};
+	}
+
+	public void OnDrawGizmosSelected()
+	{
+		//IL_0000: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0010: Unknown result type (might be due to invalid IL or missing references)
+		Gizmos.color = Color.white;
+		Gizmos.DrawSphere(((Component)this).transform.position, 0.025f);
+	}
+}
+
+
+public enum HitType
+{
+	Yellow,
+	Green,
+	Blue,
+	Purple,
+	Red
+}
+
+
+using Rust.UI;
+
+public class LootPanelBigWheelTerminal : LootPanel
+{
+	public RustText timeRemainingText;
+}
+
+
+using UnityEngine.UI;
+
+public class SlotMachineLootPanel : LootPanel
+{
+	public Text spinsRemainingText;
+
+	public Text multiplierText;
+
+	public LocalizeText ScrapCostText;
+}
+
+
+using UnityEngine;
+
+public class SlotMachinePayoutDisplay : MonoBehaviour
+{
+	public GameObjectRef PayoutWidget;
+
+	public RectTransform WidgetRoot;
+
+	public Sprite[] FaceSprites;
+}
+
+
+using System;
+using UnityEngine;
+
+[CreateAssetMenu(menuName = "Rust/Slot Machine Payouts")]
+public class SlotMachinePayoutSettings : ScriptableObject
+{
+	[Serializable]
+	public struct PayoutInfo
+	{
+		public ItemAmount Item;
+
+		[Range(0f, 15f)]
+		public int Result1;
+
+		[Range(0f, 15f)]
+		public int Result2;
+
+		[Range(0f, 15f)]
+		public int Result3;
+
+		public GameObjectRef OverrideWinEffect;
+	}
+
+	[Serializable]
+	public struct IndividualPayouts
+	{
+		public ItemAmount Item;
+
+		[Range(0f, 15f)]
+		public int Result;
+	}
+
+	public ItemAmount SpinCost;
+
+	public PayoutInfo[] Payouts;
+
+	public int[] VirtualFaces = new int[16];
+
+	public IndividualPayouts[] FacePayouts = new IndividualPayouts[0];
+
+	public int TotalStops;
+
+	public GameObjectRef DefaultWinEffect;
+}
+
+
+using System;
+using UnityEngine;
+
+[Serializable]
+public struct PayoutInfo
+{
+	public ItemAmount Item;
+
+	[Range(0f, 15f)]
+	public int Result1;
+
+	[Range(0f, 15f)]
+	public int Result2;
+
+	[Range(0f, 15f)]
+	public int Result3;
+
+	public GameObjectRef OverrideWinEffect;
+}
+
+
+using System;
+using UnityEngine;
+
+[Serializable]
+public struct IndividualPayouts
+{
+	public ItemAmount Item;
+
+	[Range(0f, 15f)]
+	public int Result;
+}
+
+
+using Rust.UI;
+using UnityEngine;
+using UnityEngine.UI;
+
+public class SlotMachinePayoutWidget : MonoBehaviour
+{
+	public RustText PayoutAmount;
+
+	public GameObject AnyText;
+
+	public Image[] Faces;
+}
+
+
+using UnityEngine;
+
+public class ChineseLantern : BaseFuelLightSource
+{
+	public Transform pivotRotator;
+
+	public float swaySpeed = 1f;
+
+	public float swayDistance = 0.25f;
+
+	public float lerpSpeed = 2f;
+}
+
+
+using System;
+using Rust;
+using UnityEngine;
+
+public class SkyLantern : StorageContainer, IIgniteable
+{
+	public float gravityScale = -0.1f;
+
+	public float travelSpeed = 2f;
+
+	public float collisionRadius = 0.5f;
+
+	public float rotationSpeed = 5f;
+
+	public float randOffset = 1f;
+
+	public float lifeTime = 120f;
+
+	public float hoverHeight = 14f;
+
+	public Transform collisionCheckPoint;
+
+	private float idealAltitude;
+
+	private Vector3 travelVec = Vector3.forward;
+
+	private float takeOffY;
+
+	public override float GetNetworkTime()
+	{
+		return Time.fixedTime;
+	}
+
+	public override void ServerInit()
+	{
+		//IL_0038: Unknown result type (might be due to invalid IL or missing references)
+		//IL_003d: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0048: Unknown result type (might be due to invalid IL or missing references)
+		//IL_004d: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0052: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0055: Unknown result type (might be due to invalid IL or missing references)
+		//IL_005a: Unknown result type (might be due to invalid IL or missing references)
+		base.ServerInit();
+		randOffset = ((Random.Range(0.5f, 1f) * (float)Random.Range(0, 2) == 1f) ? (-1f) : 1f);
+		Vector3 val = Vector3.forward + Vector3.right * randOffset;
+		travelVec = ((Vector3)(ref val)).normalized;
+		((FacepunchBehaviour)this).Invoke((Action)StartSinking, lifeTime - 15f);
+		((FacepunchBehaviour)this).Invoke((Action)SelfDestroy, lifeTime);
+		travelSpeed = Random.Range(1.75f, 2.25f);
+		gravityScale *= Random.Range(1f, 1.25f);
+		((FacepunchBehaviour)this).InvokeRepeating((Action)UpdateIdealAltitude, 0f, 1f);
+	}
+
+	public void Ignite(Vector3 fromPos)
+	{
+		//IL_0034: Unknown result type (might be due to invalid IL or missing references)
+		//IL_004a: Unknown result type (might be due to invalid IL or missing references)
+		//IL_004f: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0050: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0055: Unknown result type (might be due to invalid IL or missing references)
+		((Component)this).gameObject.transform.RemoveComponent<GroundWatch>();
+		((Component)this).gameObject.transform.RemoveComponent<DestroyOnGroundMissing>();
+		((Component)this).gameObject.layer = 14;
+		takeOffY = ((Component)this).transform.position.y;
+		travelVec = Vector3Ex.Direction2D(((Component)this).transform.position, fromPos);
+		SetFlag(Flags.On, b: true);
+		UpdateIdealAltitude();
+	}
+
+	public override void OnAttacked(HitInfo info)
+	{
+		//IL_0028: Unknown result type (might be due to invalid IL or missing references)
+		base.OnAttacked(info);
+		if (base.isServer)
+		{
+			if (info.damageTypes.Has(DamageType.Heat) && CanIgnite())
+			{
+				Ignite(info.PointStart);
+			}
+			else if (IsOn() && !IsBroken())
+			{
+				StartSinking();
+			}
+		}
+	}
+
+	public void SelfDestroy()
+	{
+		Kill();
+	}
+
+	public bool CanIgnite()
+	{
+		if (!IsOn())
+		{
+			return !IsBroken();
+		}
+		return false;
+	}
+
+	public void UpdateIdealAltitude()
+	{
+		//IL_0010: Unknown result type (might be due to invalid IL or missing references)
+		if (IsOn())
+		{
+			idealAltitude = WaterLevel.GetWaterOrTerrainSurface(((Component)this).transform.position, waves: false, volumes: false) + hoverHeight;
+			if (takeOffY > idealAltitude)
+			{
+				idealAltitude = takeOffY + hoverHeight;
+			}
+			if (hoverHeight != 0f)
+			{
+				idealAltitude -= 2f * Mathf.Abs(randOffset);
+			}
+		}
+	}
+
+	public void StartSinking()
+	{
+		//IL_0015: Unknown result type (might be due to invalid IL or missing references)
+		//IL_001a: Unknown result type (might be due to invalid IL or missing references)
+		if (!IsBroken())
+		{
+			hoverHeight = 0f;
+			travelVec = Vector3.zero;
+			UpdateIdealAltitude();
+			SetFlag(Flags.Broken, b: true);
+		}
+	}
+
+	public void FixedUpdate()
+	{
+		//IL_0018: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0035: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0096: Unknown result type (might be due to invalid IL or missing references)
+		//IL_009b: Unknown result type (might be due to invalid IL or missing references)
+		//IL_009c: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00a7: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00ac: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00b6: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00bc: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00c1: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00c2: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00c4: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00cf: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00d4: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00d9: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00e0: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00e5: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00eb: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00f0: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00f5: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00f7: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00ff: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0104: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0109: Unknown result type (might be due to invalid IL or missing references)
+		//IL_010b: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0113: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0125: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0130: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0071: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0076: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0086: Unknown result type (might be due to invalid IL or missing references)
+		//IL_008b: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0148: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0155: Unknown result type (might be due to invalid IL or missing references)
+		if (!base.isClient && IsOn())
+		{
+			float num = Mathf.Abs(((Component)this).transform.position.y - idealAltitude);
+			float num2 = ((((Component)this).transform.position.y < idealAltitude) ? (-1f) : 1f);
+			float num3 = Mathf.InverseLerp(0f, 10f, num) * num2;
+			if (IsBroken())
+			{
+				travelVec = Vector3.Lerp(travelVec, Vector3.zero, Time.fixedDeltaTime * 0.5f);
+				num3 = 0.7f;
+			}
+			Vector3 zero = Vector3.zero;
+			zero = Vector3.up * gravityScale * Physics.gravity.y * num3;
+			zero += travelVec * travelSpeed;
+			Vector3 val = ((Component)this).transform.position + zero * Time.fixedDeltaTime;
+			Vector3 val2 = Vector3Ex.Direction(val, ((Component)this).transform.position);
+			float num4 = Vector3.Distance(val, ((Component)this).transform.position);
+			RaycastHit val3 = default(RaycastHit);
+			if (!Physics.SphereCast(collisionCheckPoint.position, collisionRadius, val2, ref val3, num4, 1218519297))
+			{
+				((Component)this).transform.position = val;
+				((Component)this).transform.Rotate(Vector3.up, rotationSpeed * randOffset * Time.deltaTime, (Space)1);
+			}
+			else
+			{
+				StartSinking();
+			}
+		}
+	}
+}
+
+
+using UnityEngine;
+
+public class FirecrackerRepeater : BaseMonoBehaviour, IClientComponent
+{
+	public GameObjectRef singleExplosionEffect;
+
+	public Transform[] parts;
+
+	public float partWidth = 0.2f;
+
+	public float partLength = 0.1f;
+
+	public Quaternion[] targetRotations;
+
+	public Quaternion[] initialRotations;
+
+	public Renderer[] renderers;
+
+	public Material materialSource;
+
+	public float explodeRepeatMin = 0.05f;
+
+	public float explodeRepeatMax = 0.15f;
+
+	public float explodeLerpSpeed = 30f;
+
+	public Vector3 twistAmount;
+
+	public float fuseLength = 3f;
+
+	public float explodeStrength = 10f;
+
+	public float explodeDirBlend = 0.5f;
+
+	public float duration = 10f;
+
+	public ParticleSystemContainer smokeParticle;
+}
+
+
+using UnityEngine;
+
+public class StringFirecracker : TimedExplosive
+{
+	public Rigidbody serverRigidBody;
+
+	public Rigidbody clientMiddleBody;
+
+	public Rigidbody[] clientParts;
+
+	public SpringJoint serverClientJoint;
+
+	public Transform clientFirecrackerTransform;
+
+	public override void InitShared()
+	{
+		base.InitShared();
+		if (!base.isServer)
+		{
+			return;
+		}
+		Rigidbody[] array = clientParts;
+		foreach (Rigidbody val in array)
+		{
+			if ((Object)(object)val != (Object)null)
+			{
+				val.isKinematic = true;
+			}
+		}
+	}
+
+	public void CreatePinJoint()
+	{
+		//IL_0043: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0053: Unknown result type (might be due to invalid IL or missing references)
+		if (!((Object)(object)serverClientJoint != (Object)null))
+		{
+			serverClientJoint = ((Component)this).gameObject.AddComponent<SpringJoint>();
+			((Joint)serverClientJoint).connectedBody = clientMiddleBody;
+			((Joint)serverClientJoint).autoConfigureConnectedAnchor = false;
+			((Joint)serverClientJoint).anchor = Vector3.zero;
+			((Joint)serverClientJoint).connectedAnchor = Vector3.zero;
+			serverClientJoint.minDistance = 0f;
+			serverClientJoint.maxDistance = 1f;
+			serverClientJoint.damper = 1000f;
+			serverClientJoint.spring = 5000f;
+			((Joint)serverClientJoint).enableCollision = false;
+			((Joint)serverClientJoint).enablePreprocessing = false;
+		}
+	}
+}
+
+
+public class ArcadeClientAuthTest : ArcadeEntityController
+{
+	public float speed = 0.2f;
+
+	public float maxSpeed = 1f;
+
+	public BaseArcadeGame myGame;
+
+	public ArcadeEntity myEntity;
+}
+
+
+using System;
+using UnityEngine;
+
+public class ArcadeEntity : BaseMonoBehaviour
+{
+	public uint id;
+
+	public uint spriteID;
+
+	public uint soundID;
+
+	public bool visible;
+
+	public Vector3 heading = new Vector3(0f, 1f, 0f);
+
+	public bool isEnabled;
+
+	public bool dirty;
+
+	public float alpha = 1f;
+
+	public BoxCollider boxCollider;
+
+	public bool host;
+
+	public bool localAuthorativeOverride;
+
+	public ArcadeEntity arcadeEntityParent;
+
+	public uint prefabID;
+
+	[Header("Health")]
+	public bool takesDamage;
+
+	public float health = 1f;
+
+	public float maxHealth = 1f;
+
+	[NonSerialized]
+	public bool mapLoadedEntiy;
+}
+
+
+using UnityEngine;
+
+public class ArcadeEntityController : BaseMonoBehaviour
+{
+	public BaseArcadeGame parentGame;
+
+	public ArcadeEntity arcadeEntity;
+
+	public ArcadeEntity sourceEntity;
+
+	public Vector3 heading
+	{
+		get
+		{
+			//IL_0006: Unknown result type (might be due to invalid IL or missing references)
+			return arcadeEntity.heading;
+		}
+		set
+		{
+			//IL_0006: Unknown result type (might be due to invalid IL or missing references)
+			//IL_0007: Unknown result type (might be due to invalid IL or missing references)
+			arcadeEntity.heading = value;
+		}
+	}
+
+	public Vector3 positionLocal
+	{
+		get
+		{
+			//IL_000b: Unknown result type (might be due to invalid IL or missing references)
+			return ((Component)arcadeEntity).transform.localPosition;
+		}
+		set
+		{
+			//IL_000b: Unknown result type (might be due to invalid IL or missing references)
+			((Component)arcadeEntity).transform.localPosition = value;
+		}
+	}
+
+	public Vector3 positionWorld
+	{
+		get
+		{
+			//IL_000b: Unknown result type (might be due to invalid IL or missing references)
+			return ((Component)arcadeEntity).transform.position;
+		}
+		set
+		{
+			//IL_000b: Unknown result type (might be due to invalid IL or missing references)
+			((Component)arcadeEntity).transform.position = value;
+		}
+	}
+}
+
+
+using UnityEngine;
+
+public class ArcadeNetworkTrigger : TriggerBase
+{
+	public override GameObject InterestedInObject(GameObject obj)
+	{
+		obj = base.InterestedInObject(obj);
+		if ((Object)(object)obj == (Object)null)
+		{
+			return null;
+		}
+		BaseEntity baseEntity = obj.ToBaseEntity();
+		if ((Object)(object)baseEntity == (Object)null)
+		{
+			return null;
+		}
+		if (baseEntity.isClient)
+		{
+			return null;
+		}
+		return ((Component)baseEntity).gameObject;
+	}
+}
+
+
+using System.Collections.Generic;
+using UnityEngine;
+
+public class BaseArcadeGame : BaseMonoBehaviour
+{
+	public static List<BaseArcadeGame> globalActiveGames = new List<BaseArcadeGame>();
+
+	public Camera cameraToRender;
+
+	public RenderTexture renderTexture;
+
+	public Texture2D distantTexture;
+
+	public Transform center;
+
+	public int frameRate = 30;
+
+	public Dictionary<uint, ArcadeEntity> activeArcadeEntities = new Dictionary<uint, ArcadeEntity>();
+
+	public Sprite[] spriteManifest;
+
+	public ArcadeEntity[] entityManifest;
+
+	public bool clientside;
+
+	public bool clientsideInput = true;
+
+	public const int spriteIndexInvisible = 1555;
+
+	public GameObject arcadeEntityPrefab;
+
+	public BaseArcadeMachine ownerMachine;
+
+	public static int gameOffsetIndex = 0;
+
+	private bool isAuthorative;
+
+	public Canvas canvas;
+
+	public BasePlayer GetHostPlayer()
+	{
+		if (Object.op_Implicit((Object)(object)ownerMachine))
+		{
+			return ownerMachine.GetDriver();
+		}
+		return null;
+	}
+}
+
+
+using System;
+using UnityEngine;
+
+public class BossFormController : ArcadeEntityController
+{
+	[Serializable]
+	public class BossDamagePoint
+	{
+		public BoxCollider hitBox;
+
+		public float health;
+
+		public ArcadeEntityController damagePrefab;
+
+		public ArcadeEntityController damageInstance;
+
+		public bool destroyed;
+	}
+
+	public float animationSpeed = 0.5f;
+
+	public Sprite[] animationFrames;
+
+	public Vector2 roamDistance;
+
+	public Transform colliderParent;
+
+	public BossDamagePoint[] damagePoints;
+
+	public ArcadeEntityController flashController;
+
+	public float health = 50f;
+}
+
+
+using System;
+using UnityEngine;
+
+[Serializable]
+public class BossDamagePoint
+{
+	public BoxCollider hitBox;
+
+	public float health;
+
+	public ArcadeEntityController damagePrefab;
+
+	public ArcadeEntityController damageInstance;
+
+	public bool destroyed;
+}
+
+
+using UnityEngine;
+
+public class ChippyArcadeGame : BaseArcadeGame
+{
+	public ChippyMainCharacter mainChar;
+
+	public SpriteArcadeEntity mainCharAim;
+
+	public ChippyBoss currentBoss;
+
+	public ChippyBoss[] bossPrefabs;
+
+	public SpriteArcadeEntity mainMenuLogo;
+
+	public Transform respawnPoint;
+
+	public Vector2 mouseAim = new Vector2(0f, 1f);
+
+	public TextArcadeEntity levelIndicator;
+
+	public TextArcadeEntity gameOverIndicator;
+
+	public TextArcadeEntity playGameButton;
+
+	public TextArcadeEntity highScoresButton;
+
+	public bool OnMainMenu;
+
+	public bool GameActive;
+
+	public int level;
+
+	public TextArcadeEntity[] scoreDisplays;
+
+	public MenuButtonArcadeEntity[] mainMenuButtons;
+
+	public int selectedButtonIndex;
+
+	public bool OnHighScores;
+}
+
+
+using System;
+using UnityEngine;
+
+public class ChippyBoss : SpriteArcadeEntity
+{
+	[Serializable]
+	public class BossDamagePoint
+	{
+		public BoxCollider hitBox;
+
+		public float health;
+
+		public ArcadeEntityController damagePrefab;
+
+		public ArcadeEntityController damageInstance;
+
+		public bool destroyed;
+	}
+
+	public Vector2 roamDistance;
+
+	public float animationSpeed = 0.5f;
+
+	public Sprite[] animationFrames;
+
+	public ArcadeEntity bulletTest;
+
+	public SpriteRenderer flashRenderer;
+
+	public BossDamagePoint[] damagePoints;
+}
+
+
+using System;
+using UnityEngine;
+
+[Serializable]
+public class BossDamagePoint
+{
+	public BoxCollider hitBox;
+
+	public float health;
+
+	public ArcadeEntityController damagePrefab;
+
+	public ArcadeEntityController damageInstance;
+
+	public bool destroyed;
+}
+
+
+public class ChippyBulletEntity : SpriteArcadeEntity
+{
+	public float speed = 4f;
+
+	public float maxSpeed = 4f;
+
+	public float radius;
+
+	public float damage = 1f;
+
+	public ArcadeEntity bulletImpact;
+}
+
+
+using UnityEngine;
+
+public class ChippyMainCharacter : SpriteArcadeEntity
+{
+	public float speed;
+
+	public float maxSpeed = 0.25f;
+
+	public ChippyBulletEntity bulletPrefab;
+
+	public float fireRate = 0.1f;
+
+	public Vector3 aimDir = Vector3.up;
+}
+
+
+using UnityEngine;
+
+public class ChippyMoveTest : MonoBehaviour
+{
+	public Vector3 heading = new Vector3(0f, 1f, 0f);
+
+	public float speed = 0.2f;
+
+	public float maxSpeed = 1f;
+
+	private void FixedUpdate()
+	{
+		//IL_005f: Unknown result type (might be due to invalid IL or missing references)
+		//IL_007f: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0084: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0087: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0091: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00b4: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00bb: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00c5: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00d0: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00d5: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0102: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0122: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0127: Unknown result type (might be due to invalid IL or missing references)
+		//IL_012a: Unknown result type (might be due to invalid IL or missing references)
+		//IL_012f: Unknown result type (might be due to invalid IL or missing references)
+		float num = ((Mathf.Abs(((Vector3)(ref heading)).magnitude) > 0f) ? 1f : 0f);
+		speed = Mathf.MoveTowards(speed, maxSpeed * num, Time.fixedDeltaTime * ((num == 0f) ? 2f : 2f));
+		Vector3 position = ((Component)this).transform.position;
+		Vector3 val = new Vector3(heading.x, heading.y, 0f);
+		Ray val2 = default(Ray);
+		((Ray)(ref val2))..ctor(position, ((Vector3)(ref val)).normalized);
+		if (!Physics.Raycast(val2, speed * Time.fixedDeltaTime, 16777216))
+		{
+			Transform transform = ((Component)this).transform;
+			transform.position += ((Ray)(ref val2)).direction * Time.fixedDeltaTime * speed;
+			if (Mathf.Abs(((Vector3)(ref heading)).magnitude) > 0f)
+			{
+				Transform transform2 = ((Component)this).transform;
+				Vector3 forward = ((Component)this).transform.forward;
+				val = new Vector3(heading.x, heading.y, 0f);
+				transform2.rotation = QuaternionEx.LookRotationForcedUp(forward, ((Vector3)(ref val)).normalized);
+			}
+		}
+	}
+}
+
+
+using System;
+using UnityEngine;
+
+public class DestroyArcadeEntity : BaseMonoBehaviour
+{
+	public ArcadeEntity ent;
+
+	public float TimeToDie = 1f;
+
+	public float TimeToDieVariance;
+
+	private void Start()
+	{
+		((FacepunchBehaviour)this).Invoke((Action)DestroyAction, TimeToDie, TimeToDieVariance * 0.5f);
+	}
+
+	private void DestroyAction()
+	{
+		if (((Object)(object)ent != (Object)null) & ent.host)
+		{
+			Object.Destroy((Object)(object)((Component)ent).gameObject);
+		}
+	}
+}
+
+
+public class MenuButtonArcadeEntity : TextArcadeEntity
+{
+	public string titleText = "";
+
+	public string selectionSuffix = " - ";
+
+	public string clickMessage = "";
+
+	public bool IsHighlighted()
+	{
+		return alpha == 1f;
+	}
+}
+
+
+using UnityEngine;
+
+public class SpriteArcadeEntity : ArcadeEntity
+{
+	public SpriteRenderer spriteRenderer;
+}
+
+
+public class ArcadeTennisPaddle : ArcadeEntity
+{
+}
+
+
+using UnityEngine;
+
+public class TennisArcadeGame : BaseArcadeGame
+{
+	public ArcadeEntity paddle1;
+
+	public ArcadeEntity paddle2;
+
+	public ArcadeEntity ball;
+
+	public Transform paddle1Origin;
+
+	public Transform paddle2Origin;
+
+	public Transform paddle1Goal;
+
+	public Transform paddle2Goal;
+
+	public Transform ballSpawn;
+
+	public float maxScore = 5f;
+
+	public ArcadeEntity[] paddle1ScoreNodes;
+
+	public ArcadeEntity[] paddle2ScoreNodes;
+
+	public int paddle1Score;
+
+	public int paddle2Score;
+
+	public float sensitivity = 1f;
+
+	public ArcadeEntity logo;
+
+	public bool OnMainMenu;
+
+	public bool GameActive;
+}
+
+
+public class TennisBall : SpriteArcadeEntity
+{
+	public float speed = 2f;
+
+	public float maxSpeed = 2f;
+}
+
+
+using TMPro;
+
+public class TextArcadeEntity : ArcadeEntity
+{
+	public TextMeshProUGUI text;
+}
+
+
+using System.Collections.Generic;
+using Facepunch;
+using ProtoBuf;
+using UnityEngine;
+
+public class HeadEntity : BaseEntity
+{
+	public HeadData CurrentTrophyData;
+
+	private const Wearable.OccupationSlots HeadMask = Wearable.OccupationSlots.HeadTop | Wearable.OccupationSlots.Face | Wearable.OccupationSlots.HeadBack | Wearable.OccupationSlots.Mouth | Wearable.OccupationSlots.Eyes;
+
+	public override void Save(SaveInfo info)
+	{
+		base.Save(info);
+		if (info.msg.headData == null && CurrentTrophyData != null)
+		{
+			info.msg.headData = Pool.Get<HeadData>();
+			CurrentTrophyData.CopyTo(info.msg.headData);
+		}
+	}
+
+	public void SetupSourceId(uint sourceID)
+	{
+		InitTrophyData();
+		CurrentTrophyData.entitySource = sourceID;
+		CurrentTrophyData.horseBreed = 0;
+		CurrentTrophyData.playerId = 0uL;
+		CurrentTrophyData.playerName = string.Empty;
+		CurrentTrophyData.clothing?.Clear();
+	}
+
+	public void SetupPlayerId(string playerName, ulong playerId)
+	{
+		InitTrophyData();
+		CurrentTrophyData.playerName = playerName;
+		CurrentTrophyData.playerId = playerId;
+	}
+
+	public void AssignClothing(ItemContainer container)
+	{
+		InitTrophyData();
+		if (CurrentTrophyData.clothing == null)
+		{
+			CurrentTrophyData.clothing = Pool.Get<List<int>>();
+		}
+		ItemModWearable itemModWearable = default(ItemModWearable);
+		foreach (Item item in container.itemList)
+		{
+			if (((Component)item.info).TryGetComponent<ItemModWearable>(ref itemModWearable) && itemModWearable.entityPrefab.isValid)
+			{
+				Wearable component = itemModWearable.entityPrefab.Get().GetComponent<Wearable>();
+				if ((component.occupationOver & (Wearable.OccupationSlots.HeadTop | Wearable.OccupationSlots.Face | Wearable.OccupationSlots.HeadBack | Wearable.OccupationSlots.Mouth | Wearable.OccupationSlots.Eyes)) != 0 || component.occupationOver == (Wearable.OccupationSlots)0)
+				{
+					CurrentTrophyData.clothing.Add(item.info.itemid);
+				}
+			}
+		}
+	}
+
+	public void AssignClothing(ItemDefinition clothingItem)
+	{
+		InitTrophyData();
+		if (CurrentTrophyData.clothing == null)
+		{
+			CurrentTrophyData.clothing = Pool.Get<List<int>>();
+		}
+		CurrentTrophyData.clothing.Add(clothingItem.itemid);
+	}
+
+	public void AssignHorseBreed(int breed)
+	{
+		InitTrophyData();
+		CurrentTrophyData.horseBreed = breed;
+	}
+
+	private void InitTrophyData()
+	{
+		if (CurrentTrophyData == null)
+		{
+			CurrentTrophyData = Pool.Get<HeadData>();
+		}
+	}
+
+	public override void Load(LoadInfo info)
+	{
+		base.Load(info);
+		if (info.msg.headData != null)
+		{
+			InitTrophyData();
+			info.msg.headData.CopyTo(CurrentTrophyData);
+		}
+		else if (CurrentTrophyData != null)
+		{
+			CurrentTrophyData.Dispose();
+			CurrentTrophyData = null;
+		}
+	}
+
+	public GameObject GetHeadSource()
+	{
+		if (CurrentTrophyData == null)
+		{
+			return null;
+		}
+		return GameManager.server.FindPrefab(CurrentTrophyData.entitySource);
+	}
+}
+
+
+using System;
+using Facepunch;
+using ProtoBuf;
+using UnityEngine;
+
+public class RockingChair : BaseChair
+{
+	[Header("Rocking Settings")]
+	public float Acceleration = 0.8f;
+
+	public float MaxRockingAngle = 9f;
+
+	public float MaxRockVelocity = 4f;
+
+	[Tooltip("Preserve and apply some existing velocity when swinging back and forth.")]
+	public bool ApplyVelocityBetweenSwings = true;
+
+	[Range(0f, 2f)]
+	public float AppliedVelocity = 1f;
+
+	[Range(0f, 2f)]
+	public float WeaponFireImpact = 3f;
+
+	[Header("Audio")]
+	public SoundDefinition creakForwardSoundDef;
+
+	public SoundDefinition creakBackwardSoundDef;
+
+	public float creakForwardAngle = 0.1f;
+
+	public float creakBackwardAngle = -0.1f;
+
+	public float creakVelocityThreshold = 0.02f;
+
+	public AnimationCurve creakGainCurve;
+
+	private float initLocalY;
+
+	private Vector3 initLocalRot;
+
+	private float velocity;
+
+	private float oppositePotentialVelocity;
+
+	private TimeSince timeSinceInput;
+
+	private float sineTime;
+
+	private float timeUntilStartSine = 0.4f;
+
+	private float t;
+
+	private float angle;
+
+	private Quaternion max;
+
+	private Quaternion min;
+
+	public override void ServerInit()
+	{
+		base.ServerInit();
+		SaveBaseLocalPos();
+		ResetChair();
+	}
+
+	public override void OnParentChanging(BaseEntity oldParent, BaseEntity newParent)
+	{
+		((FacepunchBehaviour)this).Invoke((Action)SaveBaseLocalPos, 0f);
+	}
+
+	private void SaveBaseLocalPos()
+	{
+		//IL_0007: Unknown result type (might be due to invalid IL or missing references)
+		//IL_000c: Unknown result type (might be due to invalid IL or missing references)
+		//IL_000f: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0014: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0020: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0031: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0036: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0041: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0046: Unknown result type (might be due to invalid IL or missing references)
+		//IL_004b: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0050: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0057: Unknown result type (might be due to invalid IL or missing references)
+		//IL_005c: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0068: Unknown result type (might be due to invalid IL or missing references)
+		//IL_006d: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0072: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0077: Unknown result type (might be due to invalid IL or missing references)
+		Quaternion localRotation = ((Component)this).transform.localRotation;
+		initLocalRot = ((Quaternion)(ref localRotation)).eulerAngles;
+		initLocalY = ((Component)this).transform.localPosition.y;
+		max = Quaternion.Euler(initLocalRot) * Quaternion.AngleAxis(MaxRockingAngle, Vector3.right);
+		min = Quaternion.Euler(initLocalRot) * Quaternion.AngleAxis(0f - MaxRockingAngle, Vector3.right);
+	}
+
+	public override void Save(SaveInfo info)
+	{
+		//IL_0023: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0028: Unknown result type (might be due to invalid IL or missing references)
+		base.Save(info);
+		info.msg.rockingChair = Pool.Get<RockingChair>();
+		info.msg.rockingChair.initEuler = initLocalRot;
+		info.msg.rockingChair.initY = initLocalY;
+	}
+
+	public override void Load(LoadInfo info)
+	{
+		//IL_0028: Unknown result type (might be due to invalid IL or missing references)
+		//IL_002d: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0039: Unknown result type (might be due to invalid IL or missing references)
+		//IL_003e: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0072: Unknown result type (might be due to invalid IL or missing references)
+		base.Load(info);
+		if (info.msg.rockingChair != null && base.isServer)
+		{
+			initLocalRot = info.msg.rockingChair.initEuler;
+			((Component)this).transform.localRotation = Quaternion.Euler(initLocalRot);
+			initLocalY = info.msg.rockingChair.initY;
+			if (initLocalY == 0f)
+			{
+				initLocalY = ((Component)this).transform.localPosition.y;
+			}
+		}
+	}
+
+	public override void PlayerServerInput(InputState inputState, BasePlayer player)
+	{
+		//IL_0009: Unknown result type (might be due to invalid IL or missing references)
+		//IL_000e: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0010: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0016: Unknown result type (might be due to invalid IL or missing references)
+		//IL_004b: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0033: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0038: Unknown result type (might be due to invalid IL or missing references)
+		float timeSinceLastTick = player.timeSinceLastTick;
+		Vector2 inputVector = GetInputVector(inputState);
+		CalculateVelocity(inputVector);
+		bool flag = !Mathf.Approximately(inputVector.y, 0f);
+		if (flag)
+		{
+			timeSinceInput = TimeSince.op_Implicit(0f);
+			sineTime = 0f;
+		}
+		else if (TimeSince.op_Implicit(timeSinceInput) > timeUntilStartSine)
+		{
+			angle = Mathf.Lerp(0f - MaxRockingAngle, MaxRockingAngle, t);
+		}
+		sineTime += player.timeSinceLastTick * 180f;
+		PreventClipping(flag);
+		ApplyVelocity(timeSinceLastTick, flag);
+	}
+
+	public override void OnWeaponFired(BaseProjectile weapon)
+	{
+		//IL_003d: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0042: Unknown result type (might be due to invalid IL or missing references)
+		if (!((Object)(object)weapon == (Object)null))
+		{
+			if ((Object)(object)weapon.recoil != (Object)null)
+			{
+				velocity += weapon.recoil.recoilPitchMax * WeaponFireImpact;
+			}
+			timeSinceInput = TimeSince.op_Implicit(0f);
+			sineTime = 0f;
+		}
+	}
+
+	public override void OnPlayerDismounted(BasePlayer player)
+	{
+		base.OnPlayerDismounted(player);
+		ResetChair();
+	}
+
+	private void PreventClipping(bool hasInput)
+	{
+		//IL_00af: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00ba: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00d0: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00da: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00e9: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0047: Unknown result type (might be due to invalid IL or missing references)
+		//IL_005d: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0067: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0072: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0083: Unknown result type (might be due to invalid IL or missing references)
+		//IL_008d: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0098: Unknown result type (might be due to invalid IL or missing references)
+		float num = initLocalY + 0.06f;
+		float num2 = Mathx.RemapValClamped(Mathf.Abs(angle), 0f, MaxRockingAngle, 0f, 1f);
+		if (num2 > 0.7f)
+		{
+			((Component)this).transform.localPosition = Mathx.Lerp(new Vector3(((Component)this).transform.localPosition.x, initLocalY, ((Component)this).transform.localPosition.z), new Vector3(((Component)this).transform.localPosition.x, num, ((Component)this).transform.localPosition.z), 1.5f, num2);
+		}
+		else
+		{
+			((Component)this).transform.localPosition = Mathx.Lerp(((Component)this).transform.localPosition, new Vector3(((Component)this).transform.localPosition.x, initLocalY, ((Component)this).transform.localPosition.z), 1.5f, Time.deltaTime);
+		}
+	}
+
+	private void CalculateVelocity(Vector2 currentInput)
+	{
+		//IL_0007: Unknown result type (might be due to invalid IL or missing references)
+		//IL_004c: Unknown result type (might be due to invalid IL or missing references)
+		velocity += currentInput.y * Acceleration;
+		velocity = Mathf.Clamp(velocity, 0f - MaxRockVelocity, MaxRockVelocity);
+		oppositePotentialVelocity = (0f - velocity) * AppliedVelocity;
+		int signZero = Mathx.GetSignZero(currentInput.y, true);
+		int signZero2 = Mathx.GetSignZero(velocity, true);
+		if (ApplyVelocityBetweenSwings && Mathf.Abs(velocity) > 0.3f && Mathx.HasSignFlipped(signZero, signZero2))
+		{
+			velocity += oppositePotentialVelocity;
+		}
+	}
+
+	private void ApplyVelocity(float delta, bool hasInput)
+	{
+		//IL_0060: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00b1: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00b6: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00c1: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00c6: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00cb: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00d1: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00d7: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00e2: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00e7: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00ec: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0104: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0106: Unknown result type (might be due to invalid IL or missing references)
+		//IL_010b: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0118: Unknown result type (might be due to invalid IL or missing references)
+		//IL_011d: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0125: Unknown result type (might be due to invalid IL or missing references)
+		t = Mathf.Sin(sineTime * (MathF.PI / 180f));
+		t = Mathx.RemapValClamped(t, -1f, 1f, 0f, 1f);
+		t = EaseOutCubicOvershoot(t, 0.2f);
+		t = Mathf.Lerp(t, 0.5f, Mathf.Clamp01(TimeSince.op_Implicit(timeSinceInput) / 10f));
+		angle += velocity;
+		angle = Mathf.Clamp(angle, 0f - MaxRockingAngle, MaxRockingAngle);
+		Quaternion val = Quaternion.Euler(initLocalRot) * Quaternion.AngleAxis(angle, Vector3.right);
+		Quaternion val2 = Quaternion.Slerp(min, max, t);
+		float num = ((!hasInput && TimeSince.op_Implicit(timeSinceInput) > timeUntilStartSine) ? 1 : 0);
+		Quaternion val3 = Quaternion.Slerp(val, val2, num);
+		((Component)this).transform.localRotation = Quaternion.Slerp(((Component)this).transform.localRotation, val3, delta * 3f);
+	}
+
+	private void ResetChair()
+	{
+		//IL_0007: Unknown result type (might be due to invalid IL or missing references)
+		//IL_000c: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0022: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0038: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0042: Unknown result type (might be due to invalid IL or missing references)
+		((Component)this).transform.localRotation = Quaternion.Euler(initLocalRot);
+		((Component)this).transform.localPosition = new Vector3(((Component)this).transform.localPosition.x, initLocalY, ((Component)this).transform.localPosition.z);
+	}
+
+	private Vector2 GetInputVector(InputState inputState)
+	{
+		//IL_0016: Unknown result type (might be due to invalid IL or missing references)
+		bool rightDown = false;
+		bool forwardDown = inputState.IsDown(BUTTON.FORWARD);
+		bool backDown = inputState.IsDown(BUTTON.BACKWARD);
+		return ProcessInputVector(leftDown: false, rightDown, forwardDown, backDown);
+	}
+
+	private static Vector2 ProcessInputVector(bool leftDown, bool rightDown, bool forwardDown, bool backDown)
+	{
+		//IL_0000: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0005: Unknown result type (might be due to invalid IL or missing references)
+		//IL_005c: Unknown result type (might be due to invalid IL or missing references)
+		Vector2 zero = Vector2.zero;
+		if (leftDown && rightDown)
+		{
+			leftDown = (rightDown = false);
+		}
+		if (forwardDown && backDown)
+		{
+			forwardDown = (backDown = false);
+		}
+		if (forwardDown)
+		{
+			zero.y = 1f;
+		}
+		else if (backDown)
+		{
+			zero.y = -1f;
+		}
+		if (rightDown)
+		{
+			zero.x = 1f;
+		}
+		else if (leftDown)
+		{
+			zero.x = -1f;
+		}
+		return zero;
+	}
+
+	private float EaseOutCubic(float value)
+	{
+		return 1f - Mathf.Pow(1f - Mathf.Clamp01(value), 3f);
+	}
+
+	private float EaseOutCubicOvershoot(float value, float overshoot)
+	{
+		return 1f - Mathf.Pow(1f - Mathf.Clamp01(value), 3f) * (1f + overshoot * (Mathf.Clamp01(value) - 1f));
+	}
+}
+
+
+using UnityEngine;
+
+public class DiveSite : JunkPile
+{
+	public Transform bobber;
+
+	public override bool DespawnIfAnyLootTaken => false;
+
+	public override float TimeoutPlayerCheckRadius()
+	{
+		return 80f;
+	}
+
+	public override void Spawn()
+	{
+		//IL_000c: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0016: Unknown result type (might be due to invalid IL or missing references)
+		//IL_003b: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0045: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0050: Unknown result type (might be due to invalid IL or missing references)
+		//IL_005b: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0061: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0066: Unknown result type (might be due to invalid IL or missing references)
+		base.Spawn();
+		if (Physics.CheckSphere(Vector3Ex.WithY(((Component)this).transform.position, 0f), 5f, 134217728))
+		{
+			Kill();
+		}
+		else if ((Object)(object)BoatBuildingStation.GetStationIntersectingOBB(new OBB(Vector3Ex.WithY(((Component)this).transform.position, 0f), ((Component)this).transform.lossyScale, ((Component)this).transform.rotation, bounds), isServer: true) != (Object)null)
+		{
+			Kill();
+		}
+	}
+}
+
+
+using System;
+using UnityEngine;
+
+public class DiveSiteBuoy : BaseEntity
+{
+	public float UpdateCullRange = 128f;
+
+	public Vector3 RotationRate;
+
+	public float InitialSpawnRange = 32f;
+
+	private Action _updateAction;
+
+	private Action updateAction => _updateAction ?? new Action(UpdateMovement);
+
+	public override void ServerInit()
+	{
+		//IL_000c: Unknown result type (might be due to invalid IL or missing references)
+		base.ServerInit();
+		if (!BaseNetworkable.HasCloseConnections(((Component)this).transform.position, InitialSpawnRange))
+		{
+			UpdateMovement();
+		}
+		((FacepunchBehaviour)this).InvokeRandomized((Action)CheckForNearbyPlayers, 0f, 10f, 5f);
+	}
+
+	private void CheckForNearbyPlayers()
+	{
+		//IL_0006: Unknown result type (might be due to invalid IL or missing references)
+		bool flag = BaseNetworkable.HasCloseConnections(((Component)this).transform.position, UpdateCullRange);
+		if (flag && !((FacepunchBehaviour)this).IsInvoking(updateAction))
+		{
+			((FacepunchBehaviour)this).InvokeRepeating(updateAction, 0f, 0f);
+		}
+		else if (!flag && ((FacepunchBehaviour)this).IsInvoking(updateAction))
+		{
+			((FacepunchBehaviour)this).CancelInvoke(updateAction);
+		}
+		ToggleNetworkPositionTick(flag);
+	}
+
+	private void UpdateMovement()
+	{
+		//IL_0006: Unknown result type (might be due to invalid IL or missing references)
+		//IL_000b: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0012: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0017: Unknown result type (might be due to invalid IL or missing references)
+		//IL_001a: Unknown result type (might be due to invalid IL or missing references)
+		//IL_003f: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0041: Unknown result type (might be due to invalid IL or missing references)
+		//IL_004b: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0050: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0055: Unknown result type (might be due to invalid IL or missing references)
+		//IL_005a: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0061: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0062: Unknown result type (might be due to invalid IL or missing references)
+		Vector3 position = ((Component)this).transform.position;
+		Quaternion rotation = ((Component)this).transform.rotation;
+		position.y = WaterLevel.GetWaterSurface(position, waves: true, volumes: false) + Mathf.Sin(Time.time * 3f) * 0.075f;
+		rotation *= Quaternion.Euler(RotationRate * Time.deltaTime);
+		((Component)this).transform.SetPositionAndRotation(position, rotation);
+	}
+}
+
+
+using UnityEngine;
+
+public class EggAmmoRepresentation : MonoBehaviour, IInventoryChanged, IClientComponent
+{
+	public GameObject[] eggAmmo;
+}
+
+
+using UnityEngine;
+
 public class EggSwap : MonoBehaviour
 {
 	public Renderer[] eggRenderers;
@@ -60,6 +2360,8 @@ public class EggHuntEvent : BaseHuntEvent
 	public static float durationSeconds = 180f;
 
 	public Dictionary<ulong, EggHunter> _eggHunters = new Dictionary<ulong, EggHunter>();
+
+	public SeasonalEventType SeasonEventType;
 
 	public ItemAmount[] placementAwards;
 
@@ -742,13 +3044,6 @@ public class JiggleBone : BaseMonoBehaviour
 }
 
 
-using UnityEngine;
-
-public class EggUpdater : MonoBehaviour
-{
-}
-
-
 public class ItemModCrackOpen : ItemModUnwrap
 {
 	public static readonly Phrase CrackOpenTitle = new Phrase("crack_open", "Crack Open");
@@ -788,6 +3083,13 @@ public class BunnyEntry : MonoBehaviour
 }
 
 
+public enum SeasonalEventType
+{
+	Halloween,
+	Easter
+}
+
+
 using Rust.UI;
 using UnityEngine;
 
@@ -800,6 +3102,8 @@ public class EggHuntNote : MonoBehaviour, IClientComponent
 	public CanvasGroup timerGroup;
 
 	public RustText timerText;
+
+	public SeasonalEventType EventType;
 
 	public static readonly Phrase startsInPhrase = new Phrase("egghunt.start", "Starts in: {0}");
 }
@@ -819,6 +3123,8 @@ public class TopBunnies : MonoBehaviour
 	public CanvasGroup group;
 
 	public Color endingColor;
+
+	public SeasonalEventType EventType;
 }
 
 
@@ -1085,8 +3391,8 @@ public class JunkPileWater : JunkPile, IBudgetedFloatingEntity, IDestroyableOnPl
 
 	public static JunkpileWaterWorkQueue junkpileWaterWorkQueue = new JunkpileWaterWorkQueue();
 
-	[ServerVar]
 	[Help("How many milliseconds to budget for processing junk pile updates per frame")]
+	[ServerVar]
 	public static float framebudgetms = 0.05f;
 
 	public BaseEntity Entity => this;
@@ -1110,6 +3416,19 @@ public class JunkPileWater : JunkPile, IBudgetedFloatingEntity, IDestroyableOnPl
 		Quaternion rotation = ((Component)this).transform.rotation;
 		baseRotation = Quaternion.Euler(0f, ((Quaternion)(ref rotation)).eulerAngles.y, 0f);
 		if (Physics.CheckSphere(((Component)this).transform.position, VehicleCheckRadius, 134217728))
+		{
+			Kill();
+		}
+		else
+		{
+			KillIfInMonument();
+		}
+	}
+
+	private void KillIfInMonument()
+	{
+		//IL_0018: Unknown result type (might be due to invalid IL or missing references)
+		if ((Object)(object)TerrainMeta.TopologyMap != (Object)null && (TerrainMeta.TopologyMap.GetTopology(((Component)this).transform.position) & 0x400) != 0 && (Object)(object)TerrainMeta.Path != (Object)null)
 		{
 			Kill();
 		}
@@ -3951,7 +6270,7 @@ public class HexagonTile : BaseCombatEntity, IDetector
 	public override void OnFlagsChanged(Flags old, Flags next)
 	{
 		base.OnFlagsChanged(old, next);
-		if (old.HasFlag(Flags.Busy) != next.HasFlag(Flags.Busy) && base.isServer)
+		if ((old & Flags.Busy) == Flags.Busy != ((next & Flags.Busy) == Flags.Busy) && base.isServer)
 		{
 			((FacepunchBehaviour)this).Invoke((Action)delegate
 			{
@@ -6155,8 +8474,8 @@ public class ProceduralDynamicDungeon : BaseEntity
 		}
 	}
 
-	[ExecuteInEditMode]
 	[ContextMenu("Test Grid")]
+	[ExecuteInEditMode]
 	public void GenerateGrid()
 	{
 		//IL_0006: Unknown result type (might be due to invalid IL or missing references)
@@ -10164,6 +12483,7 @@ public class BobberPreview : MonoBehaviour
 
 
 using System.Collections.Generic;
+using ConVar;
 using Facepunch;
 using UnityEngine;
 
@@ -10175,6 +12495,8 @@ public class FishLookup : BaseScriptableObject
 	private static FishLookup _instance;
 
 	private static ItemModFishable[] AvailableFish;
+
+	private static ItemModFishable[] JunkItems;
 
 	public static ItemDefinition[] BaitItems;
 
@@ -10209,63 +12531,102 @@ public class FishLookup : BaseScriptableObject
 		}
 		List<ItemModFishable> list = Pool.Get<List<ItemModFishable>>();
 		List<ItemDefinition> list2 = Pool.Get<List<ItemDefinition>>();
-		ItemModFishable item = default(ItemModFishable);
+		List<ItemModFishable> list3 = Pool.Get<List<ItemModFishable>>();
+		ItemModFishable itemModFishable = default(ItemModFishable);
 		ItemModCompostable itemModCompostable = default(ItemModCompostable);
-		foreach (ItemDefinition item2 in ItemManager.itemList)
+		foreach (ItemDefinition item in ItemManager.itemList)
 		{
-			if (((Component)item2).TryGetComponent<ItemModFishable>(ref item))
+			if (((Component)item).TryGetComponent<ItemModFishable>(ref itemModFishable))
 			{
-				list.Add(item);
+				list.Add(itemModFishable);
+				if (itemModFishable.IsJunk && itemModFishable.CanBeFished)
+				{
+					list3.Add(itemModFishable);
+				}
 			}
-			if (((Component)item2).TryGetComponent<ItemModCompostable>(ref itemModCompostable) && itemModCompostable.BaitValue > 0f)
+			if (((Component)item).TryGetComponent<ItemModCompostable>(ref itemModCompostable) && itemModCompostable.BaitValue > 0f)
 			{
-				list2.Add(item2);
+				list2.Add(item);
 			}
 		}
 		AvailableFish = list.ToArray();
+		JunkItems = list3.ToArray();
 		BaitItems = list2.ToArray();
 		Pool.FreeUnmanaged<ItemModFishable>(ref list);
+		Pool.FreeUnmanaged<ItemModFishable>(ref list3);
 		Pool.FreeUnmanaged<ItemDefinition>(ref list2);
 	}
 
-	public ItemDefinition GetFish(Vector3 worldPos, WaterBody bodyType, Item lure, out ItemModFishable fishable, ItemModFishable ignoreFish, out int usedLureAmount, float overrideDepth = 0f)
+	public ItemDefinition GetFish(Vector3 worldPos, WaterBody bodyType, Item lure, out ItemModFishable fishable, ItemModFishable ignoreFish, out int usedLureAmount, out bool isOverfished, float overrideDepth = 0f)
 	{
-		//IL_0066: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0072: Unknown result type (might be due to invalid IL or missing references)
-		//IL_007c: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0033: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0023: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0105: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0117: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0123: Unknown result type (might be due to invalid IL or missing references)
+		//IL_012d: Unknown result type (might be due to invalid IL or missing references)
 		LoadFish();
 		usedLureAmount = 1;
+		isOverfished = false;
+		if (!Fishing.disableOverfishing)
+		{
+			if (Fishing.debugOverfishing)
+			{
+				Debug.Log((object)$"FISH LOOKUP | Checking position {worldPos} for overfishing area...");
+			}
+			if ((Object)(object)OverfishedArea.GetOverfishedAreaAtPosition(worldPos) != (Object)null)
+			{
+				isOverfished = true;
+				if (JunkItems.Length == 0)
+				{
+					fishable = FallbackFish;
+					return ((Component)FallbackFish).GetComponent<ItemDefinition>();
+				}
+				int num = Random.Range(0, JunkItems.Length);
+				fishable = JunkItems[num];
+				if (Fishing.debugOverfishing)
+				{
+					Debug.Log((object)("FISH LOOKUP | Area is overfished, returning junk item " + ((Object)fishable).name));
+				}
+				return ((Component)JunkItems[num]).GetComponent<ItemDefinition>();
+			}
+		}
 		ItemModCompostable itemModCompostable = default(ItemModCompostable);
-		float num = (((Component)lure.info).TryGetComponent<ItemModCompostable>(ref itemModCompostable) ? itemModCompostable.BaitValue : 0f);
+		float num2 = (((Component)lure.info).TryGetComponent<ItemModCompostable>(ref itemModCompostable) ? itemModCompostable.BaitValue : 0f);
 		if ((Object)(object)itemModCompostable != (Object)null && itemModCompostable.MaxBaitStack > 0)
 		{
 			usedLureAmount = Mathf.Min(lure.amount, itemModCompostable.MaxBaitStack);
-			num *= (float)usedLureAmount;
+			num2 *= (float)usedLureAmount;
 		}
 		WaterBody.FishingTag fishingTag = (((Object)(object)bodyType != (Object)null) ? bodyType.FishingType : WaterBody.FishingTag.Ocean);
+		if (DeepSeaManager.IsInsideDeepSea(worldPos))
+		{
+			fishingTag &= ~WaterBody.FishingTag.Ocean;
+			fishingTag |= WaterBody.FishingTag.DeepSea;
+		}
 		if (WaterResource.IsFreshWater(worldPos))
 		{
 			fishingTag |= WaterBody.FishingTag.River;
 		}
-		float num2 = WaterLevel.GetOverallWaterDepth(worldPos, waves: true, volumes: false);
+		float num3 = WaterLevel.GetOverallWaterDepth(worldPos, waves: true, volumes: false);
 		if (worldPos.y < -10f)
 		{
-			num2 = 10f;
+			num3 = 10f;
 		}
 		if (overrideDepth != 0f)
 		{
-			num2 = overrideDepth;
+			num3 = overrideDepth;
 		}
-		int num3 = Random.Range(0, AvailableFish.Length);
+		int num4 = Random.Range(0, AvailableFish.Length);
 		for (int i = 0; i < AvailableFish.Length; i++)
 		{
-			num3++;
-			if (num3 >= AvailableFish.Length)
+			num4++;
+			if (num4 >= AvailableFish.Length)
 			{
-				num3 = 0;
+				num4 = 0;
 			}
-			ItemModFishable itemModFishable = AvailableFish[num3];
-			if (itemModFishable.CanBeFished && !(itemModFishable.MinimumBaitLevel > num) && (!(itemModFishable.MaximumBaitLevel > 0f) || !(num > itemModFishable.MaximumBaitLevel)) && !((Object)(object)itemModFishable == (Object)(object)ignoreFish) && (itemModFishable.RequiredTag == (WaterBody.FishingTag)(-1) || (itemModFishable.RequiredTag & fishingTag) != 0) && ((fishingTag & WaterBody.FishingTag.Ocean) != WaterBody.FishingTag.Ocean || ((!(itemModFishable.MinimumWaterDepth > 0f) || !(num2 < itemModFishable.MinimumWaterDepth)) && (!(itemModFishable.MaximumWaterDepth > 0f) || !(num2 > itemModFishable.MaximumWaterDepth)))) && !(Random.Range(0f, 1f) - num * 3f * 0.01f > itemModFishable.Chance))
+			ItemModFishable itemModFishable = AvailableFish[num4];
+			if (itemModFishable.CanBeFished && !(itemModFishable.MinimumBaitLevel > num2) && (!(itemModFishable.MaximumBaitLevel > 0f) || !(num2 > itemModFishable.MaximumBaitLevel)) && !((Object)(object)itemModFishable == (Object)(object)ignoreFish) && (itemModFishable.RequiredTag == (WaterBody.FishingTag)(-1) || (itemModFishable.RequiredTag & fishingTag) != 0) && ((fishingTag & WaterBody.FishingTag.Ocean) != WaterBody.FishingTag.Ocean || ((!(itemModFishable.MinimumWaterDepth > 0f) || !(num3 < itemModFishable.MinimumWaterDepth)) && (!(itemModFishable.MaximumWaterDepth > 0f) || !(num3 > itemModFishable.MaximumWaterDepth)))) && !(Random.Range(0f, 1f) - num2 * 3f * 0.01f > itemModFishable.Chance))
 			{
 				fishable = itemModFishable;
 				return ((Component)itemModFishable).GetComponent<ItemDefinition>();
@@ -10290,6 +12651,84 @@ public class FishLookup : BaseScriptableObject
 		if (num == 9)
 		{
 			player.GiveAchievement("PRO_ANGLER");
+		}
+	}
+}
+
+
+using System;
+using System.Collections.Generic;
+using ConVar;
+using Facepunch;
+using Spatial;
+using UnityEngine;
+
+public class OverfishedArea : BaseEntity
+{
+	public static Grid<OverfishedArea> OverfishedGrid = new Grid<OverfishedArea>(32, 8096f);
+
+	public override void ServerInit()
+	{
+		//IL_0012: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0022: Unknown result type (might be due to invalid IL or missing references)
+		base.ServerInit();
+		OverfishedGrid.Add(this, ((Component)this).transform.position.x, ((Component)this).transform.position.z);
+		((FacepunchBehaviour)this).Invoke((Action)KillMe, 60f * Fishing.overfishedAreaDurationMinutes);
+	}
+
+	private void KillMe()
+	{
+		Kill();
+	}
+
+	internal override void DoServerDestroy()
+	{
+		OverfishedGrid.Remove(this);
+		base.DoServerDestroy();
+	}
+
+	public static OverfishedArea GetOverfishedAreaAtPosition(Vector3 position)
+	{
+		//IL_0017: Unknown result type (might be due to invalid IL or missing references)
+		//IL_001d: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0077: Unknown result type (might be due to invalid IL or missing references)
+		//IL_007c: Unknown result type (might be due to invalid IL or missing references)
+		//IL_004b: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0057: Unknown result type (might be due to invalid IL or missing references)
+		//IL_005c: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0095: Unknown result type (might be due to invalid IL or missing references)
+		TimeWarning val = TimeWarning.New("OverfishedArea.GetOverfishedAreaAtPosition()", 0);
+		try
+		{
+			PooledList<OverfishedArea> val2 = Pool.Get<PooledList<OverfishedArea>>();
+			try
+			{
+				OverfishedGrid.Query(position.x, position.z, Fishing.overfishedAreaRadius, (List<OverfishedArea>)(object)val2);
+				foreach (OverfishedArea item in (List<OverfishedArea>)(object)val2)
+				{
+					if (Fishing.debugOverfishing)
+					{
+						Debug.Log((object)$"OVERFISHED AREA QUERY | Found an area at position {position}, at distance: {Vector3.Distance(((Component)item).transform.position, position)}");
+					}
+					if (Vector3.Distance(((Component)item).transform.position, position) < Fishing.overfishedAreaRadius)
+					{
+						if (Fishing.debugOverfishing)
+						{
+							Debug.Log((object)$"OVERFISHED AREA QUERY | Accepting area at position {position} as overfished!", (Object)(object)item);
+						}
+						return item;
+					}
+				}
+				return null;
+			}
+			finally
+			{
+				((IDisposable)val2)?.Dispose();
+			}
+		}
+		finally
+		{
+			((IDisposable)val)?.Dispose();
 		}
 	}
 }
@@ -11972,8 +14411,8 @@ using UnityEngine;
 
 public class MountedWeaponViewmodel : BaseViewModel
 {
-	[Header("Mounted Weapon Viewmodel")]
 	[SerializeField]
+	[Header("Mounted Weapon Viewmodel")]
 	private bool _invertForward;
 
 	[SerializeField]
@@ -16057,8 +18496,8 @@ public class BasePet : NPCPlayer, IThinker
 	[ServerVar]
 	public static bool onlyQueueBaseNavMovements = true;
 
-	[ServerVar]
 	[Help("How many miliseconds to budget for processing pet movements per frame")]
+	[ServerVar]
 	public static float movementupdatebudgetms = 1f;
 
 	public float BaseAttackRate = 2f;
@@ -16749,8 +19188,8 @@ public class AIThinkManager : BaseMonoBehaviour, IServerComponent
 	[ServerVar]
 	public static float animalframebudgetms = 2f;
 
-	[ServerVar]
 	[Help("How many miliseconds to budget for processing pet AI entities per server frame")]
+	[ServerVar]
 	public static float petframebudgetms = 1f;
 
 	private static int lastIndex = 0;
@@ -21949,7 +24388,7 @@ public class AIInformationZone : BaseMonoBehaviour, IServerComponent
 	private AIInformationGrid grid;
 
 	[NonSerialized]
-	public List<TriggerWakeAIZ> wakeTriggers = new List<TriggerWakeAIZ>();
+	public List<WakeAIZ> wakeZones = new List<WakeAIZ>();
 
 	[ServerVar]
 	public static bool UseSimpleLOSCheck = false;
@@ -26077,7 +28516,7 @@ public class NpcFoodManager : SingletonComponent<NpcFoodManager>, IServerCompone
 			{
 				return false;
 			}
-			return droppedItem.item.info.Traits.HasFlag(BaseEntity.TraitFlag.Meat);
+			return (droppedItem.item.info.Traits & BaseEntity.TraitFlag.Meat) == BaseEntity.TraitFlag.Meat;
 		}
 		return entity is BaseCorpse;
 	}
@@ -28283,482 +30722,6 @@ public class AccessibilityCollection<T> : BaseScriptableObject
 	public string convarName;
 
 	public T[] AllOptions;
-}
-
-
-using System;
-using UnityEngine;
-
-[CreateAssetMenu(menuName = "Rust/Accessibility/Colour Collection")]
-public class AccessibilityColourCollection : AccessibilityCollection<AccessibilityColourCollection.ColourPair>
-{
-	[Serializable]
-	public struct ColourPair
-	{
-		public Color A;
-
-		public Color B;
-	}
-}
-
-
-using System;
-using UnityEngine;
-
-[Serializable]
-public struct ColourPair
-{
-	public Color A;
-
-	public Color B;
-}
-
-
-using System;
-using UnityEngine;
-
-[CreateAssetMenu(menuName = "Rust/Accessibility/Material Collection")]
-public class AccessibilityMaterialCollection : AccessibilityCollection<AccessibilityMaterialCollection.MaterialOption>
-{
-	[Serializable]
-	public struct MaterialOption
-	{
-		public Material TargetMaterial;
-
-		public Color HudColour;
-	}
-}
-
-
-using System;
-using UnityEngine;
-
-[Serializable]
-public struct MaterialOption
-{
-	public Material TargetMaterial;
-
-	public Color HudColour;
-}
-
-
-public enum AIState
-{
-	None,
-	Idle,
-	Roam,
-	Chase,
-	Cover,
-	Combat,
-	Mounted,
-	Exfil,
-	Patrol,
-	Orbit,
-	Egress,
-	Land,
-	DropCrate,
-	MoveTowards,
-	Flee,
-	Attack,
-	Sleep,
-	Reload,
-	TakeCover,
-	Dismounted,
-	FollowPath,
-	NavigateHome,
-	CombatStationary,
-	Cooldown,
-	MoveToPoint,
-	MoveToVector3,
-	Blinded,
-	KillSelf,
-	MountAPC
-}
-
-
-public enum AIThinkMode
-{
-	FixedUpdate,
-	Interval,
-	None
-}
-
-
-using System;
-using UnityEngine;
-
-public class BasePathFinder
-{
-	private static Vector3[] preferedTopologySamples = (Vector3[])(object)new Vector3[4];
-
-	private static Vector3[] topologySamples = (Vector3[])(object)new Vector3[4];
-
-	private Vector3 chosenPosition;
-
-	private const float halfPI = MathF.PI / 180f;
-
-	public virtual Vector3 GetRandomPatrolPoint()
-	{
-		//IL_0000: Unknown result type (might be due to invalid IL or missing references)
-		return Vector3.zero;
-	}
-
-	public virtual AIMovePoint GetBestRoamPoint(Vector3 anchorPos, Vector3 currentPos, Vector3 currentDirection, float anchorClampDistance, float lookupMaxRange = 20f)
-	{
-		return null;
-	}
-
-	public void DebugDraw()
-	{
-		//IL_0000: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0005: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0006: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0011: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0020: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0036: Unknown result type (might be due to invalid IL or missing references)
-		//IL_004f: Unknown result type (might be due to invalid IL or missing references)
-		Color color = Gizmos.color;
-		Gizmos.color = Color.green;
-		Gizmos.DrawSphere(chosenPosition, 5f);
-		Gizmos.color = Color.blue;
-		Vector3[] array = topologySamples;
-		for (int i = 0; i < array.Length; i++)
-		{
-			Gizmos.DrawSphere(array[i], 2.5f);
-		}
-		Gizmos.color = color;
-	}
-
-	public virtual Vector3 GetRandomPositionAround(Vector3 position, float minDistFrom = 0f, float maxDistFrom = 2f)
-	{
-		//IL_000f: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0015: Unknown result type (might be due to invalid IL or missing references)
-		//IL_001a: Unknown result type (might be due to invalid IL or missing references)
-		//IL_001b: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0033: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0040: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0058: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0065: Unknown result type (might be due to invalid IL or missing references)
-		//IL_006d: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0072: Unknown result type (might be due to invalid IL or missing references)
-		if (maxDistFrom < 0f)
-		{
-			maxDistFrom = 0f;
-		}
-		Vector2 val = Random.insideUnitCircle * maxDistFrom;
-		float num = Mathf.Clamp(Mathf.Max(Mathf.Abs(val.x), minDistFrom), minDistFrom, maxDistFrom) * Mathf.Sign(val.x);
-		float num2 = Mathf.Clamp(Mathf.Max(Mathf.Abs(val.y), minDistFrom), minDistFrom, maxDistFrom) * Mathf.Sign(val.y);
-		return position + new Vector3(num, 0f, num2);
-	}
-
-	public virtual Vector3 GetBestRoamPosition(BaseNavigator navigator, Vector3 anchorPos, Vector3 fallbackPos, float minRange, float maxRange)
-	{
-		//IL_0027: Unknown result type (might be due to invalid IL or missing references)
-		//IL_002d: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0032: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0035: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0046: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00c0: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00c5: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0050: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00ea: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00eb: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00dd: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00e2: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00f1: Unknown result type (might be due to invalid IL or missing references)
-		//IL_005a: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0069: Unknown result type (might be due to invalid IL or missing references)
-		//IL_006b: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0075: Unknown result type (might be due to invalid IL or missing references)
-		//IL_007f: Unknown result type (might be due to invalid IL or missing references)
-		//IL_008e: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0090: Unknown result type (might be due to invalid IL or missing references)
-		float radius = Random.Range(minRange, maxRange);
-		int num = 0;
-		int num2 = 0;
-		float num3 = Random.Range(0f, 90f);
-		for (float num4 = 0f; num4 < 360f; num4 += 90f)
-		{
-			Vector3 pointOnCircle = GetPointOnCircle(anchorPos, radius, num4 + num3);
-			if (navigator.GetNearestNavmeshPosition(pointOnCircle, out var position, 10f) && navigator.IsPositionABiomeRequirement(position) && navigator.IsAcceptableWaterDepth(position) && !navigator.IsPositionPreventTopology(position))
-			{
-				topologySamples[num] = position;
-				num++;
-				if (navigator.IsPositionABiomePreference(position) && navigator.IsPositionATopologyPreference(position))
-				{
-					preferedTopologySamples[num2] = position;
-					num2++;
-				}
-			}
-		}
-		if (num2 > 0)
-		{
-			chosenPosition = preferedTopologySamples[Random.Range(0, num2)];
-		}
-		else if (num > 0)
-		{
-			chosenPosition = topologySamples[Random.Range(0, num)];
-		}
-		else
-		{
-			chosenPosition = fallbackPos;
-		}
-		return chosenPosition;
-	}
-
-	public virtual Vector3 GetBestRoamPositionFromAnchor(BaseNavigator navigator, Vector3 anchorPos, Vector3 fallbackPos, float minRange, float maxRange)
-	{
-		//IL_0027: Unknown result type (might be due to invalid IL or missing references)
-		//IL_002d: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0032: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0035: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0046: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0055: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0057: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0061: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00ee: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00ef: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00e1: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00e6: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00c4: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00c9: Unknown result type (might be due to invalid IL or missing references)
-		//IL_006b: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00f5: Unknown result type (might be due to invalid IL or missing references)
-		//IL_007a: Unknown result type (might be due to invalid IL or missing references)
-		//IL_007c: Unknown result type (might be due to invalid IL or missing references)
-		float radius = Random.Range(minRange, maxRange);
-		int num = 0;
-		int num2 = 0;
-		float num3 = Random.Range(0f, 90f);
-		for (float num4 = 0f; num4 < 360f; num4 += 90f)
-		{
-			Vector3 pointOnCircle = GetPointOnCircle(anchorPos, radius, num4 + num3);
-			if (navigator.GetNearestNavmeshPosition(pointOnCircle, out var position, 10f) && navigator.IsAcceptableWaterDepth(position))
-			{
-				topologySamples[num] = position;
-				num++;
-				if (navigator.IsPositionABiomePreference(position) && navigator.IsPositionATopologyPreference(position))
-				{
-					preferedTopologySamples[num2] = position;
-					num2++;
-				}
-			}
-		}
-		if (Random.Range(0f, 1f) <= 0.9f && num2 > 0)
-		{
-			chosenPosition = preferedTopologySamples[Random.Range(0, num2)];
-		}
-		else if (num > 0)
-		{
-			chosenPosition = topologySamples[Random.Range(0, num)];
-		}
-		else
-		{
-			chosenPosition = fallbackPos;
-		}
-		return chosenPosition;
-	}
-
-	public virtual bool GetBestFleePosition(BaseNavigator navigator, AIBrainSenses senses, BaseEntity fleeFrom, Vector3 fallbackPos, float minRange, float maxRange, out Vector3 result)
-	{
-		//IL_0023: Unknown result type (might be due to invalid IL or missing references)
-		//IL_002e: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0033: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0038: Unknown result type (might be due to invalid IL or missing references)
-		//IL_003b: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0011: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0016: Unknown result type (might be due to invalid IL or missing references)
-		//IL_005d: Unknown result type (might be due to invalid IL or missing references)
-		//IL_007e: Unknown result type (might be due to invalid IL or missing references)
-		//IL_009f: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00c0: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00e1: Unknown result type (might be due to invalid IL or missing references)
-		if ((Object)(object)fleeFrom == (Object)null)
-		{
-			result = ((Component)navigator).transform.position;
-			return false;
-		}
-		Vector3 dirFromThreat = Vector3Ex.Direction2D(((Component)navigator).transform.position, ((Component)fleeFrom).transform.position);
-		if (TestFleeDirection(navigator, dirFromThreat, 0f, minRange, maxRange, out result))
-		{
-			return true;
-		}
-		bool flag = Random.Range(0, 2) == 1;
-		if (TestFleeDirection(navigator, dirFromThreat, flag ? 45f : 315f, minRange, maxRange, out result))
-		{
-			return true;
-		}
-		if (TestFleeDirection(navigator, dirFromThreat, flag ? 315f : 45f, minRange, maxRange, out result))
-		{
-			return true;
-		}
-		if (TestFleeDirection(navigator, dirFromThreat, flag ? 90f : 270f, minRange, maxRange, out result))
-		{
-			return true;
-		}
-		if (TestFleeDirection(navigator, dirFromThreat, flag ? 270f : 90f, minRange, maxRange, out result))
-		{
-			return true;
-		}
-		if (TestFleeDirection(navigator, dirFromThreat, 135f + Random.Range(0f, 90f), minRange, maxRange, out result))
-		{
-			return true;
-		}
-		return false;
-	}
-
-	private bool TestFleeDirection(BaseNavigator navigator, Vector3 dirFromThreat, float offsetDegrees, float minRange, float maxRange, out Vector3 result)
-	{
-		//IL_0008: Unknown result type (might be due to invalid IL or missing references)
-		//IL_000d: Unknown result type (might be due to invalid IL or missing references)
-		//IL_001d: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0022: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0023: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0028: Unknown result type (might be due to invalid IL or missing references)
-		//IL_002f: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0034: Unknown result type (might be due to invalid IL or missing references)
-		//IL_003e: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0043: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0048: Unknown result type (might be due to invalid IL or missing references)
-		//IL_004a: Unknown result type (might be due to invalid IL or missing references)
-		//IL_005c: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0068: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0069: Unknown result type (might be due to invalid IL or missing references)
-		result = ((Component)navigator).transform.position;
-		Vector3 val = Quaternion.Euler(0f, offsetDegrees, 0f) * dirFromThreat;
-		Vector3 target = ((Component)navigator).transform.position + val * Random.Range(minRange, maxRange);
-		if (!navigator.GetNearestNavmeshPosition(target, out var position, 20f))
-		{
-			return false;
-		}
-		if (!navigator.IsAcceptableWaterDepth(position))
-		{
-			return false;
-		}
-		result = position;
-		return true;
-	}
-
-	public static Vector3 GetPointOnCircle(Vector3 center, float radius, float degrees)
-	{
-		//IL_0000: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0015: Unknown result type (might be due to invalid IL or missing references)
-		//IL_002b: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0032: Unknown result type (might be due to invalid IL or missing references)
-		float num = center.x + radius * Mathf.Cos(degrees * (MathF.PI / 180f));
-		float num2 = center.z + radius * Mathf.Sin(degrees * (MathF.PI / 180f));
-		return new Vector3(num, center.y, num2);
-	}
-}
-
-
-using System.Collections.Generic;
-using Facepunch;
-using UnityEngine;
-
-public class UnderwaterPathFinder : BasePathFinder
-{
-	private BaseEntity npc;
-
-	public void Init(BaseEntity npc)
-	{
-		this.npc = npc;
-	}
-
-	public override Vector3 GetBestRoamPosition(BaseNavigator navigator, Vector3 anchorPos, Vector3 fallbackPos, float minRange, float maxRange)
-	{
-		//IL_000c: Unknown result type (might be due to invalid IL or missing references)
-		//IL_002b: Unknown result type (might be due to invalid IL or missing references)
-		//IL_004b: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0050: Unknown result type (might be due to invalid IL or missing references)
-		//IL_006e: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0082: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00a8: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00ad: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00b5: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0179: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00cd: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00d5: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00da: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00df: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00e7: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00ec: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0111: Unknown result type (might be due to invalid IL or missing references)
-		//IL_011e: Unknown result type (might be due to invalid IL or missing references)
-		List<Vector3> list = Pool.Get<List<Vector3>>();
-		(float, float) waterAndTerrainSurface = WaterLevel.GetWaterAndTerrainSurface(((Component)navigator).transform.position, waves: false, volumes: false);
-		float item = waterAndTerrainSurface.Item1;
-		float item2 = waterAndTerrainSurface.Item2;
-		for (int i = 0; i < 8; i++)
-		{
-			Vector3 pointOnCircle = BasePathFinder.GetPointOnCircle(fallbackPos, Random.Range(1f, navigator.MaxRoamDistanceFromHome), Random.Range(0f, 359f));
-			pointOnCircle.y += Random.Range(-2f, 2f);
-			pointOnCircle.y = Mathf.Clamp(pointOnCircle.y, item2, item);
-			list.Add(pointOnCircle);
-		}
-		float num = -1f;
-		int num2 = -1;
-		for (int j = 0; j < list.Count; j++)
-		{
-			Vector3 val = list[j];
-			if (npc.IsVisible(val))
-			{
-				float num3 = 0f;
-				Vector3 val2 = Vector3Ex.Direction2D(val, ((Component)navigator).transform.position);
-				float num4 = Vector3.Dot(((Component)navigator).transform.forward, val2);
-				num3 += Mathf.InverseLerp(0.25f, 0.8f, num4) * 5f;
-				float num5 = Mathf.Abs(val.y - ((Component)navigator).transform.position.y);
-				num3 += 1f - Mathf.InverseLerp(1f, 3f, num5) * 5f;
-				if (num3 > num || num2 == -1)
-				{
-					num = num3;
-					num2 = j;
-				}
-			}
-		}
-		Vector3 result = list[num2];
-		Pool.FreeUnmanaged<Vector3>(ref list);
-		return result;
-	}
-
-	public override bool GetBestFleePosition(BaseNavigator navigator, AIBrainSenses senses, BaseEntity fleeFrom, Vector3 fallbackPos, float minRange, float maxRange, out Vector3 result)
-	{
-		//IL_0023: Unknown result type (might be due to invalid IL or missing references)
-		//IL_002e: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0033: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0038: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0041: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0046: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0050: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0055: Unknown result type (might be due to invalid IL or missing references)
-		//IL_005a: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0011: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0016: Unknown result type (might be due to invalid IL or missing references)
-		if ((Object)(object)fleeFrom == (Object)null)
-		{
-			result = ((Component)navigator).transform.position;
-			return false;
-		}
-		Vector3 val = Vector3Ex.Direction2D(((Component)navigator).transform.position, ((Component)fleeFrom).transform.position);
-		result = ((Component)navigator).transform.position + val * Random.Range(minRange, maxRange);
-		return true;
-	}
-}
-
-
-using System;
-using UnityEngine;
-
-public class AIDriverData : PrefabAttribute, IServerComponent
-{
-	public Vector3 FrontLocalPosition;
-
-	public Vector3 BackLocalPosition;
-
-	protected override Type GetIndexedType()
-	{
-		return typeof(AIDriverData);
-	}
 }
 
 

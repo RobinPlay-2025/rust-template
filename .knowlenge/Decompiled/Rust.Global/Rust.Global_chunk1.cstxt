@@ -197,6 +197,8 @@ public abstract class ObjectWorkQueue
 	public WorkQueueTelemStats Stats;
 
 	public abstract int QueueLength { get; }
+
+	public abstract int Capacity { get; }
 }
 
 
@@ -208,13 +210,29 @@ using UnityEngine;
 
 public abstract class ObjectWorkQueue<T> : ObjectWorkQueue
 {
-	protected Queue<T> queue = new Queue<T>();
+	protected Queue<T> queue = new Queue<T>(256);
 
-	protected HashSet<T> containerTest = new HashSet<T>();
+	protected HashSet<T> containerTest = new HashSet<T>(256);
+
+	private const int SecondsToTrack = 60;
+
+	private const int OverflowCountThreshold = 60;
+
+	private const int InitialCapacity = 256;
+
+	private const float LinearGrowthFactor = 1.1f;
+
+	private int minCapacity = 256;
+
+	private int capacityExceededCounter;
+
+	private DateTime nextCapacityEvalTime;
 
 	private readonly Stopwatch stopwatch = new Stopwatch();
 
 	public override int QueueLength => queue.Count;
+
+	public override int Capacity => minCapacity;
 
 	public ObjectWorkQueue()
 	{
@@ -226,9 +244,28 @@ public abstract class ObjectWorkQueue<T> : ObjectWorkQueue
 	{
 		queue.Clear();
 		containerTest.Clear();
-		if (HashSetMaxLength > 256)
+		HashSetMaxLength = 0;
+		minCapacity = 256;
+		nextCapacityEvalTime = default(DateTime);
+		capacityExceededCounter = 0;
+	}
+
+	public void TryShrink()
+	{
+		if (DateTime.Now > nextCapacityEvalTime)
 		{
-			containerTest = new HashSet<T>();
+			nextCapacityEvalTime = DateTime.Now + TimeSpan.FromSeconds(60.0);
+			capacityExceededCounter = 0;
+		}
+		if (HashSetMaxLength > minCapacity)
+		{
+			containerTest = new HashSet<T>(minCapacity);
+			if (++capacityExceededCounter > 60)
+			{
+				minCapacity = (int)((float)minCapacity * 1.1f);
+				nextCapacityEvalTime = DateTime.Now + TimeSpan.FromSeconds(60.0);
+				capacityExceededCounter = 0;
+			}
 			HashSetMaxLength = 0;
 		}
 	}
@@ -244,6 +281,7 @@ public abstract class ObjectWorkQueue<T> : ObjectWorkQueue
 		stopwatch.Restart();
 		SortQueue();
 		BeforeRunJobs();
+		HashSetMaxLength = Mathf.Max(containerTest.Count, HashSetMaxLength);
 		TimeWarning val = TimeWarning.New(Name, (int)WarningThreshold.TotalMilliseconds);
 		try
 		{
@@ -269,7 +307,7 @@ public abstract class ObjectWorkQueue<T> : ObjectWorkQueue
 		}
 		if (queue.Count == 0)
 		{
-			Clear();
+			TryShrink();
 		}
 		Stats.QueueCount = Stats.ProcessedCount;
 		Stats.QueueCount += QueueLength;
@@ -283,7 +321,6 @@ public abstract class ObjectWorkQueue<T> : ObjectWorkQueue
 		{
 			queue.Enqueue(entity);
 			containerTest.Add(entity);
-			HashSetMaxLength = Mathf.Max(containerTest.Count, HashSetMaxLength);
 		}
 	}
 
@@ -2098,9 +2135,9 @@ using UnityEngine.Assertions;
 [BurstCompile]
 public static class GJK
 {
-	internal delegate float Distance_00000095$PostfixBurstDelegate(in OBB a, in OBB b);
+	internal delegate float Distance_00000098$PostfixBurstDelegate(in OBB a, in OBB b);
 
-	internal static class Distance_00000095$BurstDirectCall
+	internal static class Distance_00000098$BurstDirectCall
 	{
 		private static IntPtr Pointer;
 
@@ -2111,7 +2148,7 @@ public static class GJK
 		{
 			if (Pointer == (IntPtr)0)
 			{
-				Pointer = (nint)BurstCompiler.GetILPPMethodFunctionPointer2(DeferredCompilation, (RuntimeMethodHandle)/*OpCode not supported: LdMemberToken*/, typeof(Distance_00000095$PostfixBurstDelegate).TypeHandle);
+				Pointer = (nint)BurstCompiler.GetILPPMethodFunctionPointer2(DeferredCompilation, (RuntimeMethodHandle)/*OpCode not supported: LdMemberToken*/, typeof(Distance_00000098$PostfixBurstDelegate).TypeHandle);
 			}
 			P_0 = Pointer;
 		}
@@ -2132,7 +2169,7 @@ public static class GJK
 		{
 		}
 
-		static Distance_00000095$BurstDirectCall()
+		static Distance_00000098$BurstDirectCall()
 		{
 			Constructor();
 		}
@@ -2151,9 +2188,9 @@ public static class GJK
 		}
 	}
 
-	internal delegate float Distance2_00000096$PostfixBurstDelegate(in OBB a, in OBB b);
+	internal delegate float Distance2_00000099$PostfixBurstDelegate(in OBB a, in OBB b);
 
-	internal static class Distance2_00000096$BurstDirectCall
+	internal static class Distance2_00000099$BurstDirectCall
 	{
 		private static IntPtr Pointer;
 
@@ -2164,7 +2201,7 @@ public static class GJK
 		{
 			if (Pointer == (IntPtr)0)
 			{
-				Pointer = (nint)BurstCompiler.GetILPPMethodFunctionPointer2(DeferredCompilation, (RuntimeMethodHandle)/*OpCode not supported: LdMemberToken*/, typeof(Distance2_00000096$PostfixBurstDelegate).TypeHandle);
+				Pointer = (nint)BurstCompiler.GetILPPMethodFunctionPointer2(DeferredCompilation, (RuntimeMethodHandle)/*OpCode not supported: LdMemberToken*/, typeof(Distance2_00000099$PostfixBurstDelegate).TypeHandle);
 			}
 			P_0 = Pointer;
 		}
@@ -2185,7 +2222,7 @@ public static class GJK
 		{
 		}
 
-		static Distance2_00000096$BurstDirectCall()
+		static Distance2_00000099$BurstDirectCall()
 		{
 			Constructor();
 		}
@@ -2211,13 +2248,13 @@ public static class GJK
 	[BurstCompile]
 	public static float Distance(in OBB a, in OBB b)
 	{
-		return Distance_00000095$BurstDirectCall.Invoke(in a, in b);
+		return Distance_00000098$BurstDirectCall.Invoke(in a, in b);
 	}
 
 	[BurstCompile]
 	public static float Distance2(in OBB a, in OBB b)
 	{
-		return Distance2_00000096$BurstDirectCall.Invoke(in a, in b);
+		return Distance2_00000099$BurstDirectCall.Invoke(in a, in b);
 	}
 
 	private static float DistanceInternal(in ReadOnlySpan<Vector3> a, in ReadOnlySpan<Vector3> b)
@@ -2547,13 +2584,13 @@ public static class GJK
 }
 
 
-internal delegate float Distance_00000095$PostfixBurstDelegate(in OBB a, in OBB b);
+internal delegate float Distance_00000098$PostfixBurstDelegate(in OBB a, in OBB b);
 
 
 using System;
 using Unity.Burst;
 
-internal static class Distance_00000095$BurstDirectCall
+internal static class Distance_00000098$BurstDirectCall
 {
 	private static IntPtr Pointer;
 
@@ -2564,7 +2601,7 @@ internal static class Distance_00000095$BurstDirectCall
 	{
 		if (Pointer == (IntPtr)0)
 		{
-			Pointer = (nint)BurstCompiler.GetILPPMethodFunctionPointer2(DeferredCompilation, (RuntimeMethodHandle)/*OpCode not supported: LdMemberToken*/, typeof(Distance_00000095$PostfixBurstDelegate).TypeHandle);
+			Pointer = (nint)BurstCompiler.GetILPPMethodFunctionPointer2(DeferredCompilation, (RuntimeMethodHandle)/*OpCode not supported: LdMemberToken*/, typeof(Distance_00000098$PostfixBurstDelegate).TypeHandle);
 		}
 		P_0 = Pointer;
 	}
@@ -2585,7 +2622,7 @@ internal static class Distance_00000095$BurstDirectCall
 	{
 	}
 
-	static Distance_00000095$BurstDirectCall()
+	static Distance_00000098$BurstDirectCall()
 	{
 		Constructor();
 	}
@@ -2605,13 +2642,13 @@ internal static class Distance_00000095$BurstDirectCall
 }
 
 
-internal delegate float Distance2_00000096$PostfixBurstDelegate(in OBB a, in OBB b);
+internal delegate float Distance2_00000099$PostfixBurstDelegate(in OBB a, in OBB b);
 
 
 using System;
 using Unity.Burst;
 
-internal static class Distance2_00000096$BurstDirectCall
+internal static class Distance2_00000099$BurstDirectCall
 {
 	private static IntPtr Pointer;
 
@@ -2622,7 +2659,7 @@ internal static class Distance2_00000096$BurstDirectCall
 	{
 		if (Pointer == (IntPtr)0)
 		{
-			Pointer = (nint)BurstCompiler.GetILPPMethodFunctionPointer2(DeferredCompilation, (RuntimeMethodHandle)/*OpCode not supported: LdMemberToken*/, typeof(Distance2_00000096$PostfixBurstDelegate).TypeHandle);
+			Pointer = (nint)BurstCompiler.GetILPPMethodFunctionPointer2(DeferredCompilation, (RuntimeMethodHandle)/*OpCode not supported: LdMemberToken*/, typeof(Distance2_00000099$PostfixBurstDelegate).TypeHandle);
 		}
 		P_0 = Pointer;
 	}
@@ -2643,7 +2680,7 @@ internal static class Distance2_00000096$BurstDirectCall
 	{
 	}
 
-	static Distance2_00000096$BurstDirectCall()
+	static Distance2_00000099$BurstDirectCall()
 	{
 		Constructor();
 	}
@@ -4454,30 +4491,32 @@ public struct OBB : IEquatable<OBB>
 	public void DebugDrawGizmos(Color colour)
 	{
 		//IL_0000: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0016: Unknown result type (might be due to invalid IL or missing references)
-		//IL_002b: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0045: Unknown result type (might be due to invalid IL or missing references)
-		//IL_005a: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0074: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0089: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00a3: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00b8: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00d2: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00e7: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0101: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0116: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0130: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0145: Unknown result type (might be due to invalid IL or missing references)
-		//IL_015f: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0174: Unknown result type (might be due to invalid IL or missing references)
-		//IL_018e: Unknown result type (might be due to invalid IL or missing references)
-		//IL_01a3: Unknown result type (might be due to invalid IL or missing references)
-		//IL_01bd: Unknown result type (might be due to invalid IL or missing references)
-		//IL_01d2: Unknown result type (might be due to invalid IL or missing references)
-		//IL_01ec: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0201: Unknown result type (might be due to invalid IL or missing references)
-		//IL_021b: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0230: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0005: Unknown result type (might be due to invalid IL or missing references)
+		//IL_001b: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0030: Unknown result type (might be due to invalid IL or missing references)
+		//IL_004a: Unknown result type (might be due to invalid IL or missing references)
+		//IL_005f: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0079: Unknown result type (might be due to invalid IL or missing references)
+		//IL_008e: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00a8: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00bd: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00d7: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00ec: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0106: Unknown result type (might be due to invalid IL or missing references)
+		//IL_011b: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0135: Unknown result type (might be due to invalid IL or missing references)
+		//IL_014a: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0164: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0179: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0193: Unknown result type (might be due to invalid IL or missing references)
+		//IL_01a8: Unknown result type (might be due to invalid IL or missing references)
+		//IL_01c2: Unknown result type (might be due to invalid IL or missing references)
+		//IL_01d7: Unknown result type (might be due to invalid IL or missing references)
+		//IL_01f1: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0206: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0220: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0235: Unknown result type (might be due to invalid IL or missing references)
+		Color color = Gizmos.color;
 		Gizmos.color = colour;
 		Gizmos.DrawLine(GetPoint(-1f, -1f, -1f), GetPoint(1f, -1f, -1f));
 		Gizmos.DrawLine(GetPoint(-1f, -1f, 1f), GetPoint(1f, -1f, 1f));
@@ -4491,6 +4530,7 @@ public struct OBB : IEquatable<OBB>
 		Gizmos.DrawLine(GetPoint(-1f, 1f, 1f), GetPoint(1f, 1f, 1f));
 		Gizmos.DrawLine(GetPoint(-1f, 1f, -1f), GetPoint(-1f, 1f, 1f));
 		Gizmos.DrawLine(GetPoint(1f, 1f, -1f), GetPoint(1f, 1f, 1f));
+		Gizmos.color = color;
 	}
 
 	public bool Equals(OBB other)
@@ -5244,14 +5284,27 @@ public class TextBuffer
 
 	public void Add(string text)
 	{
-		foreach (string item in text.SplitToLines())
+		if (text.IndexOf('\n') < 0)
 		{
-			buffer.Enqueue(item);
+			buffer.Enqueue(text);
 			curlines++;
-			curchars += item.Length;
+			curchars += text.Length;
 			while (curlines > maxlines || curchars > maxchars)
 			{
 				Remove();
+			}
+		}
+		else
+		{
+			foreach (string item in text.SplitToLines())
+			{
+				buffer.Enqueue(item);
+				curlines++;
+				curchars += item.Length;
+				while (curlines > maxlines || curchars > maxchars)
+				{
+					Remove();
+				}
 			}
 		}
 		dirty = true;
@@ -9274,8 +9327,8 @@ public static class Global
 
 	public static void Init()
 	{
-		LaunchCountThisVersion = PlayerPrefs.GetInt($"launch{2622}", 0) + 1;
-		PlayerPrefs.SetInt($"launch{2622}", LaunchCountThisVersion);
+		LaunchCountThisVersion = PlayerPrefs.GetInt($"launch{2623}", 0) + 1;
+		PlayerPrefs.SetInt($"launch{2623}", LaunchCountThisVersion);
 	}
 }
 
@@ -9922,19 +9975,19 @@ public class PropRendererDebug : MonoBehaviour
 
 public static class Protocol
 {
-	public const int network = 2622;
+	public const int network = 2623;
 
-	public const int save = 282;
+	public const int save = 283;
 
 	public const int report = 1;
 
-	public const int persistance = 11;
+	public const int persistance = 12;
 
 	public const int analytics_db = 1;
 
 	public const int ping = 1;
 
-	public static string printable => 2622 + "." + 282 + "." + 1;
+	public static string printable => 2623 + "." + 283 + "." + 1;
 }
 
 
@@ -10454,8 +10507,8 @@ internal static class $BurstDirectCallInitializer
 	[RuntimeInitializeOnLoadMethod(/*Could not decode attribute arguments.*/)]
 	private static void Initialize()
 	{
-		GJK.Distance_00000095$BurstDirectCall.Initialize();
-		GJK.Distance2_00000096$BurstDirectCall.Initialize();
+		GJK.Distance_00000098$BurstDirectCall.Initialize();
+		GJK.Distance2_00000099$BurstDirectCall.Initialize();
 	}
 }
 

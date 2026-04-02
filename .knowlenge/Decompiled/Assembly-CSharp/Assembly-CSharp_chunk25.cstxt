@@ -1,4 +1,3080 @@
 using System;
+using Rust.Ai.Gen2;
+using UnityEngine;
+
+[Serializable]
+public class State_ScientistSurprised : FSMStateBase
+{
+	public float angularSpeedOverride;
+
+	public float timeBeforeTurning;
+
+	public float minTimeBeforeShooting = 0.6f;
+
+	public float shootingDuration = 0.4f;
+
+	public float maxDuration = 1f;
+
+	public ENPCVoicelineCategory voicelineCategory = ENPCVoicelineCategory.Surprise;
+
+	private NpcShootingComponent _shooting;
+
+	private NpcBarkComponent _barkComponent;
+
+	private float elapsedTime;
+
+	private float elapsedTimeShooting;
+
+	private Quaternion startRotation;
+
+	private LockState.LockHandle pauseHandle;
+
+	private bool wasSurprisedFromBehind;
+
+	private NpcShootingComponent Shooting => _shooting ?? (_shooting = ((Component)Owner).GetComponent<NpcShootingComponent>());
+
+	private NpcBarkComponent BarkComponent => _barkComponent ?? (_barkComponent = ((Component)Owner).GetComponent<NpcBarkComponent>());
+
+	public override EFSMStateStatus OnStateEnter(FSMPayload payload)
+	{
+		//IL_0020: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0025: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0031: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0036: Unknown result type (might be due to invalid IL or missing references)
+		//IL_003b: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0040: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00d0: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00d5: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00e1: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00e6: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00f0: Unknown result type (might be due to invalid IL or missing references)
+		if (!base.Senses.FindTargetLKP(out var lkp))
+		{
+			return EFSMStateStatus.Failure;
+		}
+		startRotation = ((Component)Owner).transform.rotation;
+		base.Agent.overrideDirection = Vector3Ex.NormalizeXZ(startRotation * Vector3.forward);
+		pauseHandle = base.Agent.Pause();
+		Shooting.AllowShooting = false;
+		Shooting.AllowBeingAccurate = false;
+		BarkComponent.PlayVoicelineFromCategory(voicelineCategory);
+		elapsedTime = 0f;
+		elapsedTimeShooting = 0f;
+		if (angularSpeedOverride > 0f)
+		{
+			base.Agent.overrideAngularSpeed = angularSpeedOverride;
+		}
+		wasSurprisedFromBehind = Vector3.Angle(((Component)Owner).transform.forward, Vector3Ex.WithY(lkp - ((Component)Owner).transform.position, 0f)) > 60f;
+		return base.OnStateEnter(payload);
+	}
+
+	public override EFSMStateStatus OnStateUpdate(float deltaTime)
+	{
+		//IL_0040: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0047: Unknown result type (might be due to invalid IL or missing references)
+		//IL_004c: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0051: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0058: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0069: Unknown result type (might be due to invalid IL or missing references)
+		//IL_006e: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0071: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0072: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0077: Unknown result type (might be due to invalid IL or missing references)
+		//IL_007f: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0081: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0086: Unknown result type (might be due to invalid IL or missing references)
+		//IL_008c: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0096: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00b9: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00be: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00ca: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00cf: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00d9: Unknown result type (might be due to invalid IL or missing references)
+		if (!base.Senses.FindTargetLKP(out var lkp, applyHeightOffset: true, predict: false, ignoreCrouch: false))
+		{
+			return EFSMStateStatus.Failure;
+		}
+		EFSMStateStatus result = base.OnStateUpdate(deltaTime);
+		elapsedTime += deltaTime;
+		if (!wasSurprisedFromBehind || !(elapsedTime < timeBeforeTurning))
+		{
+			Vector3 val = lkp - base.Senses.EyePosition;
+			base.Agent.overrideDirection = val;
+			Matrix4x4 worldToNavMeshSpace = Owner.WorldToNavMeshSpace;
+			Vector3 val2 = ((Matrix4x4)(ref worldToNavMeshSpace)).MultiplyVector(val);
+			base.Agent.Move(-Vector3Ex.NormalizeXZ(val2) * deltaTime * 1.7f);
+		}
+		if (elapsedTime >= minTimeBeforeShooting && Vector3.Angle(((Component)Owner).transform.forward, Vector3Ex.WithY(lkp - ((Component)Owner).transform.position, 0f)) <= 5f)
+		{
+			Shooting.AllowShooting = true;
+		}
+		if (Shooting.AllowShooting)
+		{
+			elapsedTimeShooting += deltaTime;
+			if (elapsedTimeShooting >= shootingDuration)
+			{
+				return EFSMStateStatus.Success;
+			}
+		}
+		if (elapsedTime > maxDuration)
+		{
+			return EFSMStateStatus.Success;
+		}
+		return result;
+	}
+
+	public override void OnStateExit()
+	{
+		base.Agent.overrideAngularSpeed = null;
+		base.Agent.overrideDirection = null;
+		base.Agent.Unpause(ref pauseHandle);
+		Shooting.AllowShooting = true;
+		Shooting.AllowBeingAccurate = true;
+		base.OnStateExit();
+	}
+}
+
+
+using System;
+using Rust.Ai.Gen2;
+
+[Serializable]
+public class Trans_CanThrowGrenade : FSMSlowTransitionBase
+{
+	protected override bool EvaluateAtInterval(ref FSMPayload payload)
+	{
+		//IL_001f: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0024: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0025: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0033: Unknown result type (might be due to invalid IL or missing references)
+		if (!State_ThrowGrenade.FindPotentialLandingPoint(base.Senses, out var landingPoint, out var throwVelocity))
+		{
+			return false;
+		}
+		if (!State_ThrowGrenade.ValidateLandingPoint(Owner, base.Senses.EyePosition, landingPoint, throwVelocity, out var _))
+		{
+			return false;
+		}
+		payload.velocity = throwVelocity;
+		return true;
+	}
+}
+
+
+using System;
+using System.Collections.Generic;
+using ConVar;
+using Facepunch;
+using Rust.Ai.Gen2;
+using UnityEngine;
+
+[Serializable]
+public class State_ThrowGrenade : FSMStateBase
+{
+	public GameObjectRef deployedGrenadePrefab;
+
+	public float cooldown = 60f;
+
+	public const float grenadeRadius = 0.2f;
+
+	public const float explosionRadius = 6f;
+
+	public const string thrownGrenadeKey = "ThrownGrenadeRecently";
+
+	private const float duration = 1f;
+
+	private const float overshoot = 0.01f;
+
+	private NpcShootingComponent _shooting;
+
+	private NpcBarkComponent _barkComponent;
+
+	private float remainingDuration;
+
+	private NpcShootingComponent Shooting => _shooting ?? (_shooting = ((Component)Owner).GetComponent<NpcShootingComponent>());
+
+	private NpcBarkComponent BarkComponent => _barkComponent ?? (_barkComponent = ((Component)Owner).GetComponent<NpcBarkComponent>());
+
+	public static bool FindPotentialLandingPoint(SenseComponent Senses, out Vector3 landingPoint, out Vector3 throwVelocity)
+	{
+		//IL_0001: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0006: Unknown result type (might be due to invalid IL or missing references)
+		//IL_000c: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0011: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0026: Unknown result type (might be due to invalid IL or missing references)
+		//IL_002b: Unknown result type (might be due to invalid IL or missing references)
+		//IL_002c: Unknown result type (might be due to invalid IL or missing references)
+		//IL_002d: Unknown result type (might be due to invalid IL or missing references)
+		//IL_002e: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0033: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0038: Unknown result type (might be due to invalid IL or missing references)
+		//IL_003a: Unknown result type (might be due to invalid IL or missing references)
+		//IL_003b: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0041: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0046: Unknown result type (might be due to invalid IL or missing references)
+		//IL_004b: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0050: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0055: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0056: Unknown result type (might be due to invalid IL or missing references)
+		//IL_005b: Unknown result type (might be due to invalid IL or missing references)
+		//IL_005f: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0064: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0065: Unknown result type (might be due to invalid IL or missing references)
+		//IL_006b: Unknown result type (might be due to invalid IL or missing references)
+		//IL_006c: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0071: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0076: Unknown result type (might be due to invalid IL or missing references)
+		//IL_007b: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0080: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0082: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0084: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0089: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00d4: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00d8: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00dd: Unknown result type (might be due to invalid IL or missing references)
+		//IL_009b: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00a1: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00a2: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00a7: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00ac: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00b1: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00b6: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00b8: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00ba: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00bf: Unknown result type (might be due to invalid IL or missing references)
+		landingPoint = Vector3.zero;
+		throwVelocity = Vector3.zero;
+		if (!Senses.FindTargetLKP(out var lkp))
+		{
+			return false;
+		}
+		Vector3 eyePosition = Senses.EyePosition;
+		Vector3 val = Vector3Ex.NormalizeXZ(lkp - eyePosition);
+		landingPoint = lkp + val * 1f;
+		Vector3 val2 = Vector3.Cross(Vector3.up, val);
+		Vector3 normalized = ((Vector3)(ref val2)).normalized;
+		Vector3 val3 = val + Quaternion.AngleAxis(10f, normalized) * Vector3.up;
+		float throwVelocity2 = ThrownWeapon.GetThrowVelocity(eyePosition, landingPoint, val3);
+		if (float.IsNaN(throwVelocity2))
+		{
+			val3 = val + Quaternion.AngleAxis(20f, normalized) * Vector3.up;
+			throwVelocity2 = ThrownWeapon.GetThrowVelocity(eyePosition, landingPoint, val3);
+			if (float.IsNaN(throwVelocity2))
+			{
+				return false;
+			}
+		}
+		throwVelocity = val3 * throwVelocity2;
+		return true;
+	}
+
+	public static bool ValidateLandingPoint(BaseEntity querier, Vector3 origin, Vector3 destination, Vector3 initialVelocity, out RaycastHit hitInfo, int maxSegments = 5)
+	{
+		//IL_0002: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0008: Unknown result type (might be due to invalid IL or missing references)
+		//IL_000e: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0013: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0027: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0028: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0029: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0033: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0038: Unknown result type (might be due to invalid IL or missing references)
+		//IL_004a: Unknown result type (might be due to invalid IL or missing references)
+		//IL_004b: Unknown result type (might be due to invalid IL or missing references)
+		//IL_004c: Unknown result type (might be due to invalid IL or missing references)
+		//IL_004d: Unknown result type (might be due to invalid IL or missing references)
+		//IL_004e: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00a8: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00a9: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00ac: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00b1: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00bb: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00bd: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00c4: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00cb: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00d0: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00d5: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00d7: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00d8: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00dc: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00e1: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00e6: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00e8: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00ea: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00eb: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00f0: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0156: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0158: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0159: Unknown result type (might be due to invalid IL or missing references)
+		//IL_015b: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0104: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0107: Unknown result type (might be due to invalid IL or missing references)
+		//IL_010c: Unknown result type (might be due to invalid IL or missing references)
+		//IL_012a: Unknown result type (might be due to invalid IL or missing references)
+		//IL_012f: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0140: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0145: Unknown result type (might be due to invalid IL or missing references)
+		hitInfo = default(RaycastHit);
+		Vector3 val = Vector3Ex.WithY(initialVelocity, 0f);
+		float magnitude = ((Vector3)(ref val)).magnitude;
+		if (magnitude < 0.001f)
+		{
+			return false;
+		}
+		val = Vector3Ex.WithY(destination - origin, 0f);
+		float num = ((Vector3)(ref val)).magnitude / magnitude + 0.01f;
+		Vector3 val2 = origin;
+		Vector3 val3 = initialVelocity;
+		float num2 = Mathf.Abs(Physics.gravity.y);
+		float num3 = num / (float)maxSegments;
+		int num4 = Mathf.CeilToInt(num / num3);
+		num3 = num / (float)num4;
+		float num5 = 0f;
+		Vector3 val4 = default(Vector3);
+		for (int i = 0; i < num4; i++)
+		{
+			if (!(num5 < num))
+			{
+				break;
+			}
+			float num6 = Mathf.Min(num3, num - num5);
+			((Vector3)(ref val4))..ctor(0f, 0f - num2, 0f);
+			Vector3 val5 = val2 + val3 * num6 + 0.5f * val4 * num6 * num6;
+			Vector3 val6 = val3 + val4 * num6;
+			Vector3 val7 = val5 - val2;
+			float magnitude2 = ((Vector3)(ref val7)).magnitude;
+			if (magnitude2 > 0.001f && GamePhysics.Trace(new Ray(val2, ((Vector3)(ref val7)).normalized), 0.2f, out hitInfo, magnitude2, 1218519297, (QueryTriggerInteraction)0, querier))
+			{
+				if (Vector3.Distance(((RaycastHit)(ref hitInfo)).point, origin) <= 6f)
+				{
+					return false;
+				}
+				if (Vector3.Distance(((RaycastHit)(ref hitInfo)).point, destination) > 6f)
+				{
+					return false;
+				}
+				return true;
+			}
+			val2 = val5;
+			val3 = val6;
+			num5 += num6;
+		}
+		return false;
+	}
+
+	public override EFSMStateStatus OnStateEnter(FSMPayload payload)
+	{
+		//IL_0042: Unknown result type (might be due to invalid IL or missing references)
+		//IL_004e: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0053: Unknown result type (might be due to invalid IL or missing references)
+		//IL_007e: Unknown result type (might be due to invalid IL or missing references)
+		if (!payload.velocity.HasValue)
+		{
+			if (AI.logIssues)
+			{
+				Debug.LogError((object)$"State_ThrowGrenade entered without valid velocity payload for {Owner}");
+			}
+			return EFSMStateStatus.Failure;
+		}
+		BaseEntity baseEntity = GameManager.server.CreateEntity(deployedGrenadePrefab.resourcePath, base.Senses.EyePosition, Quaternion.LookRotation(payload.velocity.Value));
+		if ((Object)(object)baseEntity == (Object)null)
+		{
+			return EFSMStateStatus.Failure;
+		}
+		baseEntity.SetCreatorEntity(Owner);
+		baseEntity.SetVelocity(payload.velocity.Value);
+		baseEntity.Spawn();
+		remainingDuration = 1f;
+		Shooting.AllowShooting = false;
+		base.Blackboard.Add("ThrownGrenadeRecently", cooldown);
+		PooledList<BaseEntity> val = Pool.Get<PooledList<BaseEntity>>();
+		try
+		{
+			base.Senses.GetPerceivedAllies((List<BaseEntity>)(object)val);
+			foreach (BaseEntity item in (List<BaseEntity>)(object)val)
+			{
+				((Component)item).GetComponent<BlackboardComponent>().Add("ThrownGrenadeRecently", cooldown);
+			}
+		}
+		finally
+		{
+			((IDisposable)val)?.Dispose();
+		}
+		return base.OnStateEnter(payload);
+	}
+
+	public override EFSMStateStatus OnStateUpdate(float deltaTime)
+	{
+		remainingDuration -= deltaTime;
+		if (remainingDuration <= 0f)
+		{
+			return EFSMStateStatus.Success;
+		}
+		return base.OnStateUpdate(deltaTime);
+	}
+
+	public override void OnStateExit()
+	{
+		Shooting.AllowShooting = true;
+		base.OnStateExit();
+	}
+}
+
+
+using System;
+using System.Collections.Generic;
+using ConVar;
+using Facepunch;
+using Rust.Ai.Gen2;
+using UnityEngine;
+
+public static class NpcPushHelper
+{
+	public static void CoordinatePush(BaseEntity coordinator, float maxDistance = 50f)
+	{
+		//IL_0036: Unknown result type (might be due to invalid IL or missing references)
+		//IL_006d: Unknown result type (might be due to invalid IL or missing references)
+		SenseComponent senseComponent = default(SenseComponent);
+		NpcZoneComponent npcZoneComponent = default(NpcZoneComponent);
+		Scientist2FSM scientist2FSM = default(Scientist2FSM);
+		if (((Component)coordinator).TryGetComponent<SenseComponent>(ref senseComponent) && ((Component)coordinator).TryGetComponent<NpcZoneComponent>(ref npcZoneComponent) && senseComponent.FindTarget(out var target) && senseComponent.FindLKP(target, out var lkp) && FindBestPartner(((Component)coordinator).transform.position, senseComponent, npcZoneComponent, out var bestPartner, maxDistance) && ((Component)bestPartner).TryGetComponent<Scientist2FSM>(ref scientist2FSM))
+		{
+			scientist2FSM.RushPositionTrans.Trigger(new FSMPayload
+			{
+				entity = target,
+				position = lkp
+			});
+			NpcBarkComponent npcBarkComponent = default(NpcBarkComponent);
+			if (AI.npcBarksEnabled && ((Component)coordinator).TryGetComponent<NpcBarkComponent>(ref npcBarkComponent))
+			{
+				npcBarkComponent.PlayVoicelineFromCategory(ENPCVoicelineCategory.Push, bestPartner);
+			}
+		}
+	}
+
+	public static bool FindBestPartner(Vector3 worldPosition, SenseComponent SenseComponent, NpcZoneComponent NpcZoneComponent, out BaseEntity bestPartner, float maxDistance)
+	{
+		//IL_0041: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0049: Unknown result type (might be due to invalid IL or missing references)
+		TimeWarning val = TimeWarning.New("NpcPushHelper.FindBestPartner", 0);
+		try
+		{
+			bestPartner = null;
+			PooledList<BaseEntity> val2 = Pool.Get<PooledList<BaseEntity>>();
+			try
+			{
+				SenseComponent.GetPerceivedAllies((List<BaseEntity>)(object)val2);
+				float num = float.MaxValue;
+				BaseEntity baseEntity = null;
+				float num2 = float.MaxValue;
+				BaseEntity baseEntity2 = null;
+				foreach (BaseEntity item in (List<BaseEntity>)(object)val2)
+				{
+					float num3 = DistanceWithExaggeratedY(worldPosition, ((Component)item).transform.position);
+					if (!(num3 > maxDistance))
+					{
+						if (num3 < num2)
+						{
+							num2 = num3;
+							baseEntity2 = item;
+						}
+						if (NpcZoneComponent.IsInSameZone(item) && num3 < num)
+						{
+							num = num3;
+							baseEntity = item;
+						}
+					}
+				}
+				if ((Object)(object)baseEntity2 == (Object)null && (Object)(object)baseEntity == (Object)null)
+				{
+					return false;
+				}
+				bestPartner = baseEntity ?? baseEntity2;
+				return true;
+			}
+			finally
+			{
+				((IDisposable)val2)?.Dispose();
+			}
+		}
+		finally
+		{
+			((IDisposable)val)?.Dispose();
+		}
+	}
+
+	private static float DistanceWithExaggeratedY(Vector3 a, Vector3 b, float yDistMultiplier = 6f)
+	{
+		//IL_0000: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0006: Unknown result type (might be due to invalid IL or missing references)
+		//IL_000c: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0011: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0017: Unknown result type (might be due to invalid IL or missing references)
+		//IL_001d: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0027: Unknown result type (might be due to invalid IL or missing references)
+		//IL_002d: Unknown result type (might be due to invalid IL or missing references)
+		float num = Vector2.Distance(new Vector2(a.x, a.z), new Vector2(b.x, b.z));
+		float num2 = Mathf.Abs(a.y - b.y);
+		return num + num2 * yDistMultiplier;
+	}
+}
+
+
+using Rust;
+using Rust.Ai.Gen2;
+using UnityEngine;
+
+[SoftRequireComponent(typeof(NpcZoneComponent), typeof(NPCEncounterTimer), typeof(NpcShootingComponent))]
+[SoftRequireComponent(typeof(LimitedTurnNavAgent), typeof(RootMotionPlayer), typeof(SenseComponent))]
+[SoftRequireComponent(typeof(BlackboardComponent), typeof(NpcBarkManager))]
+public class Scientist2FSM_Heavy : FSMComponent
+{
+	public State_PatrolIdle idle = new State_PatrolIdle();
+
+	public State_Patrol patrol = new State_Patrol();
+
+	public State_Search search = new State_Search();
+
+	public State_ScientistRush chase = new State_ScientistRush();
+
+	public State_MoveToPointWithLosOnTarget popOut = new State_MoveToPointWithLosOnTarget();
+
+	public State_Dead dead = new State_Dead();
+
+	public State_ScientistSurprised surprised = new State_ScientistSurprised();
+
+	private Trans_Triggerable_HitInfo HurtTrans;
+
+	private Trans_Triggerable_HitInfo DeathTrans;
+
+	public Trans_Triggerable RushPositionTrans;
+
+	private NpcBarkComponent _barkComponent;
+
+	private bool spokeDistractedByHeavyVoiceline;
+
+	public GameObjectRef explosionPrefab;
+
+	public GameObjectRef bulletEffect;
+
+	public SoundDefinition backpackHitSound;
+
+	public float bulletSpeed = 35f;
+
+	public float backPackHealth = 110f;
+
+	private NpcBarkComponent BarkComponent => _barkComponent ?? (_barkComponent = ((Component)base.baseEntity).GetComponent<NpcBarkComponent>());
+
+	public override void InitShared()
+	{
+		if (base.baseEntity.isServer)
+		{
+			State_Nothing state_Nothing = new State_Nothing
+			{
+				Name = "WaitForNavMesh"
+			};
+			HurtTrans = new Trans_Triggerable_HitInfo();
+			DeathTrans = new Trans_Triggerable_HitInfo();
+			RushPositionTrans = new Trans_Triggerable();
+			State_Nothing obj = new State_Nothing
+			{
+				Name = "Root"
+			};
+			State_Nothing state_Nothing2 = new State_Nothing
+			{
+				Name = "Alive"
+			};
+			State_Nothing state_Nothing3 = new State_Nothing
+			{
+				Name = "OnNavmesh"
+			};
+			State_Nothing state_Nothing4 = new State_Nothing
+			{
+				Name = "Roaming"
+			};
+			State_Nothing state_Nothing5 = new State_Nothing
+			{
+				Name = "Has target"
+			};
+			State_Nothing state_Nothing6 = new State_Nothing
+			{
+				Name = "Searching"
+			};
+			State_Nothing state_Nothing7 = new State_Nothing
+			{
+				Name = "Shoot while still"
+			};
+			State_Search state_Search = search.Clone() as State_Search;
+			state_Search.Name = "SearchPastLKP";
+			state_Search.predict = true;
+			Trans_CanSeeTarget trans_CanSeeTarget = new Trans_CanSeeTarget();
+			FSMTransitionBase fSMTransitionBase = ~new Trans_CanSeeTarget();
+			Trans_And dstState2Trans = new Trans_Cooldown
+			{
+				cooldown = 5f
+			} & new Trans_TargetSurprised();
+			_ = obj + (state_Nothing2.AddTickTransition(dead, DeathTrans) + state_Nothing.AddTickTransition(patrol, new Trans_IsNavmeshReady()) + (state_Nothing3 + (state_Nothing4.AddTickBranchingTrans(chase, new Trans_HasTarget(), surprised, dstState2Trans) + patrol.AddFailureTransition(dead).AddEndTransition(idle) + idle.AddTickTransition(patrol, new Trans_ElapsedTimeRandomized
+			{
+				MinDuration = 1.0,
+				MaxDuration = 10.0
+			})) + (state_Nothing5.AddTickTransition(patrol, ~new Trans_HasTarget()) + surprised.AddEndTransition(chase) + chase.AddTickTransition(state_Nothing7, trans_CanSeeTarget & new Trans_TargetLkpInRange
+			{
+				Range = 8f
+			} & new Trans_IsMuzzleClear_Slow()).AddEndTransition(popOut, ~new Trans_TargetLkpInRange
+			{
+				Range = 3f,
+				Predict = true
+			}).AddEndTransition(state_Search) + popOut.AddEndTransition(state_Nothing7, trans_CanSeeTarget).AddEndTransition(state_Search) + state_Nothing7.AddTickTransition(chase, fSMTransitionBase | ~new Trans_TargetLkpInRange
+			{
+				Range = 10f
+			} | ~new Trans_IsMuzzleClear_Slow()) + (state_Nothing6.AddTickTransition(chase, RushPositionTrans).AddTickBranchingTrans(chase, trans_CanSeeTarget, surprised, dstState2Trans).AddTickTransition(chase, new Trans_Cooldown
+			{
+				cooldown = 5f
+			} & fSMTransitionBase & new Trans_HeardNoise())
+				.AddFailureTransition(patrol)
+				.AddEndTransition(search, new Trans_Bark
+				{
+					category = ENPCVoicelineCategory.Search
+				}) + state_Search + search)))) + dead;
+			SetState(state_Nothing);
+			SetFsmActive(newActive: true);
+		}
+	}
+
+	public override void Hurt(HitInfo hitInfo)
+	{
+		//IL_0079: Unknown result type (might be due to invalid IL or missing references)
+		//IL_007f: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0084: Unknown result type (might be due to invalid IL or missing references)
+		HurtTrans.Trigger(hitInfo);
+		if (hitInfo.HitBone == StringPool.Get("backpack_col"))
+		{
+			backPackHealth -= hitInfo.damageTypes.Total();
+			hitInfo.damageTypes.Clear();
+			if (explosionPrefab != null && backPackHealth <= 0f)
+			{
+				hitInfo.damageTypes.Add(DamageType.Explosion, 99999f);
+				GameManager.server.CreateEntity(explosionPrefab.resourcePath, hitInfo.HitPositionWorld, Quaternion.LookRotation(hitInfo.HitNormalWorld)).Spawn();
+			}
+		}
+		else if (!spokeDistractedByHeavyVoiceline && (hitInfo.damageTypes.Has(DamageType.Bullet) || hitInfo.damageTypes.Has(DamageType.Arrow)) && BarkComponent.PlayVoicelineFromCategory(ENPCVoicelineCategory.DistractedByHeavy))
+		{
+			spokeDistractedByHeavyVoiceline = true;
+		}
+	}
+
+	public override bool OnDied(HitInfo hitInfo)
+	{
+		DeathTrans.Trigger(hitInfo);
+		return false;
+	}
+}
+
+
+using Rust.Ai.Gen2;
+using UnityEngine;
+
+[SoftRequireComponent(typeof(NpcZoneComponent), typeof(NPCEncounterTimer), typeof(NpcShootingComponent))]
+[SoftRequireComponent(typeof(LimitedTurnNavAgent), typeof(RootMotionPlayer), typeof(SenseComponent))]
+[SoftRequireComponent(typeof(BlackboardComponent), typeof(NpcBarkManager))]
+public class Scientist2FSM_Shotgun : FSMComponent
+{
+	public State_PatrolIdle idle = new State_PatrolIdle();
+
+	public State_Patrol patrol = new State_Patrol();
+
+	public State_Search search = new State_Search();
+
+	public State_ScientistRush chase = new State_ScientistRush();
+
+	public State_Dead dead = new State_Dead();
+
+	public State_DogFight dogFight = new State_DogFight();
+
+	public State_MoveToCoverHiddenFromTarget goHide = new State_MoveToCoverHiddenFromTarget();
+
+	public State_StayInCover stayInCover = new State_StayInCover();
+
+	public State_ScientistSurprised surprised = new State_ScientistSurprised();
+
+	public State_Flank flank = new State_Flank();
+
+	private Trans_Triggerable_HitInfo HurtTrans;
+
+	private Trans_Triggerable_HitInfo DeathTrans;
+
+	public Trans_Triggerable RushPositionTrans;
+
+	private NpcBarkComponent _barkComponent;
+
+	private NpcBarkComponent BarkComponent => _barkComponent ?? (_barkComponent = ((Component)base.baseEntity).GetComponent<NpcBarkComponent>());
+
+	public override void InitShared()
+	{
+		if (base.baseEntity.isServer)
+		{
+			State_Nothing state_Nothing = new State_Nothing
+			{
+				Name = "WaitForNavMesh"
+			};
+			State_Nothing state_Nothing2 = new State_Nothing
+			{
+				Name = "ReadyToChase"
+			};
+			HurtTrans = new Trans_Triggerable_HitInfo();
+			DeathTrans = new Trans_Triggerable_HitInfo();
+			RushPositionTrans = new Trans_Triggerable();
+			State_Nothing obj = new State_Nothing
+			{
+				Name = "Root"
+			};
+			State_Nothing state_Nothing3 = new State_Nothing
+			{
+				Name = "Alive"
+			};
+			State_Nothing state_Nothing4 = new State_Nothing
+			{
+				Name = "OnNavmesh"
+			};
+			State_Nothing state_Nothing5 = new State_Nothing
+			{
+				Name = "Roaming"
+			};
+			State_Nothing state_Nothing6 = new State_Nothing
+			{
+				Name = "Has target"
+			};
+			State_Nothing state_Nothing7 = new State_Nothing
+			{
+				Name = "Searching"
+			};
+			State_Nothing state_Nothing8 = new State_Nothing
+			{
+				Name = "See target switch"
+			};
+			State_Search state_Search = search.Clone() as State_Search;
+			state_Search.Name = "SearchPastLKP";
+			state_Search.predict = true;
+			FSMTransitionBase fSMTransitionBase = ~new Trans_IsReloading();
+			Trans_IsReloading trans_IsReloading = new Trans_IsReloading();
+			Trans_CanSeeTarget trans_CanSeeTarget = new Trans_CanSeeTarget();
+			FSMTransitionBase fSMTransitionBase2 = ~new Trans_CanSeeTarget();
+			float num = 7f;
+			Trans_And dstState2Trans = new Trans_Cooldown
+			{
+				cooldown = 5f
+			} & new Trans_TargetLkpInRange
+			{
+				Range = num + 1f
+			} & new Trans_TargetSurprised();
+			Trans_And trans_And = new Trans_Cooldown
+			{
+				cooldown = 5f
+			} & new Trans_IsTargetLkpInOurZone();
+			Trans_And transition = new Trans_Cooldown
+			{
+				cooldown = 5f
+			} & ~new Trans_CanSeeTarget() & (new Trans_TargetIsLowHealth() | new Trans_TargetIsUndergeared());
+			_ = obj + (state_Nothing3.AddTickTransition(dead, DeathTrans) + state_Nothing.AddTickTransition(patrol, new Trans_IsNavmeshReady()) + (state_Nothing4 + (state_Nothing5.AddTickBranchingTrans(goHide, new Trans_HasTarget(), surprised, dstState2Trans) + patrol.AddFailureTransition(dead).AddEndTransition(idle) + idle.AddTickTransition(patrol, new Trans_ElapsedTimeRandomized
+			{
+				MinDuration = 1.0,
+				MaxDuration = 10.0
+			})) + (state_Nothing6.AddTickTransition(patrol, ~new Trans_HasTarget()) + (state_Nothing2.AddTickTransition(chase, fSMTransitionBase & RushPositionTrans) + state_Nothing8.AddTickTransition(goHide, trans_IsReloading | ~new Trans_TargetLkpInRange
+			{
+				Range = 30f
+			}).AddTickTransition(chase, new Trans_TargetLkpInRange
+			{
+				Range = 20f
+			}).AddTickTransition(dogFight, new Trans_TargetLkpInRange
+			{
+				Range = num
+			}) + dogFight.AddTickTransition(goHide, ~new Trans_TargetLkpInRange
+			{
+				Range = 50f
+			} | (trans_IsReloading & new Trans_Bark
+			{
+				category = ENPCVoicelineCategory.Reload
+			})).AddTickTransition(chase, transition).AddTickTransition(chase, new Trans_ElapsedTimeRandomized
+			{
+				MinDuration = 1.0,
+				MaxDuration = 4.0
+			} & fSMTransitionBase)
+				.AddFailureTransition(goHide) + goHide.AddTickBranchingTrans(dogFight, fSMTransitionBase & trans_CanSeeTarget & new Trans_TargetInRange
+			{
+				Range = 3f
+			}, surprised, dstState2Trans).AddTickTransition(chase, transition).AddFailureTransition(chase)
+				.AddEndTransition(stayInCover, ~new Trans_TargetLkpInRange
+				{
+					Range = 50f
+				} | trans_IsReloading | new Trans_RandomChance
+				{
+					Chance = 0.5f
+				})
+				.AddEndTransition(flank, trans_And) + stayInCover.AddTickBranchingTrans(chase, trans_CanSeeTarget | HurtTrans | (new Trans_IsTargetRunning() & new Trans_TargetInRange
+			{
+				Range = 20f
+			}), goHide, trans_IsReloading).AddTickBranchingTrans(chase, new Trans_TargetLkpInRange
+			{
+				Range = 50f
+			} & fSMTransitionBase & new Trans_ElapsedTimeRandomized
+			{
+				MinDuration = 5.0,
+				MaxDuration = 10.0
+			}, flank, trans_And).AddTickBranchingTrans(state_Nothing8, trans_CanSeeTarget, surprised, dstState2Trans) + flank.AddTickBranchingTrans(state_Nothing8, trans_CanSeeTarget, surprised, dstState2Trans).AddFailureTransition(chase).AddEndTransition(state_Search) + (state_Nothing7.AddTickBranchingTrans(state_Nothing8, trans_CanSeeTarget, surprised, dstState2Trans).AddTickTransition(flank, new Trans_Cooldown
+			{
+				cooldown = 5f
+			} & fSMTransitionBase2 & new Trans_HeardNoise()).AddFailureTransition(goHide)
+				.AddEndTransition(search, new Trans_Bark
+				{
+					category = ENPCVoicelineCategory.Search
+				}) + state_Search + search) + surprised.AddEndTransition(state_Nothing8)) + chase.AddTickBranchingTrans(dogFight, new Trans_CanSeeTarget() & new Trans_TargetLkpInRange
+			{
+				Range = num
+			}, surprised, dstState2Trans).AddFailureTransition(goHide).AddEndTransition(state_Search)))) + dead;
+			SetState(state_Nothing);
+			SetFsmActive(newActive: true);
+		}
+	}
+
+	public override void Hurt(HitInfo hitInfo)
+	{
+		HurtTrans.Trigger(hitInfo);
+	}
+
+	public override bool OnDied(HitInfo hitInfo)
+	{
+		DeathTrans.Trigger(hitInfo);
+		return false;
+	}
+}
+
+
+using Prefabs.Misc;
+using Rust.Ai.Gen2;
+using UnityEngine;
+
+[SoftRequireComponent(typeof(Scientist2FSM))]
+public class ScientistNPC2 : BaseNPC2
+{
+	public bool canBeHeadshot = true;
+
+	public override bool IsAnimal => false;
+
+	public override Vector3 ServerNavMeshPos
+	{
+		get
+		{
+			//IL_0001: Unknown result type (might be due to invalid IL or missing references)
+			//IL_0006: Unknown result type (might be due to invalid IL or missing references)
+			//IL_0008: Unknown result type (might be due to invalid IL or missing references)
+			//IL_000d: Unknown result type (might be due to invalid IL or missing references)
+			//IL_0010: Unknown result type (might be due to invalid IL or missing references)
+			//IL_0011: Unknown result type (might be due to invalid IL or missing references)
+			Vector3 serverWorldPosition = ServerWorldPosition;
+			Matrix4x4 worldToNavMeshSpace = WorldToNavMeshSpace;
+			return ((Matrix4x4)(ref worldToNavMeshSpace)).MultiplyPoint(serverWorldPosition);
+		}
+		set
+		{
+			//IL_0000: Unknown result type (might be due to invalid IL or missing references)
+			//IL_0001: Unknown result type (might be due to invalid IL or missing references)
+			//IL_0004: Unknown result type (might be due to invalid IL or missing references)
+			//IL_0009: Unknown result type (might be due to invalid IL or missing references)
+			//IL_000c: Unknown result type (might be due to invalid IL or missing references)
+			//IL_000d: Unknown result type (might be due to invalid IL or missing references)
+			Matrix4x4 navMeshToWorldSpace = NavMeshToWorldSpace;
+			ServerWorldPosition = ((Matrix4x4)(ref navMeshToWorldSpace)).MultiplyPoint(value);
+		}
+	}
+
+	public override Matrix4x4 WorldToNavMeshSpace
+	{
+		get
+		{
+			//IL_001c: Unknown result type (might be due to invalid IL or missing references)
+			//IL_0015: Unknown result type (might be due to invalid IL or missing references)
+			GhostShip ghostShip = GetParentEntity() as GhostShip;
+			if (Object.op_Implicit((Object)(object)ghostShip))
+			{
+				return ghostShip.WorldToNavMeshSpace;
+			}
+			return base.WorldToNavMeshSpace;
+		}
+	}
+
+	public override Matrix4x4 NavMeshToWorldSpace
+	{
+		get
+		{
+			//IL_001c: Unknown result type (might be due to invalid IL or missing references)
+			//IL_0015: Unknown result type (might be due to invalid IL or missing references)
+			GhostShip ghostShip = GetParentEntity() as GhostShip;
+			if (Object.op_Implicit((Object)(object)ghostShip))
+			{
+				return ghostShip.NavMeshToWorldSpace;
+			}
+			return base.NavMeshToWorldSpace;
+		}
+	}
+
+	public override string Categorize()
+	{
+		return "Scientist2";
+	}
+
+	public override void OnAttacked(HitInfo info)
+	{
+		base.OnAttacked(info);
+	}
+
+	public override void ScaleDamage(HitInfo info)
+	{
+		base.ScaleDamage(info);
+		if (canBeHeadshot && Object.op_Implicit((Object)(object)info.damageProperties))
+		{
+			info.damageProperties.ScaleDamage(info);
+		}
+	}
+}
+
+
+using System;
+using System.Collections.Generic;
+using ConVar;
+using Facepunch;
+using Rust.Ai.Gen2;
+using UnityEngine;
+
+public class ClawMarkSpawner : EntityComponent<BaseEntity>, IServerComponent
+{
+	public GameObjectRef clawDecal;
+
+	public float radius = 130f;
+
+	public float height = 1.8f;
+
+	public float minTreeRadius = 1.4f;
+
+	[Range(0f, 1f)]
+	public float ratioOfTreesMarked = 0.5f;
+
+	private static bool showClawMarks;
+
+	private List<ClawMark> clawMarks = new List<ClawMark>();
+
+	[ServerVar]
+	public static void ShowClawMarks(Arg arg)
+	{
+		bool @bool = arg.GetBool(0, !showClawMarks);
+		if (@bool == showClawMarks)
+		{
+			arg.ReplyWith("Claw marks are already " + (showClawMarks ? "visible" : "hidden") + ".");
+			return;
+		}
+		showClawMarks = @bool;
+		BaseNPC2[] array;
+		if (showClawMarks)
+		{
+			array = BaseEntity.Util.FindAll<BaseNPC2>();
+			for (int i = 0; i < array.Length; i++)
+			{
+				ClawMarkSpawner component = ((Component)array[i]).GetComponent<ClawMarkSpawner>();
+				if ((Object)(object)component != (Object)null)
+				{
+					component.SpawnClawMarks();
+				}
+			}
+			arg.ReplyWith("Claw marks are now visible.");
+			return;
+		}
+		array = BaseEntity.Util.FindAll<BaseNPC2>();
+		for (int i = 0; i < array.Length; i++)
+		{
+			ClawMarkSpawner component2 = ((Component)array[i]).GetComponent<ClawMarkSpawner>();
+			if ((Object)(object)component2 != (Object)null)
+			{
+				component2.ClearClawMarks();
+			}
+		}
+		arg.ReplyWith("Claw marks are now hidden.");
+	}
+
+	public override void InitShared()
+	{
+		UpdateBaseEntity();
+		if (showClawMarks)
+		{
+			SpawnClawMarks();
+		}
+	}
+
+	public override void DestroyShared()
+	{
+		ClearClawMarks();
+	}
+
+	private void SpawnClawMarks()
+	{
+		//IL_004f: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00ad: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00bd: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00df: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00e4: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00ef: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00f4: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00f9: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0101: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0106: Unknown result type (might be due to invalid IL or missing references)
+		//IL_010e: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0110: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0113: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0118: Unknown result type (might be due to invalid IL or missing references)
+		//IL_011d: Unknown result type (might be due to invalid IL or missing references)
+		//IL_011f: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0140: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0147: Unknown result type (might be due to invalid IL or missing references)
+		//IL_014c: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0151: Unknown result type (might be due to invalid IL or missing references)
+		if (!base.baseEntity.isServer)
+		{
+			return;
+		}
+		if (AI.logIssues && clawMarks.Count > 0)
+		{
+			Debug.LogWarning((object)$"Claw marks already spawned for {base.baseEntity}.");
+			return;
+		}
+		PooledList<TreeEntity> val = Pool.Get<PooledList<TreeEntity>>();
+		try
+		{
+			BaseEntity.Query.Server.GetInSphere(((Component)base.baseEntity).transform.position, radius, (List<TreeEntity>)(object)val);
+			clawMarks.Capacity = ((List<TreeEntity>)(object)val).Count;
+			RaycastHit val3 = default(RaycastHit);
+			foreach (TreeEntity item in (List<TreeEntity>)(object)val)
+			{
+				if (Random.value > ratioOfTreesMarked || (Object)(object)item.serverCollider == (Object)null)
+				{
+					continue;
+				}
+				float num = Mathf.Min(((Bounds)(ref item.bounds)).extents.x, ((Bounds)(ref item.bounds)).extents.z);
+				if (num < minTreeRadius)
+				{
+					continue;
+				}
+				Vector3 val2 = ((Component)item).transform.position + Vector3.up * height;
+				Vector3 forward = ((Component)item).transform.forward;
+				if (!item.serverCollider.Raycast(new Ray(val2 - forward * num, forward), ref val3, num))
+				{
+					continue;
+				}
+				ClawMark clawMark = GameManager.server.CreateEntity(clawDecal.resourcePath, ((RaycastHit)(ref val3)).point, Quaternion.LookRotation(-((RaycastHit)(ref val3)).normal)) as ClawMark;
+				if ((Object)(object)clawMark == (Object)null)
+				{
+					if (AI.logIssues)
+					{
+						Debug.LogWarning((object)$"Failed to create claw mark for {base.baseEntity}.");
+					}
+				}
+				else
+				{
+					clawMarks.Add(clawMark);
+					clawMark.SetParent(item, worldPositionStays: true);
+					clawMark.Spawn();
+				}
+			}
+		}
+		finally
+		{
+			((IDisposable)val)?.Dispose();
+		}
+	}
+
+	private void ClearClawMarks()
+	{
+		if (!base.baseEntity.isServer)
+		{
+			return;
+		}
+		foreach (ClawMark clawMark in clawMarks)
+		{
+			clawMark.Kill();
+		}
+		clawMarks.Clear();
+	}
+}
+
+
+using Rust.Ai.Gen2;
+
+[SoftRequireComponent(typeof(TigerFSM))]
+public class Panther : BaseNPC2
+{
+	[ServerVar(Help = "Population active on the server, per square km", ShowInAdminUI = true)]
+	public static float Population = 0.5f;
+
+	public override string Categorize()
+	{
+		return "Panther";
+	}
+}
+
+
+using Rust.Ai.Gen2;
+
+[SoftRequireComponent(typeof(TigerFSM))]
+public class Tiger : BaseNPC2
+{
+	[ServerVar(Help = "Population active on the server, per square km", ShowInAdminUI = true)]
+	public static float Population = 0.5f;
+
+	public override string Categorize()
+	{
+		return "Tiger";
+	}
+}
+
+
+using System;
+using Rust.Ai.Gen2;
+using UnityEngine;
+
+[Serializable]
+public class State_HurtWithAdditive : State_Hurt
+{
+	public AnimationClip WeakHitAdditive;
+}
+
+
+using System;
+using Rust.Ai.Gen2;
+
+[Serializable]
+public class State_Roar : State_PlayAnimation
+{
+	public const string AlreadyRoared = "AlreadyRoared";
+
+	public override EFSMStateStatus OnStateEnter(FSMPayload payload)
+	{
+		if (!base.Senses.FindTarget(out var _))
+		{
+			return EFSMStateStatus.Failure;
+		}
+		base.Blackboard.Add("AlreadyRoared");
+		return base.OnStateEnter(payload);
+	}
+}
+
+
+using System;
+using Rust.Ai.Gen2;
+using UnityEngine;
+
+[Serializable]
+public class State_DeadlyAttack : State_Attack
+{
+	public float range = 4f;
+
+	public SoundDefinition impactSound;
+
+	private static readonly Vector3 force = new Vector3(15f, 3f, 15f);
+
+	protected override void DoDamage()
+	{
+		//IL_00d0: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00db: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00eb: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00f0: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00f5: Unknown result type (might be due to invalid IL or missing references)
+		//IL_012a: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0113: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0118: Unknown result type (might be due to invalid IL or missing references)
+		//IL_012f: Unknown result type (might be due to invalid IL or missing references)
+		//IL_013d: Unknown result type (might be due to invalid IL or missing references)
+		//IL_014c: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0151: Unknown result type (might be due to invalid IL or missing references)
+		//IL_015d: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0162: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0167: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0176: Unknown result type (might be due to invalid IL or missing references)
+		//IL_017b: Unknown result type (might be due to invalid IL or missing references)
+		if (!base.Senses.FindTarget(out var target) || !(target is BaseCombatEntity baseCombatEntity))
+		{
+			return;
+		}
+		float amount = Damage;
+		if (target.IsNonNpcPlayer())
+		{
+			float num = baseCombatEntity.baseProtection.Get(DamageType);
+			float num2 = (1f - num) * 1.2f;
+			float num3 = Damage * num2;
+			if (num == 0f && baseCombatEntity.health >= 30f && num3 > baseCombatEntity.health)
+			{
+				amount = (baseCombatEntity.health - 1f) * (1f / num2);
+			}
+		}
+		baseCombatEntity.OnAttacked(amount, DamageType, Owner, ignoreShield: false);
+		Owner.ClientRPC(RpcTarget.NetworkGroup("RPC_PlayNPCAttackImpactSound"));
+		if (baseCombatEntity.ToNonNpcPlayer(out var player))
+		{
+			Vector3 val = ((Vector3.Dot(((Component)Owner).transform.right, Vector3Ex.NormalizeXZ(((Component)player).transform.position - ((Component)Owner).transform.position)) > 0f) ? ((Component)Owner).transform.right : (-((Component)Owner).transform.right));
+			player.DoPush(((Component)Owner).transform.forward * force.z + val * force.x + Vector3.up * force.y);
+		}
+	}
+}
+
+
+using System;
+using System.Collections.Generic;
+using Facepunch;
+using Rust.Ai.Gen2;
+using UnityEngine;
+
+[Serializable]
+public class State_FleeToHide : State_Flee
+{
+	public const string HitDuringChargeKey = "HitDuringCharge";
+
+	private bool clockWise;
+
+	public override EFSMStateStatus OnStateEnter(FSMPayload payload)
+	{
+		//IL_0021: Unknown result type (might be due to invalid IL or missing references)
+		//IL_002d: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0032: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0037: Unknown result type (might be due to invalid IL or missing references)
+		//IL_003c: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0049: Unknown result type (might be due to invalid IL or missing references)
+		//IL_004e: Unknown result type (might be due to invalid IL or missing references)
+		base.Blackboard.Remove("HitDuringCharge");
+		if (!base.Senses.FindTargetPosition(out var targetPosition))
+		{
+			return EFSMStateStatus.Success;
+		}
+		Vector3 val = Vector3Ex.NormalizeXZ(targetPosition - ((Component)Owner).transform.position);
+		clockWise = Vector3.Dot(((Component)Owner).transform.right, val) > 0f;
+		return base.OnStateEnter(payload);
+	}
+
+	protected override EFSMStateStatus MoveAwayFromTarget()
+	{
+		//IL_001c: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0021: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0022: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0027: Unknown result type (might be due to invalid IL or missing references)
+		//IL_003a: Unknown result type (might be due to invalid IL or missing references)
+		//IL_003f: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0058: Unknown result type (might be due to invalid IL or missing references)
+		//IL_005d: Unknown result type (might be due to invalid IL or missing references)
+		//IL_005e: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0063: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0068: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0085: Unknown result type (might be due to invalid IL or missing references)
+		//IL_008a: Unknown result type (might be due to invalid IL or missing references)
+		//IL_008f: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0090: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0095: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00a3: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00ca: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00cf: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00d1: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00d2: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00df: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00e4: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00e9: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00ed: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00fb: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0146: Unknown result type (might be due to invalid IL or missing references)
+		//IL_014b: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0153: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0185: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0176: Unknown result type (might be due to invalid IL or missing references)
+		if (!base.Senses.FindTargetPosition(out var targetPosition))
+		{
+			return EFSMStateStatus.Success;
+		}
+		Vector3 val = ((Component)Owner).transform.position - targetPosition;
+		float magnitude = ((Vector3)(ref val)).magnitude;
+		Vector3 val2 = ((Component)Owner).transform.forward;
+		float num = 15f;
+		if (magnitude > 6f)
+		{
+			val2 = Vector3Ex.NormalizeXZ(((Component)Owner).transform.position - targetPosition);
+			num = 55f;
+		}
+		val2 = Quaternion.AngleAxis(num * (clockWise ? 1f : (-1f)), Vector3.up) * val2;
+		PooledList<Vector3> val3 = Pool.Get<PooledList<Vector3>>();
+		try
+		{
+			Eqs.SamplePositionsInDonutShape(base.Agent.NavPosition, (List<Vector3>)(object)val3, distance);
+			Eqs.PooledScoreList pooledScoreList = Pool.Get<Eqs.PooledScoreList>();
+			try
+			{
+				foreach (Vector3 item3 in (List<Vector3>)(object)val3)
+				{
+					Vector3 val4 = val2;
+					Vector3 val5 = item3 - ((Component)Owner).transform.position;
+					float item = Vector3.Dot(val4, ((Vector3)(ref val5)).normalized);
+					((List<(Vector3, float)>)(object)pooledScoreList).Add((item3, item));
+				}
+				pooledScoreList.SortByScoreDesc(Owner);
+				foreach (var item4 in (List<(Vector3, float)>)(object)pooledScoreList)
+				{
+					Vector3 item2 = item4.Item1;
+					if (base.Agent.SamplePosition(item2, out var sample, 10f) && (base.Agent.canSwim || !base.Agent.IsInWater(sample)) && base.Agent.SetDestination(sample))
+					{
+						return EFSMStateStatus.None;
+					}
+				}
+				return EFSMStateStatus.Failure;
+			}
+			finally
+			{
+				((IDisposable)(object)pooledScoreList)?.Dispose();
+			}
+		}
+		finally
+		{
+			((IDisposable)val3)?.Dispose();
+		}
+	}
+}
+
+
+using System;
+using Rust.Ai.Gen2;
+using UnityEngine;
+
+[Serializable]
+public class State_Observe : State_MoveToTarget
+{
+	private double startTime;
+
+	public override EFSMStateStatus OnStateEnter(FSMPayload payload)
+	{
+		EFSMStateStatus eFSMStateStatus = base.OnStateEnter(payload);
+		if (eFSMStateStatus == EFSMStateStatus.Failure)
+		{
+			return eFSMStateStatus;
+		}
+		succeedWhenDestinationIsReached = false;
+		stopAtDestination = false;
+		base.Agent.deceleration.Value = 0.1f;
+		base.Agent.SetSpeed(0f);
+		startTime = Time.timeAsDouble;
+		base.Agent.currentDeviation = 2f;
+		return eFSMStateStatus;
+	}
+
+	public override EFSMStateStatus OnStateUpdate(float deltaTime)
+	{
+		if (Time.timeAsDouble - startTime > 6.0)
+		{
+			base.Agent.SetSpeed(0.2f);
+		}
+		return base.OnStateUpdate(deltaTime);
+	}
+}
+
+
+using System;
+using Rust;
+using Rust.Ai.Gen2;
+using UnityEngine;
+using UnityEngine.AI;
+
+[Serializable]
+public class State_AttackUnreachableWarped : FSMStateBase
+{
+	private enum Phase
+	{
+		PreJump,
+		Jump,
+		Attack,
+		JumpBack,
+		PostJumpBack
+	}
+
+	public float jumpOnStart = 1.03f;
+
+	public float jumpOnEnd = 1.63f;
+
+	public float jumpOffStart = 2.9f;
+
+	public float jumpOffEnd = 3.47f;
+
+	public float totalDuration = 3.6f;
+
+	private const float groundCheckDistance = 2f;
+
+	private const float damage = 35f;
+
+	private const float meleeAttackRange = 1.7f;
+
+	private const DamageType damageType = DamageType.Bite;
+
+	public RootMotionData animClip;
+
+	private float elapsedTime;
+
+	private LockState.LockHandle targetLock;
+
+	private LockState.LockHandle movementLock;
+
+	private Phase phase;
+
+	private RootMotionPlayer.Warp[] warps = new RootMotionPlayer.Warp[2];
+
+	private RootMotionPlayer.PlayServerState animState;
+
+	private Vector3 destination;
+
+	private bool didHit;
+
+	public static bool SampleGroundPositionUnderTarget(LimitedTurnNavAgent agent, BasePlayer targetAsPlayer, out Vector3 projectedLocation)
+	{
+		//IL_0030: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0050: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0055: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0017: Unknown result type (might be due to invalid IL or missing references)
+		//IL_001c: Unknown result type (might be due to invalid IL or missing references)
+		if (targetAsPlayer.IsOnGround() && !targetAsPlayer.OnLadder())
+		{
+			projectedLocation = ((Component)targetAsPlayer).transform.position;
+			return true;
+		}
+		float radius = BasePlayer.GetRadius();
+		RaycastHit hitInfo;
+		bool result = agent.SampleGroundPositionWithPhysics(((Component)targetAsPlayer).transform.position, out hitInfo, 2f, radius * 0.5f);
+		projectedLocation = ((RaycastHit)(ref hitInfo)).point;
+		return result;
+	}
+
+	public override EFSMStateStatus OnStateEnter(FSMPayload payload)
+	{
+		//IL_0022: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0027: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0053: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0059: Unknown result type (might be due to invalid IL or missing references)
+		if (!base.Senses.FindTarget(out var target) || !(target is BasePlayer targetAsPlayer))
+		{
+			return EFSMStateStatus.Failure;
+		}
+		destination = ((Component)target).transform.position;
+		if (!SampleGroundPositionUnderTarget(base.Agent, targetAsPlayer, out destination))
+		{
+			return EFSMStateStatus.Failure;
+		}
+		if (!State_MoveToLastReachablePointNearTarget.CanJumpFromPosToPos(Owner, ((Component)Owner).transform.position, destination))
+		{
+			return EFSMStateStatus.Failure;
+		}
+		movementLock = base.Agent.Pause();
+		didHit = false;
+		elapsedTime = 0f;
+		targetLock = base.Senses.LockCurrentTarget();
+		((Behaviour)((Component)Owner).GetComponent<NavMeshAgent>()).enabled = false;
+		animState = RootMotionPlayer.PlayServerState.TakeFromPool(animClip, ((Component)Owner).transform);
+		animState.warps = warps;
+		animState.constrainToNavmesh = false;
+		base.AnimPlayer.PlayServer(animState);
+		SetPhase(Phase.PreJump);
+		return base.OnStateEnter(payload);
+	}
+
+	private EFSMStateStatus SetPhase(Phase newPhase)
+	{
+		//IL_029f: Unknown result type (might be due to invalid IL or missing references)
+		//IL_02ab: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0050: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0055: Unknown result type (might be due to invalid IL or missing references)
+		//IL_005d: Unknown result type (might be due to invalid IL or missing references)
+		//IL_006d: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0072: Unknown result type (might be due to invalid IL or missing references)
+		//IL_007c: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0081: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0086: Unknown result type (might be due to invalid IL or missing references)
+		//IL_009c: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0112: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0129: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0133: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0138: Unknown result type (might be due to invalid IL or missing references)
+		//IL_013e: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0162: Unknown result type (might be due to invalid IL or missing references)
+		//IL_01eb: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0202: Unknown result type (might be due to invalid IL or missing references)
+		//IL_020c: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0211: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0217: Unknown result type (might be due to invalid IL or missing references)
+		//IL_023b: Unknown result type (might be due to invalid IL or missing references)
+		//IL_003f: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0040: Unknown result type (might be due to invalid IL or missing references)
+		//IL_02f1: Unknown result type (might be due to invalid IL or missing references)
+		//IL_02fd: Unknown result type (might be due to invalid IL or missing references)
+		//IL_031b: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0325: Unknown result type (might be due to invalid IL or missing references)
+		//IL_032a: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0334: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0339: Unknown result type (might be due to invalid IL or missing references)
+		phase = newPhase;
+		if (phase == Phase.Jump)
+		{
+			if (!base.Senses.FindTarget(out var target) || !(target is BasePlayer targetAsPlayer))
+			{
+				return EFSMStateStatus.Failure;
+			}
+			if (SampleGroundPositionUnderTarget(base.Agent, targetAsPlayer, out var projectedLocation))
+			{
+				destination = projectedLocation;
+			}
+			Vector3 position = ((Component)Owner).transform.position;
+			animState.initialRotation = Quaternion.LookRotation(Vector3Ex.WithY(destination - ((Component)Owner).transform.position, 0f));
+			((Component)Owner).transform.rotation = animState.initialRotation;
+			float num = animClip.zMotionCurve.Evaluate(jumpOnEnd) - animClip.zMotionCurve.Evaluate(jumpOnStart);
+			float num2 = animClip.yMotionCurve.Evaluate(jumpOnEnd) - animClip.yMotionCurve.Evaluate(jumpOnStart);
+			RootMotionPlayer.Warp warp = new RootMotionPlayer.Warp(jumpOnStart, jumpOnEnd, Vector3.one);
+			warp.translationScale.z = Vector3.Distance(Vector3Ex.WithY(destination, 0f), Vector3Ex.WithY(position, 0f)) / num;
+			warp.translationScale.y = (destination.y - position.y) / num2;
+			warps[0] = warp;
+			float num3 = animClip.zMotionCurve.Evaluate(jumpOffStart) - animClip.zMotionCurve.Evaluate(jumpOffEnd);
+			float num4 = animClip.yMotionCurve.Evaluate(jumpOffStart) - animClip.yMotionCurve.Evaluate(jumpOffEnd);
+			RootMotionPlayer.Warp warp2 = new RootMotionPlayer.Warp(jumpOffStart, jumpOffEnd, Vector3.one);
+			warp2.translationScale.z = Vector3.Distance(Vector3Ex.WithY(destination, 0f), Vector3Ex.WithY(position, 0f)) / num3;
+			warp2.translationScale.y = (destination.y - position.y) / num4;
+			warps[1] = warp2;
+			base.Agent.IsJumping = true;
+		}
+		else if (phase == Phase.Attack)
+		{
+			if (base.Senses.FindTarget(out var target2))
+			{
+				if (target2 is BaseCombatEntity baseCombatEntity && Vector3.Distance(((Component)Owner).transform.position, ((Component)baseCombatEntity).transform.position) <= 1.7f)
+				{
+					didHit = true;
+					baseCombatEntity.OnAttacked(35f, DamageType.Bite, Owner, ignoreShield: false);
+				}
+				if (target2 is BasePlayer basePlayer && Vector3.Distance(((Component)Owner).transform.position, ((Component)basePlayer).transform.position) <= 1f)
+				{
+					basePlayer.DoPush(((Component)Owner).transform.forward * 10f + Vector3.up * 3f);
+				}
+			}
+		}
+		else if (phase == Phase.PostJumpBack)
+		{
+			base.Agent.IsJumping = false;
+		}
+		return EFSMStateStatus.None;
+	}
+
+	public override EFSMStateStatus OnStateUpdate(float deltaTime)
+	{
+		//IL_002a: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0036: Unknown result type (might be due to invalid IL or missing references)
+		//IL_003b: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0045: Unknown result type (might be due to invalid IL or missing references)
+		//IL_004a: Unknown result type (might be due to invalid IL or missing references)
+		//IL_004f: Unknown result type (might be due to invalid IL or missing references)
+		//IL_005c: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0061: Unknown result type (might be due to invalid IL or missing references)
+		//IL_006d: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0072: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0088: Unknown result type (might be due to invalid IL or missing references)
+		elapsedTime += deltaTime;
+		if (!base.Senses.FindTargetPosition(out var targetPosition))
+		{
+			return EFSMStateStatus.Failure;
+		}
+		if (phase == Phase.PreJump)
+		{
+			Quaternion val = Quaternion.LookRotation(Vector3Ex.WithY(targetPosition - ((Component)Owner).transform.position, 0f));
+			animState.initialRotation = Quaternion.RotateTowards(animState.initialRotation, val, Time.deltaTime * 60f);
+			((Component)Owner).transform.rotation = animState.initialRotation;
+			if (elapsedTime >= jumpOnStart && SetPhase(Phase.Jump) == EFSMStateStatus.Failure)
+			{
+				return EFSMStateStatus.Failure;
+			}
+		}
+		if (phase == Phase.Jump && elapsedTime >= jumpOnEnd)
+		{
+			SetPhase(Phase.Attack);
+		}
+		if (phase == Phase.Attack && elapsedTime > jumpOffStart)
+		{
+			SetPhase(Phase.JumpBack);
+		}
+		if (phase == Phase.JumpBack && elapsedTime >= jumpOffEnd)
+		{
+			SetPhase(Phase.PostJumpBack);
+		}
+		if (elapsedTime >= animClip.inPlaceAnimation.length - 0.25f)
+		{
+			if (!didHit)
+			{
+				return EFSMStateStatus.Failure;
+			}
+			return EFSMStateStatus.Success;
+		}
+		return base.OnStateUpdate(deltaTime);
+	}
+
+	public override void OnStateExit()
+	{
+		base.AnimPlayer.StopServerAndReturnToPool(ref animState);
+		((Behaviour)((Component)Owner).GetComponent<NavMeshAgent>()).enabled = true;
+		base.Senses.UnlockTarget(ref targetLock);
+		base.Agent.Unpause(ref movementLock);
+		if (phase != Phase.PostJumpBack)
+		{
+			base.Agent.IsJumping = false;
+		}
+		base.OnStateExit();
+	}
+}
+
+
+private enum Phase
+{
+	PreJump,
+	Jump,
+	Attack,
+	JumpBack,
+	PostJumpBack
+}
+
+
+using System;
+using Rust.Ai.Gen2;
+using UnityEngine;
+
+[Serializable]
+public class State_DragCorpse : FSMStateBase
+{
+	[SerializeField]
+	protected RootMotionData Animation;
+
+	private const int numLoops = 6;
+
+	private int currentLoop;
+
+	private BaseCorpse corpse;
+
+	private RootMotionPlayer.PlayServerState animState;
+
+	private Action _updateCorpsePositionAction;
+
+	private Action UpdateCorpsePositionAction => OnStateFixedUpdate;
+
+	public override EFSMStateStatus OnStateEnter(FSMPayload payload)
+	{
+		if (!base.Senses.FindFood(out var food))
+		{
+			return EFSMStateStatus.Failure;
+		}
+		if (!(food is BaseCorpse food2))
+		{
+			return EFSMStateStatus.Failure;
+		}
+		if (!base.Senses.FindTarget(out var _))
+		{
+			return EFSMStateStatus.Failure;
+		}
+		if (!SingletonComponent<NpcFoodManager>.Instance.Remove(food2))
+		{
+			return EFSMStateStatus.Failure;
+		}
+		corpse = food2;
+		corpse.SetFlag(BaseEntity.Flags.Reserved3, b: true);
+		((FacepunchBehaviour)Owner).InvokeRepeatingFixedTime(UpdateCorpsePositionAction);
+		animState = base.AnimPlayer.PlayServerAndTakeFromPool(Animation);
+		return base.OnStateEnter(payload);
+	}
+
+	public override EFSMStateStatus OnStateUpdate(float deltaTime)
+	{
+		//IL_0035: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0041: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0046: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0050: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0055: Unknown result type (might be due to invalid IL or missing references)
+		//IL_005a: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0067: Unknown result type (might be due to invalid IL or missing references)
+		//IL_006c: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0078: Unknown result type (might be due to invalid IL or missing references)
+		//IL_007d: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0093: Unknown result type (might be due to invalid IL or missing references)
+		if (!corpse.IsValid() || corpse.IsDead())
+		{
+			return EFSMStateStatus.Failure;
+		}
+		if (!base.Senses.FindTargetPosition(out var targetPosition))
+		{
+			return EFSMStateStatus.Failure;
+		}
+		if (animState != null)
+		{
+			Quaternion val = Quaternion.LookRotation(Vector3Ex.WithY(targetPosition - ((Component)Owner).transform.position, 0f));
+			animState.initialRotation = Quaternion.RotateTowards(animState.initialRotation, val, Time.deltaTime * 60f);
+			((Component)Owner).transform.rotation = animState.initialRotation;
+		}
+		if (!animState.isPlaying)
+		{
+			currentLoop++;
+			if (currentLoop >= 6)
+			{
+				return EFSMStateStatus.Success;
+			}
+			base.AnimPlayer.StopServerAndReturnToPool(ref animState, interrupt: false);
+			animState = base.AnimPlayer.PlayServerAndTakeFromPool(Animation);
+		}
+		return base.OnStateUpdate(deltaTime);
+	}
+
+	private void OnStateFixedUpdate()
+	{
+		//IL_0037: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0047: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0051: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0056: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0066: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0070: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0075: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0080: Unknown result type (might be due to invalid IL or missing references)
+		//IL_008b: Unknown result type (might be due to invalid IL or missing references)
+		if (corpse.IsValid() && !corpse.IsDead())
+		{
+			Rigidbody component = ((Component)corpse).GetComponent<Rigidbody>();
+			if (component != null)
+			{
+				component.MovePosition(((Component)Owner).transform.position + ((Component)Owner).transform.forward * 1.6f + ((Component)Owner).transform.up * 0.6f);
+				component.velocity = Vector3.zero;
+				component.angularVelocity = Vector3.zero;
+			}
+		}
+	}
+
+	public override void OnStateExit()
+	{
+		base.OnStateExit();
+		base.AnimPlayer.StopServerAndReturnToPool(ref animState);
+		currentLoop = 0;
+		if (corpse.IsValid())
+		{
+			SingletonComponent<NpcFoodManager>.Instance.Add(corpse);
+			corpse.SetFlag(BaseEntity.Flags.Reserved3, b: false);
+		}
+		corpse = null;
+		((FacepunchBehaviour)Owner).CancelInvokeFixedTime(UpdateCorpsePositionAction);
+	}
+}
+
+
+using System;
+using Rust.Ai.Gen2;
+
+[Serializable]
+public class State_FastSneak : State_CircleDynamic
+{
+	public override EFSMStateStatus OnStateEnter(FSMPayload payload)
+	{
+		base.Agent.deceleration.Value = 10f;
+		return base.OnStateEnter(payload);
+	}
+
+	protected override void SetSpeed(BaseEntity target, float distToTarget, float normalizedDist)
+	{
+		if (!target.ToNonNpcPlayer(out var player))
+		{
+			base.SetSpeed(target, distToTarget, normalizedDist);
+		}
+		else if (distToTarget > 50f)
+		{
+			base.Agent.SetSpeed(8.25f);
+		}
+		else if (player.modelState.sprinting && distToTarget < 20f)
+		{
+			base.Agent.SetSpeed(6.875f);
+		}
+		else if (player.modelState.sprinting)
+		{
+			base.Agent.SetSpeed(8.25f);
+		}
+		else if (player.modelState.ducked || player.estimatedSpeed < 0.1f)
+		{
+			base.Agent.SetSpeed(1.7f);
+		}
+		else
+		{
+			base.Agent.SetSpeed(3.5f);
+		}
+	}
+}
+
+
+using System;
+using Rust.Ai.Gen2;
+
+[Serializable]
+public class Trans_IsTargetDown : FSMTransitionBase
+{
+	protected override bool EvaluateInternal(ref FSMPayload payload)
+	{
+		if (!base.Senses.FindTarget(out var target))
+		{
+			return false;
+		}
+		if (!target.ToNonNpcPlayer(out var player))
+		{
+			return false;
+		}
+		return player.IsWounded();
+	}
+}
+
+
+using System;
+using Rust.Ai.Gen2;
+
+[Serializable]
+public class Trans_IsWatchedByTarget : FSMTransitionBase
+{
+	public float minTime = 1.5f;
+
+	public bool requireAiming = true;
+
+	public bool wantsWatched = true;
+
+	protected override bool EvaluateInternal(ref FSMPayload payload)
+	{
+		if (!base.Senses.FindTarget(out var target))
+		{
+			return false;
+		}
+		if (!base.Senses.GetVisibilityStatus(target, out var status))
+		{
+			return false;
+		}
+		return ((!wantsWatched) ? (requireAiming ? status.timeNotAimedAt : status.timeNotWatched) : (requireAiming ? status.timeAimedAt : status.timeWatched)) > minTime;
+	}
+}
+
+
+using System;
+using Rust.Ai.Gen2;
+using UnityEngine;
+
+[Serializable]
+public class Trans_IsInTargetViewCone : FSMTransitionBase
+{
+	public float angle = 90f;
+
+	protected override bool EvaluateInternal(ref FSMPayload payload)
+	{
+		return IsInTargetViewCone(base.Senses, angle);
+	}
+
+	public static bool IsInTargetViewCone(SenseComponent senses, float testAngle)
+	{
+		//IL_0017: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0022: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0027: Unknown result type (might be due to invalid IL or missing references)
+		//IL_002c: Unknown result type (might be due to invalid IL or missing references)
+		//IL_002f: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0034: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0052: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0045: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0057: Unknown result type (might be due to invalid IL or missing references)
+		//IL_005a: Unknown result type (might be due to invalid IL or missing references)
+		//IL_005f: Unknown result type (might be due to invalid IL or missing references)
+		if (!senses.FindTarget(out var target))
+		{
+			return false;
+		}
+		Vector3 val = ((Component)senses.GetBaseEntity()).transform.position - ((Component)target).transform.position;
+		Vector3 normalized = ((Vector3)(ref val)).normalized;
+		val = (target.ToNonNpcPlayer(out var player) ? player.eyes.BodyForward() : ((Component)target).transform.forward);
+		return Vector3.Dot(((Vector3)(ref val)).normalized, normalized) > Mathf.Cos(testAngle * (MathF.PI / 180f));
+	}
+
+	public override string ToString()
+	{
+		if (!Inverted)
+		{
+			return $"We are in target view cone of {angle} degrees";
+		}
+		return $"We are not in target view cone of {angle} degrees";
+	}
+}
+
+
+using Rust.Ai.Gen2;
+
+[SoftRequireComponent(typeof(Wolf2FSM))]
+public class Wolf2 : BaseNPC2
+{
+	public override string Categorize()
+	{
+		return "Wolf";
+	}
+}
+
+
+public static class NPCRangeConstants
+{
+	public const float MeleeRange = 2f;
+
+	public const float CloseRange = 10f;
+
+	public const float MediumRange = 16f;
+
+	public const float LongRange = 50f;
+}
+
+
+public static class FireConstants
+{
+	public const float fireCirclingRadius = 16f;
+
+	public const string HitByFire = "HitByFire";
+}
+
+
+using Rust.Ai.Gen2;
+using UnityEngine;
+using UnityEngine.Events;
+
+public class Wolf2FSM : FSMComponent
+{
+	public State_PlayRandomAnimation randomIdle = new State_PlayRandomAnimation();
+
+	public State_Roam roam = new State_Roam();
+
+	public State_Howl howl = new State_Howl();
+
+	public State_CircleDynamic approach = new State_CircleDynamic();
+
+	public State_Bark bark = new State_Bark();
+
+	public State_Growl growlFire = new State_Growl();
+
+	public State_ApproachFire approachFire = new State_ApproachFire();
+
+	public State_FleeFire fleeFire = new State_FleeFire();
+
+	public State_MoveToTarget charge = new State_MoveToTarget();
+
+	public State_Attack attack = new State_Attack();
+
+	public State_PlayAnimationRM leapAway = new State_PlayAnimationRM();
+
+	public State_Circle reacCircle = new State_Circle();
+
+	public State_CircleDynamic fastApproach = new State_CircleDynamic();
+
+	public State_WolfHurt hurt = new State_WolfHurt();
+
+	public State_Intimidated intimidated = new State_Intimidated();
+
+	public State_Flee flee = new State_Flee();
+
+	public State_Flee fleeForHowl = new State_Flee();
+
+	public State_Dead dead = new State_Dead();
+
+	public State_ApproachFood approachFood = new State_ApproachFood();
+
+	public State_EatFood eatFood = new State_EatFood();
+
+	public State_PlayAnimationRM growlFood = new State_PlayAnimationRM();
+
+	public State_PlayAnimLoop sleep = new State_PlayAnimLoop();
+
+	public State_AttackUnreachable attackUnreachable = new State_AttackUnreachable();
+
+	private Trans_Triggerable_HitInfo HurtTrans;
+
+	private Trans_Triggerable_HitInfo DeathTrans;
+
+	private Trans_Triggerable AllyGotHurtNearby;
+
+	private Trans_Triggerable HowlTrans;
+
+	private Trans_Triggerable BarkTrans;
+
+	public override void InitShared()
+	{
+		//IL_014a: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0154: Expected O, but got Unknown
+		//IL_0176: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0180: Expected O, but got Unknown
+		//IL_01a2: Unknown result type (might be due to invalid IL or missing references)
+		//IL_01ac: Expected O, but got Unknown
+		if (base.baseEntity.isServer)
+		{
+			State_Nothing state_Nothing = new State_Nothing
+			{
+				Name = "WaitForNavMesh"
+			};
+			State_Circle state_Circle = new State_Circle
+			{
+				radius = 2f,
+				speed = LimitedTurnNavAgent.Speeds.Sprint,
+				Name = "Combo circle"
+			};
+			State_MoveToTarget state_MoveToTarget = new State_MoveToTarget
+			{
+				speed = LimitedTurnNavAgent.Speeds.Walk,
+				decelerationOverride = 6f,
+				Name = "Step forward"
+			};
+			State_MoveToLastReachablePointNearTarget state_MoveToLastReachablePointNearTarget = new State_MoveToLastReachablePointNearTarget
+			{
+				speed = LimitedTurnNavAgent.Speeds.Sprint,
+				succeedWhenDestinationIsReached = true,
+				Name = "Go to last destination"
+			};
+			FSMStateBase fSMStateBase = leapAway.Clone();
+			fSMStateBase.Name = "Leap away unreachable";
+			State_Flee state_Flee = new State_Flee
+			{
+				distance = 8f,
+				desiredDistance = 16f,
+				Name = "Flee fire after attack"
+			};
+			FSMStateBase fSMStateBase2 = state_Circle.Clone();
+			fSMStateBase2.Name = "Circle short fire";
+			FSMStateBase fSMStateBase3 = charge.Clone();
+			fSMStateBase3.Name = "Charge fire";
+			FSMStateBase fSMStateBase4 = attack.Clone();
+			fSMStateBase4.Name = "Attack fire";
+			DeathTrans = new Trans_Triggerable_HitInfo();
+			HurtTrans = new Trans_Triggerable_HitInfo();
+			Trans_Triggerable PathFailedTrans = new Trans_Triggerable();
+			((Component)base.baseEntity).GetComponent<LimitedTurnNavAgent>().onPathFailed.AddListener((UnityAction)delegate
+			{
+				PathFailedTrans.Trigger();
+			});
+			Trans_Triggerable FireMeleeTrans = new Trans_Triggerable();
+			((Component)base.baseEntity).GetComponent<SenseComponent>().onFireMelee.AddListener((UnityAction)delegate
+			{
+				FireMeleeTrans.Trigger();
+			});
+			Trans_Triggerable EncounterEndTrans = new Trans_Triggerable();
+			((Component)base.baseEntity).GetComponent<NPCEncounterTimer>().onShouldGiveUp.AddListener((UnityAction)delegate
+			{
+				EncounterEndTrans.Trigger();
+			});
+			BarkTrans = new Trans_Triggerable();
+			AllyGotHurtNearby = new Trans_Triggerable();
+			HowlTrans = new Trans_Triggerable();
+			State_Nothing state_Nothing2 = new State_Nothing();
+			state_Nothing2.Name = "Root";
+			State_Nothing state_Nothing3 = new State_Nothing
+			{
+				Name = "Alive"
+			};
+			State_Nothing state_Nothing4 = new State_Nothing
+			{
+				Name = "OnNavmesh"
+			};
+			State_Nothing state_Nothing5 = new State_Nothing
+			{
+				Name = "Food"
+			};
+			State_Nothing state_Nothing6 = new State_Nothing
+			{
+				Name = "Roaming"
+			};
+			State_Nothing state_Nothing7 = new State_Nothing
+			{
+				Name = "Has target"
+			};
+			State_Nothing state_Nothing8 = new State_Nothing
+			{
+				Name = "Not hurt"
+			};
+			State_Nothing state_Nothing9 = new State_Nothing
+			{
+				Name = "No fire"
+			};
+			State_Nothing state_Nothing10 = new State_Nothing
+			{
+				Name = "Reachable"
+			};
+			State_Nothing state_Nothing11 = new State_Nothing
+			{
+				Name = "Unreachable"
+			};
+			State_Nothing state_Nothing12 = new State_Nothing
+			{
+				Name = "Fire"
+			};
+			State_Nothing state_Nothing13 = new State_Nothing
+			{
+				Name = "Fire melee reac"
+			};
+			State_Nothing state_Nothing14 = new State_Nothing
+			{
+				Name = "Ready to help"
+			};
+			State_Nothing state_Nothing15 = new State_Nothing
+			{
+				Name = "Fire entry"
+			};
+			State_Nothing state_Nothing16 = new State_Nothing
+			{
+				Name = "Combat entry"
+			};
+			State_Nothing state_Nothing17 = new State_Nothing
+			{
+				Name = "Random post idle wait"
+			};
+			state_Nothing2.AddChildren(state_Nothing3.AddTickTransition(dead, DeathTrans).AddChildren(state_Nothing.AddTickTransition(roam, new Trans_IsNavmeshReady()), state_Nothing4.AddTickTransition(state_Nothing, new Trans_IsNavmeshReady
+			{
+				Inverted = true
+			}).AddChildren(state_Nothing8.AddTickTransition(hurt, HurtTrans).AddChildren(state_Nothing6.AddTickTransition(dead, PathFailedTrans).AddTickTransition(approach, HowlTrans).AddTickTransition(state_Nothing16, new Trans_HasTarget())
+				.AddTickTransition(approachFood, new Trans_SeesFood())
+				.AddChildren(roam.AddEndTransition(sleep, new Trans_RandomChance
+				{
+					Chance = 0.25f
+				}).AddEndTransition(randomIdle), sleep.AddEndTransition(roam), randomIdle.AddEndTransition(state_Nothing17), state_Nothing17.AddTickTransition(roam, new Trans_ElapsedTimeRandomized
+				{
+					MinDuration = 0.0,
+					MaxDuration = 3.0
+				})), state_Nothing7.AddTickTransition(roam, new Trans_HasTarget
+			{
+				Inverted = true
+			}).AddTickTransition(flee, EncounterEndTrans).AddTickTransition(flee, new Trans_TargetIsInSafeZone())
+				.AddChildren(state_Nothing10.AddTickTransition(flee, new Trans_IsInWater_Slow() | new Trans_IsTargetInWater()).AddTickTransition(state_MoveToLastReachablePointNearTarget, PathFailedTrans).AddChildren(state_Nothing9.AddTickTransition(state_Nothing15, new Trans_TargetIsNearFire
+				{
+					onlySeeFireWhenClose = true
+				}).AddChildren(state_Nothing16.AddTickTransition(howl, new Trans_HasBlackboardBool
+				{
+					Key = "WolfNearbyAlreadyHowled",
+					Inverted = true
+				}).AddTickTransition(approach, new Trans_AlwaysValid()), state_Nothing14.AddTickTransition(flee, new Trans_And
+				{
+					AllyGotHurtNearby,
+					new Trans_TargetIsNearFire()
+				}).AddTickTransition(fastApproach, AllyGotHurtNearby).AddTickTransition(charge, BarkTrans)
+					.AddChildren(howl.AddTickTransition(approach, new Trans_TargetInRange
+					{
+						Range = 12f
+					}).AddEndTransition(approach), approach.AddTickBranchingTrans(charge, new Trans_TargetInRange
+					{
+						Range = 12f
+					}, bark, new Trans_HasBlackboardBool
+					{
+						Key = "WolfNearbyAlreadyBarked",
+						Inverted = true
+					}).AddTickTransition(approachFood, new Trans_And
+					{
+						new Trans_SeesFood(),
+						new Trans_HasBlackboardBool
+						{
+							Key = "TriedToApproachUnreachableFood",
+							Inverted = true
+						}
+					})), bark.AddTickTransition(charge, new Trans_TargetInRange
+				{
+					Range = 2f
+				}).AddEndTransition(charge), charge.AddTickTransition(fastApproach, AllyGotHurtNearby).AddTickTransition(attack, new Trans_TargetInRange
+				{
+					Range = 2f
+				}).AddTickTransition(approach, new Trans_ElapsedTime
+				{
+					Duration = 5.0
+				})
+					.AddFailureTransition(state_MoveToLastReachablePointNearTarget), attack.AddEndTransition(leapAway, new Trans_TargetInFront
+				{
+					Angle = 120f,
+					Inverted = true
+				}).AddEndTransition(state_Circle), leapAway.AddEndTransition(state_Circle), state_Circle.AddTickTransition(charge, new Trans_ElapsedTimeRandomized
+				{
+					MinDuration = 0.75,
+					MaxDuration = 1.5
+				}).AddEndTransition(charge), reacCircle.AddTickTransition(reacCircle, AllyGotHurtNearby).AddTickTransition(charge, new Trans_ElapsedTimeRandomized
+				{
+					MinDuration = 2.0,
+					MaxDuration = 4.0
+				}).AddEndTransition(charge), fastApproach.AddTickTransition(reacCircle, new Trans_TargetInRange
+				{
+					Range = reacCircle.radius + 5f
+				}).AddTickTransition(charge, BarkTrans), fleeForHowl.AddEndTransition(howl)), state_Nothing12.AddTickTransition(flee, PathFailedTrans).AddTickTransition(flee, AllyGotHurtNearby).AddChildren(state_Nothing15.AddTickTransition(intimidated, new Trans_TargetInRange
+				{
+					Range = 12f
+				}).AddTickTransition(growlFire, new Trans_HasBlackboardBool
+				{
+					Key = "AlreadyGrowled",
+					Inverted = true
+				}).AddTickTransition(approachFire, new Trans_AlwaysValid()), state_Nothing13.AddTickBranchingTrans(intimidated, FireMeleeTrans, growlFire, new Trans_RandomChance
+				{
+					Chance = 0.75f
+				}).AddChildren(approachFire.AddTickTransition(fSMStateBase2, new Trans_TargetInRange
+				{
+					Range = 5f
+				}).AddTickTransition(fastApproach, new Trans_TargetIsNearFire
+				{
+					Inverted = true
+				}).AddTickTransition(fastApproach, new Trans_TargetInRange
+				{
+					Range = 21f,
+					Inverted = true
+				}), state_MoveToTarget.AddTickTransition(fSMStateBase2, new Trans_TargetInRange
+				{
+					Range = 5f
+				}).AddTickTransition(approachFire, new Trans_ElapsedTimeRandomized
+				{
+					MinDuration = 1.0,
+					MaxDuration = 3.0
+				})), growlFire.AddTickTransition(intimidated, FireMeleeTrans).AddTickTransition(fSMStateBase2, new Trans_TargetInRange
+				{
+					Range = 5f
+				}).AddEndTransition(approachFire), fSMStateBase2.AddTickTransition(fSMStateBase3, new Trans_ElapsedTimeRandomized
+				{
+					MinDuration = 0.5,
+					MaxDuration = 1.25
+				}).AddEndTransition(fSMStateBase3), fSMStateBase3.AddTickTransition(fSMStateBase4, new Trans_TargetInRange
+				{
+					Range = 2f
+				}), fSMStateBase4.AddEndTransition(state_Flee), intimidated.AddEndTransition(fleeFire), fleeFire.AddEndTransition(state_MoveToTarget), state_Flee.AddEndTransition(state_MoveToTarget))), state_Nothing11.AddChildren(state_MoveToLastReachablePointNearTarget.AddFailureTransition(flee).AddTickTransition(flee, FireMeleeTrans).AddTickTransition(charge, new Trans_CanReachTarget_Slow())
+					.AddEndTransition(charge, new Trans_CanReachTarget_Slow())
+					.AddEndTransition(attackUnreachable)
+					.AddEndTransition(flee), fSMStateBase.AddEndTransition(state_MoveToLastReachablePointNearTarget)), flee.AddTickTransition(dead, PathFailedTrans).AddEndTransition(fastApproach, new Trans_TargetInRange
+				{
+					Range = flee.desiredDistance
+				}).AddEndTransition(roam)), state_Nothing5.AddTickTransition(state_Nothing15, new Trans_TargetIsNearFire
+			{
+				onlySeeFireWhenClose = true
+			}).AddTickTransition(approach, HowlTrans).AddTickTransition(fastApproach, AllyGotHurtNearby)
+				.AddTickTransition(charge, BarkTrans)
+				.AddTickTransition(roam, new Trans_SeesFood
+				{
+					Inverted = true
+				})
+				.AddChildren(approachFood.AddTickTransition(growlFood, new Trans_TargetInRange
+				{
+					Range = 12f
+				}).AddFailureTransition(roam).AddEndTransition(eatFood), eatFood.AddTickTransition(growlFood, new Trans_TargetInRange
+				{
+					Range = 12f
+				}).AddFailureTransition(roam).AddEndTransition(roam), growlFood.AddTickTransition(bark, new Trans_TargetInRange
+				{
+					Range = 5f
+				}).AddEndTransition(bark, new Trans_TargetInRange
+				{
+					Range = 12f
+				}).AddEndTransition(approachFood))), hurt.AddEndTransition(flee, new Trans_IsHealthBelowPercentage()).AddEndTransition(flee, new Trans_HasBlackboardBool
+			{
+				Key = "HitByFire"
+			}).AddEndTransition(flee, new Trans_TargetIsNearFire())
+				.AddEndTransition(flee, new Trans_TargetInRange
+				{
+					Range = 50f,
+					Inverted = true
+				})
+				.AddEndTransition(fleeForHowl, new Trans_InitialAlliesNotFighting())
+				.AddEndTransition(charge, new Trans_And
+				{
+					new Trans_RandomChance
+					{
+						Chance = 0.5f
+					},
+					new Trans_TargetInRange
+					{
+						Range = 12f
+					}
+				})
+				.AddEndTransition(reacCircle, new Trans_TargetInRange
+				{
+					Range = reacCircle.radius + 5f
+				})
+				.AddEndTransition(fastApproach)), attackUnreachable.AddFailureTransition(flee).AddEndTransition(flee, new Trans_TargetIsNearFire()).AddEndTransition(fSMStateBase)), dead);
+			SetState(state_Nothing);
+			SetFsmActive(newActive: true);
+		}
+	}
+
+	public override void Hurt(HitInfo hitInfo)
+	{
+		if (((Component)this).GetComponent<SenseComponent>().CanTarget(hitInfo.Initiator) && (hitInfo.Initiator.IsNonNpcPlayer() || !(Random.value > 0.5f)))
+		{
+			HurtTrans.Trigger(hitInfo);
+			if (base.CurrentState != hurt && base.CurrentState != dead)
+			{
+				ForceTickOnTheNextUpdate();
+			}
+		}
+	}
+
+	public void Intimidate(BaseEntity target)
+	{
+		AllyGotHurtNearby.Trigger(new FSMPayload
+		{
+			entity = target
+		});
+	}
+
+	public void Howl(BaseEntity target)
+	{
+		HowlTrans.Trigger(new FSMPayload
+		{
+			entity = target
+		});
+	}
+
+	public void Bark(BaseEntity target)
+	{
+		BarkTrans.Trigger(new FSMPayload
+		{
+			entity = target
+		});
+	}
+
+	public override bool OnDied(HitInfo hitInfo)
+	{
+		DeathTrans.Trigger(hitInfo);
+		return false;
+	}
+}
+
+
+using System;
+using Rust.Ai.Gen2;
+using UnityEngine;
+
+[Serializable]
+[SoftRequireComponent(typeof(LimitedTurnNavAgent), typeof(SenseComponent), typeof(BlackboardComponent))]
+public class State_ApproachFood : State_MoveToTarget
+{
+	public const string TriedToApproachUnreachableFood = "TriedToApproachUnreachableFood";
+
+	public override EFSMStateStatus OnStateEnter(FSMPayload payload)
+	{
+		//IL_002a: Unknown result type (might be due to invalid IL or missing references)
+		if (!base.Senses.FindFood(out var food))
+		{
+			return EFSMStateStatus.Failure;
+		}
+		if (food.WaterFactor() > 0f || !base.Agent.CanReach(((Component)food).transform.position))
+		{
+			base.Blackboard.Add("TriedToApproachUnreachableFood");
+			SingletonComponent<NpcFoodManager>.Instance.Remove(food);
+			return EFSMStateStatus.Failure;
+		}
+		return base.OnStateEnter(payload);
+	}
+
+	protected override bool GetMoveDestination(out Vector3 destination)
+	{
+		//IL_0023: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0028: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0010: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0015: Unknown result type (might be due to invalid IL or missing references)
+		if (!base.Senses.FindFood(out var food))
+		{
+			destination = Vector3.zero;
+			return false;
+		}
+		destination = ((Component)food).transform.position;
+		return true;
+	}
+}
+
+
+using System;
+using Rust.Ai.Gen2;
+using UnityEngine;
+
+[Serializable]
+[SoftRequireComponent(typeof(RootMotionPlayer))]
+public class State_EatFood : FSMStateBase
+{
+	[SerializeField]
+	protected AnimationClip Animation;
+
+	private const float damageToCorpsesPerLoop = 2.5f;
+
+	private const float timeToForgetSightingWhileEating = 5f;
+
+	private RootMotionPlayer.PlayServerState animState;
+
+	public override EFSMStateStatus OnStateEnter(FSMPayload payload)
+	{
+		//IL_0017: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0027: Unknown result type (might be due to invalid IL or missing references)
+		//IL_002c: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0031: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0049: Unknown result type (might be due to invalid IL or missing references)
+		//IL_004a: Unknown result type (might be due to invalid IL or missing references)
+		if (!base.Senses.FindFood(out var food))
+		{
+			return EFSMStateStatus.Failure;
+		}
+		Vector3 val = ((Component)food).transform.position - ((Component)Owner).transform.position;
+		val.y = 0f;
+		((Component)Owner).transform.rotation = Quaternion.LookRotation(val);
+		base.Senses.timeToForgetSightings.Value = 5f;
+		animState = base.AnimPlayer.PlayServerAndTakeFromPool(Animation);
+		return base.OnStateEnter(payload);
+	}
+
+	public override EFSMStateStatus OnStateUpdate(float deltaTime)
+	{
+		if (!base.Senses.FindFood(out var food))
+		{
+			return EFSMStateStatus.Failure;
+		}
+		if (!animState.isPlaying)
+		{
+			if (food is BaseCorpse baseCorpse)
+			{
+				baseCorpse.Hurt(2.5f);
+				if (baseCorpse.IsDead())
+				{
+					base.Senses.ClearTarget();
+					return EFSMStateStatus.Success;
+				}
+				base.AnimPlayer.StopServerAndReturnToPool(ref animState, interrupt: false);
+				animState = base.AnimPlayer.PlayServerAndTakeFromPool(Animation);
+			}
+			else if (food is DroppedItem droppedItem)
+			{
+				droppedItem.item.amount = Mathf.FloorToInt((float)droppedItem.item.amount * 0.5f);
+				if (droppedItem.item.amount <= 0)
+				{
+					droppedItem.DestroyItem();
+					droppedItem.Kill();
+					base.Senses.ClearTarget();
+					return EFSMStateStatus.Success;
+				}
+				droppedItem.item.MarkDirty();
+				base.AnimPlayer.StopServerAndReturnToPool(ref animState, interrupt: false);
+				animState = base.AnimPlayer.PlayServerAndTakeFromPool(Animation);
+			}
+		}
+		return base.OnStateUpdate(deltaTime);
+	}
+
+	public override void OnStateExit()
+	{
+		base.Senses.timeToForgetSightings.Reset();
+		base.AnimPlayer.StopServerAndReturnToPool(ref animState);
+	}
+}
+
+
+using System;
+using System.Collections.Generic;
+using Facepunch;
+using Rust.Ai.Gen2;
+using UnityEngine;
+
+[Serializable]
+public class State_Flee : FSMStateBase
+{
+	[SerializeField]
+	public float desiredDistance = 50f;
+
+	[SerializeField]
+	public float distance = 20f;
+
+	[SerializeField]
+	private LimitedTurnNavAgent.Speeds speed = LimitedTurnNavAgent.Speeds.Sprint;
+
+	[SerializeField]
+	private int maxAttempts = 3;
+
+	private int attempts;
+
+	protected float startDistance;
+
+	public override EFSMStateStatus OnStateEnter(FSMPayload payload)
+	{
+		//IL_0051: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0056: Unknown result type (might be due to invalid IL or missing references)
+		base.Blackboard.Remove("HitByFire");
+		if (!base.Senses.FindTargetPosition(out var targetPosition))
+		{
+			return EFSMStateStatus.Success;
+		}
+		attempts = 0;
+		base.Agent.SetSpeed(speed);
+		base.Agent.shouldStopAtDestination = false;
+		startDistance = Vector3.Distance(((Component)Owner).transform.position, targetPosition);
+		return MoveAwayFromTarget();
+	}
+
+	public override void OnStateExit()
+	{
+		base.Agent.ResetPath();
+		base.OnStateExit();
+	}
+
+	public override EFSMStateStatus OnStateUpdate(float deltaTime)
+	{
+		//IL_0026: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0032: Unknown result type (might be due to invalid IL or missing references)
+		if (base.Agent.IsFollowingPath)
+		{
+			return base.OnStateUpdate(deltaTime);
+		}
+		if (!base.Senses.FindTargetPosition(out var targetPosition))
+		{
+			return EFSMStateStatus.Success;
+		}
+		if (Vector3.Distance(targetPosition, ((Component)Owner).transform.position) > desiredDistance + startDistance)
+		{
+			return EFSMStateStatus.Success;
+		}
+		attempts++;
+		if (attempts >= maxAttempts)
+		{
+			return EFSMStateStatus.Success;
+		}
+		return MoveAwayFromTarget();
+	}
+
+	protected virtual EFSMStateStatus MoveAwayFromTarget()
+	{
+		//IL_001d: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0040: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0045: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0046: Unknown result type (might be due to invalid IL or missing references)
+		//IL_004b: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0050: Unknown result type (might be due to invalid IL or missing references)
+		//IL_005d: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0062: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0064: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0065: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0072: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0077: Unknown result type (might be due to invalid IL or missing references)
+		//IL_007c: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0080: Unknown result type (might be due to invalid IL or missing references)
+		//IL_008d: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00d6: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00db: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00e3: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0115: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0106: Unknown result type (might be due to invalid IL or missing references)
+		if (!base.Senses.FindTargetPosition(out var targetPosition))
+		{
+			return EFSMStateStatus.Success;
+		}
+		PooledList<Vector3> val = Pool.Get<PooledList<Vector3>>();
+		try
+		{
+			Eqs.SamplePositionsInDonutShape(base.Agent.NavPosition, (List<Vector3>)(object)val, distance);
+			Eqs.PooledScoreList pooledScoreList = Pool.Get<Eqs.PooledScoreList>();
+			try
+			{
+				Vector3 val2 = Vector3Ex.NormalizeXZ(((Component)Owner).transform.position - targetPosition);
+				foreach (Vector3 item3 in (List<Vector3>)(object)val)
+				{
+					Vector3 val3 = item3 - ((Component)Owner).transform.position;
+					float item = Vector3.Dot(val2, ((Vector3)(ref val3)).normalized);
+					((List<(Vector3, float)>)(object)pooledScoreList).Add((item3, item));
+				}
+				pooledScoreList.SortByScoreDesc(Owner);
+				foreach (var item4 in (List<(Vector3, float)>)(object)pooledScoreList)
+				{
+					Vector3 item2 = item4.Item1;
+					if (base.Agent.SamplePosition(item2, out var sample, 10f) && (base.Agent.canSwim || !base.Agent.IsInWater(sample)) && base.Agent.SetDestination(sample))
+					{
+						return EFSMStateStatus.None;
+					}
+				}
+				return EFSMStateStatus.Failure;
+			}
+			finally
+			{
+				((IDisposable)(object)pooledScoreList)?.Dispose();
+			}
+		}
+		finally
+		{
+			((IDisposable)val)?.Dispose();
+		}
+	}
+}
+
+
+using System;
+using Rust.Ai.Gen2;
+using UnityEngine;
+
+[Serializable]
+public class State_FleeFire : State_Flee
+{
+	private int numExecutions;
+
+	private int maxExecutionsBeforeMinDist = 2;
+
+	private float minDistance = 8f;
+
+	private float maxDistance = 20f;
+
+	private double timeOfLastExecution;
+
+	public override EFSMStateStatus OnStateEnter(FSMPayload payload)
+	{
+		if (Time.timeAsDouble - timeOfLastExecution > 30.0)
+		{
+			numExecutions = 0;
+		}
+		timeOfLastExecution = Time.timeAsDouble;
+		distance = 7f;
+		desiredDistance = Mathx.RemapValClamped((float)numExecutions, 0f, (float)maxExecutionsBeforeMinDist, maxDistance, minDistance);
+		numExecutions++;
+		return base.OnStateEnter(payload);
+	}
+
+	public override EFSMStateStatus OnStateUpdate(float deltaTime)
+	{
+		//IL_0031: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0036: Unknown result type (might be due to invalid IL or missing references)
+		if (base.Senses.FindTargetPosition(out var targetPosition) && Time.timeAsDouble - timeOfLastExecution > 1.0 && Vector3.Distance(((Component)Owner).transform.position, targetPosition) > desiredDistance)
+		{
+			return EFSMStateStatus.Success;
+		}
+		return base.OnStateUpdate(deltaTime);
+	}
+}
+
+
+using System;
+using System.Collections.Generic;
+using Facepunch;
+using Rust.Ai.Gen2;
+using UnityEngine;
+
+[Serializable]
+public class State_Roam : FSMStateBase
+{
+	[SerializeField]
+	private Vector2 distanceRange = new Vector2(10f, 20f);
+
+	[SerializeField]
+	private float homeRadius = 50f;
+
+	[SerializeField]
+	private LimitedTurnNavAgent.Speeds minSpeed;
+
+	[SerializeField]
+	private LimitedTurnNavAgent.Speeds maxSpeed = LimitedTurnNavAgent.Speeds.Sprint;
+
+	[SerializeField]
+	protected bool favourWater;
+
+	private Vector3? spawnPosition;
+
+	public override EFSMStateStatus OnStateEnter(FSMPayload payload)
+	{
+		//IL_001f: Unknown result type (might be due to invalid IL or missing references)
+		Reset();
+		if (!spawnPosition.HasValue)
+		{
+			spawnPosition = ((Component)Owner).transform.position;
+		}
+		if (!TrySetRoamDestination())
+		{
+			return EFSMStateStatus.Failure;
+		}
+		return base.OnStateEnter(payload);
+	}
+
+	private bool TrySetRoamDestination()
+	{
+		//IL_0028: Unknown result type (might be due to invalid IL or missing references)
+		//IL_003b: Unknown result type (might be due to invalid IL or missing references)
+		//IL_004b: Unknown result type (might be due to invalid IL or missing references)
+		//IL_006a: Unknown result type (might be due to invalid IL or missing references)
+		//IL_007a: Unknown result type (might be due to invalid IL or missing references)
+		//IL_007f: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0084: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0088: Unknown result type (might be due to invalid IL or missing references)
+		//IL_008d: Unknown result type (might be due to invalid IL or missing references)
+		//IL_009e: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00a3: Unknown result type (might be due to invalid IL or missing references)
+		//IL_011f: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00b1: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00b3: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00c0: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00c5: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00ca: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00ce: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00fa: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0133: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0182: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0187: Unknown result type (might be due to invalid IL or missing references)
+		//IL_018f: Unknown result type (might be due to invalid IL or missing references)
+		//IL_01c1: Unknown result type (might be due to invalid IL or missing references)
+		//IL_01b2: Unknown result type (might be due to invalid IL or missing references)
+		PooledList<Vector3> val = Pool.Get<PooledList<Vector3>>();
+		try
+		{
+			float num = Random.Range(distanceRange.x, distanceRange.y);
+			Eqs.SamplePositionsInDonutShape(base.Agent.NavPosition, (List<Vector3>)(object)val, num);
+			bool flag = Vector3.Distance(spawnPosition.Value, ((Component)Owner).transform.position) > homeRadius;
+			Eqs.PooledScoreList pooledScoreList = Pool.Get<Eqs.PooledScoreList>();
+			try
+			{
+				Vector3 val2 = spawnPosition.Value - ((Component)Owner).transform.position;
+				Vector3 normalized = ((Vector3)(ref val2)).normalized;
+				foreach (Vector3 item2 in (List<Vector3>)(object)val)
+				{
+					float num2 = 0f;
+					if (flag)
+					{
+						float num3 = num2;
+						val2 = item2 - ((Component)Owner).transform.position;
+						num2 = num3 + Mathx.RemapValClamped(Vector3.Dot(normalized, ((Vector3)(ref val2)).normalized), -1f, 1f, 0f, 1f);
+						if (base.Agent.IsPositionOnFavoredTerrain(item2))
+						{
+							num2 += 0.25f;
+						}
+					}
+					else
+					{
+						num2 += Random.value;
+						if (base.Agent.IsPositionOnFavoredTerrain(item2))
+						{
+							num2 += 10f;
+						}
+					}
+					((List<(Vector3, float)>)(object)pooledScoreList).Add((item2, num2));
+				}
+				pooledScoreList.SortByScoreDesc(Owner);
+				foreach (var item3 in (List<(Vector3, float)>)(object)pooledScoreList)
+				{
+					Vector3 item = item3.Item1;
+					if (base.Agent.SamplePosition(item, out var sample, 10f) && (base.Agent.canSwim || !base.Agent.IsInWater(sample)) && base.Agent.SetDestination(sample))
+					{
+						float ratio = Mathf.InverseLerp(0f, distanceRange.y, num);
+						base.Agent.SetSpeedRatio(ratio, minSpeed, maxSpeed);
+						return true;
+					}
+				}
+				return false;
+			}
+			finally
+			{
+				((IDisposable)(object)pooledScoreList)?.Dispose();
+			}
+		}
+		finally
+		{
+			((IDisposable)val)?.Dispose();
+		}
+	}
+
+	public override EFSMStateStatus OnStateUpdate(float deltaTime)
+	{
+		if (!base.Agent.IsFollowingPath)
+		{
+			return EFSMStateStatus.Success;
+		}
+		return base.OnStateUpdate(deltaTime);
+	}
+
+	public override void OnStateExit()
+	{
+		base.Agent.ResetPath();
+		base.OnStateExit();
+	}
+
+	private void Reset()
+	{
+		base.Senses.ClearTarget();
+		base.Blackboard.Clear();
+		if (Owner is BaseCombatEntity { healthFraction: <1f, SecondsSinceAttacked: >120f } baseCombatEntity)
+		{
+			baseCombatEntity.SetHealth(Owner.MaxHealth());
+		}
+	}
+}
+
+
+using System;
+using ConVar;
+using Oxide.Core;
+using Rust.Ai.Gen2;
+using UnityEngine;
+
+[Serializable]
+public class State_Dead : FSMStateBase
+{
+	[SerializeField]
+	private string deathStatName;
+
+	[SerializeField]
+	private GameObjectRef CorpsePrefab;
+
+	[SerializeField]
+	private RootMotionData staticDeathAnim;
+
+	[SerializeField]
+	private RootMotionData forwardMotionDeathAnim;
+
+	[SerializeField]
+	private float ragdollWhenAnimRemainingTimeIsBelow = 0.5f;
+
+	[SerializeField]
+	private LootContainer.LootSpawnSlot[] LootSpawnSlots;
+
+	private RootMotionPlayer.PlayServerState animState;
+
+	private Action _startRagdollAction;
+
+	private Action StartRagdollAction => StartRagdoll;
+
+	public override EFSMStateStatus OnStateEnter(FSMPayload payload)
+	{
+		//IL_018e: Unknown result type (might be due to invalid IL or missing references)
+		//IL_019e: Unknown result type (might be due to invalid IL or missing references)
+		if (payload.hitInfo == null && AI.logIssues && AI.logIssues)
+		{
+			Debug.LogError((object)$"Entering {base.Name} without HitInfo payload, this should not happen and may cause issues with stats tracking. Owner: {Owner}", (Object)(object)Owner);
+		}
+		if (payload.hitInfo != null && (Object)(object)payload.hitInfo.InitiatorPlayer != (Object)null && !payload.hitInfo.InitiatorPlayer.IsNpc)
+		{
+			BasePlayer initiatorPlayer = payload.hitInfo.InitiatorPlayer;
+			if (((Object)(object)Owner).Is<BaseNPC2>(out BaseNPC2 castedUnityObject) && castedUnityObject.IsAnimal)
+			{
+				initiatorPlayer.GiveAchievement("KILL_ANIMAL");
+			}
+			if (!string.IsNullOrEmpty(deathStatName))
+			{
+				initiatorPlayer.stats.Add(deathStatName, 1, (Stats)5);
+				initiatorPlayer.stats.Save();
+			}
+			if (Owner is BaseCombatEntity killed)
+			{
+				initiatorPlayer.LifeStoryKill(killed);
+			}
+		}
+		if (!CorpsePrefab.isValid)
+		{
+			Owner.Kill();
+			return base.OnStateEnter(payload);
+		}
+		if (forwardMotionDeathAnim != null && base.Agent.IsSpeedGTE(LimitedTurnNavAgent.Speeds.Run))
+		{
+			animState = base.AnimPlayer.PlayServerAndTakeFromPool(forwardMotionDeathAnim);
+			float num = Mathf.Max(0f, forwardMotionDeathAnim.inPlaceAnimation.length - ragdollWhenAnimRemainingTimeIsBelow);
+			((FacepunchBehaviour)Owner).Invoke(StartRagdollAction, num + AI.defaultInterpolationDelay);
+		}
+		else if (staticDeathAnim != null && payload.hitInfo != null && Vector3.Dot(payload.hitInfo.attackNormal, ((Component)Owner).transform.forward) < 0f)
+		{
+			animState = base.AnimPlayer.PlayServerAndTakeFromPool(staticDeathAnim);
+			float num2 = Mathf.Max(0f, staticDeathAnim.inPlaceAnimation.length - ragdollWhenAnimRemainingTimeIsBelow);
+			((FacepunchBehaviour)Owner).Invoke(StartRagdollAction, num2 + AI.defaultInterpolationDelay);
+		}
+		else
+		{
+			StartRagdoll();
+		}
+		return base.OnStateEnter(payload);
+	}
+
+	private void StartRagdoll()
+	{
+		BaseCorpse baseCorpse = Owner.DropCorpse(CorpsePrefab.resourcePath);
+		if (((Object)(object)baseCorpse).Is<LootableCorpse>(out LootableCorpse castedUnityObject))
+		{
+			castedUnityObject.TakeFrom(Owner, CreateInventory());
+			PrefabInformation prefabInformation = PrefabAttribute.server.Find<PrefabInformation>(Owner.prefabID);
+			if (prefabInformation != null && prefabInformation.title.IsValid())
+			{
+				castedUnityObject.playerName = prefabInformation.title.translated;
+			}
+			else
+			{
+				castedUnityObject.playerName = ((object)Owner).GetType().Name;
+			}
+			castedUnityObject.Spawn();
+			baseCorpse.TakeChildren(Owner);
+			if (Interface.CallHook("OnCorpsePopulate", (object)Owner, (object)castedUnityObject) == null && LootSpawnSlots.Length != 0)
+			{
+				LootContainer.LootSpawnSlot[] lootSpawnSlots = LootSpawnSlots;
+				for (int i = 0; i < lootSpawnSlots.Length; i++)
+				{
+					LootContainer.LootSpawnSlot lootSpawnSlot = lootSpawnSlots[i];
+					for (int j = 0; j < lootSpawnSlot.numberToSpawn; j++)
+					{
+						if (Random.Range(0f, 1f) <= lootSpawnSlot.probability)
+						{
+							lootSpawnSlot.definition.SpawnIntoContainer(castedUnityObject.containers[0]);
+						}
+					}
+				}
+			}
+		}
+		else if ((Object)(object)baseCorpse != (Object)null)
+		{
+			baseCorpse.Spawn();
+			baseCorpse.TakeChildren(Owner);
+		}
+		((FacepunchBehaviour)Owner).Invoke((Action)Owner.KillMessage, 0.5f);
+	}
+
+	public override void OnStateExit()
+	{
+		base.AnimPlayer.StopServerAndReturnToPool(ref animState);
+		base.OnStateExit();
+	}
+
+	private ItemContainer CreateInventory()
+	{
+		ItemContainer itemContainer = new ItemContainer
+		{
+			entityOwner = Owner
+		};
+		itemContainer.ServerInitialize(null, 24);
+		if (!((ItemContainerId)(ref itemContainer.uid)).IsValid)
+		{
+			itemContainer.GiveUID();
+		}
+		return itemContainer;
+	}
+}
+
+
+using System;
+using System.Collections.Generic;
+using Facepunch;
+using Rust.Ai.Gen2;
+using UnityEngine;
+
+[Serializable]
+public class State_Howl : State_PlayAnimation
+{
+	public const string WolfNearbyAlreadyHowled = "WolfNearbyAlreadyHowled";
+
+	public override EFSMStateStatus OnStateEnter(FSMPayload payload)
+	{
+		//IL_002c: Unknown result type (might be due to invalid IL or missing references)
+		if (!base.Senses.FindTarget(out var targetEntity))
+		{
+			return EFSMStateStatus.Failure;
+		}
+		if (!base.Agent.CanReach(((Component)targetEntity).transform.position, updateLastValidPath: true))
+		{
+			base.Agent.ResetPath();
+			return EFSMStateStatus.Failure;
+		}
+		base.Blackboard.Add("WolfNearbyAlreadyHowled");
+		PooledList<BaseEntity> val = Pool.Get<PooledList<BaseEntity>>();
+		try
+		{
+			base.Senses.GetInitialAllies((List<BaseEntity>)(object)val);
+			foreach (BaseEntity item in (List<BaseEntity>)(object)val)
+			{
+				((Component)item).GetComponent<BlackboardComponent>().Add("WolfNearbyAlreadyHowled");
+				Wolf2FSM otherWolf = ((Component)item).GetComponent<Wolf2FSM>();
+				((FacepunchBehaviour)Owner).Invoke((Action)delegate
+				{
+					otherWolf.Howl(targetEntity);
+				}, 1f);
+			}
+		}
+		finally
+		{
+			((IDisposable)val)?.Dispose();
+		}
+		return base.OnStateEnter(payload);
+	}
+}
+
+
+using System;
+using Rust.Ai.Gen2;
+
+[Serializable]
+public class State_Growl : State_PlayAnimationRM
+{
+	public const string AlreadyGrowled = "AlreadyGrowled";
+
+	public override EFSMStateStatus OnStateEnter(FSMPayload payload)
+	{
+		base.Blackboard.Increment("AlreadyGrowled");
+		return base.OnStateEnter(payload);
+	}
+}
+
+
+using System;
+using System.Collections.Generic;
+using Facepunch;
+using Rust.Ai.Gen2;
+using UnityEngine;
+
+[Serializable]
+public class State_Bark : State_PlayAnimation
+{
+	public const string WolfNearbyAlreadyBarked = "WolfNearbyAlreadyBarked";
+
+	public override EFSMStateStatus OnStateEnter(FSMPayload payload)
+	{
+		if (!base.Senses.FindTarget(out var targetEntity))
+		{
+			return EFSMStateStatus.Failure;
+		}
+		base.Blackboard.Add("WolfNearbyAlreadyBarked");
+		PooledList<BaseEntity> val = Pool.Get<PooledList<BaseEntity>>();
+		try
+		{
+			base.Senses.GetInitialAllies((List<BaseEntity>)(object)val);
+			foreach (BaseEntity item in (List<BaseEntity>)(object)val)
+			{
+				((Component)item).GetComponent<BlackboardComponent>().Add("WolfNearbyAlreadyBarked");
+				Wolf2FSM otherWolf = ((Component)item).GetComponent<Wolf2FSM>();
+				((FacepunchBehaviour)Owner).Invoke((Action)delegate
+				{
+					otherWolf.Bark(targetEntity);
+				}, Mathf.Max(0f, Animation.length + Random.Range(-0.5f, 0.5f)));
+			}
+		}
+		finally
+		{
+			((IDisposable)val)?.Dispose();
+		}
+		return base.OnStateEnter(payload);
+	}
+}
+
+
+using System;
+using Rust.Ai.Gen2;
+using UnityEngine;
+
+[Serializable]
+public class State_Intimidated : State_PlayAnimationRM
+{
+	private static readonly float facingAwayDotThreshold = Mathf.Cos(MathF.PI / 2f);
+
+	public override EFSMStateStatus OnStateEnter(FSMPayload payload)
+	{
+		//IL_0021: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0031: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0036: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0037: Unknown result type (might be due to invalid IL or missing references)
+		//IL_003c: Unknown result type (might be due to invalid IL or missing references)
+		//IL_003f: Unknown result type (might be due to invalid IL or missing references)
+		FaceTarget = true;
+		if (base.Senses.FindTargetPosition(out var targetPosition))
+		{
+			Vector3 forward = ((Component)Owner).transform.forward;
+			Vector3 val = ((Component)Owner).transform.position - targetPosition;
+			if (Vector3.Dot(forward, ((Vector3)(ref val)).normalized) > facingAwayDotThreshold)
+			{
+				return EFSMStateStatus.Success;
+			}
+		}
+		return base.OnStateEnter(payload);
+	}
+}
+
+
+using System;
 using ConVar;
 using Rust;
 using Rust.Ai.Gen2;
@@ -1012,8 +4088,8 @@ using Facepunch;
 using Rust.Ai.Gen2;
 using UnityEngine;
 
-[SoftRequireComponent(typeof(LimitedTurnNavAgent), typeof(RootMotionPlayer), typeof(SenseComponent))]
 [SoftRequireComponent(typeof(BlackboardComponent), typeof(NPCEncounterTimer))]
+[SoftRequireComponent(typeof(LimitedTurnNavAgent), typeof(RootMotionPlayer), typeof(SenseComponent))]
 public class FSMComponent : EntityComponent<BaseEntity>
 {
 	public class TickFSMWorkQueue : PersistentObjectWorkQueue<FSMComponent>
@@ -3976,8 +7052,8 @@ public class LimitedTurnNavAgent : EntityComponent<BaseEntity>
 	[SerializeField]
 	private SteeringMode steeringMode = SteeringMode.LimitedTurnRate;
 
-	[Header("Speed")]
 	[SerializeField]
+	[Header("Speed")]
 	private float sneakSpeed = 0.6f;
 
 	[SerializeField]
@@ -4064,7 +7140,7 @@ public class LimitedTurnNavAgent : EntityComponent<BaseEntity>
 	{
 		get
 		{
-			return base.baseEntity.flags.HasFlag(BaseEntity.Flags.Reserved1);
+			return (base.baseEntity.flags & BaseEntity.Flags.Reserved1) == BaseEntity.Flags.Reserved1;
 		}
 		private set
 		{
@@ -4076,7 +7152,7 @@ public class LimitedTurnNavAgent : EntityComponent<BaseEntity>
 	{
 		get
 		{
-			return base.baseEntity.flags.HasFlag(BaseEntity.Flags.Reserved2);
+			return (base.baseEntity.flags & BaseEntity.Flags.Reserved2) == BaseEntity.Flags.Reserved2;
 		}
 		set
 		{
@@ -8923,6 +11999,9 @@ internal class __JobReflectionRegistrationOutput__1221673671587648887
 			IJobExtensions.EarlyJobInit<FlipBoolJob>();
 			IJobExtensions.EarlyJobInit<GenerateAscSeqListJob>();
 			IJobExtensions.EarlyJobInit<InvertIndexListJob>();
+			IJobExtensions.EarlyJobInit<AddVectorJob>();
+			IJobExtensions.EarlyJobInit<CheckAnyBoolInGroupJob>();
+			IJobExtensions.EarlyJobInit<CheckAnyEnvironmentTypeInGroupJob>();
 			IJobExtensions.EarlyJobInit<RaycastSamplePositionsJob>();
 			IJobExtensions.EarlyJobInit<RaycastBufferSetupJob>();
 			IJobParallelForExtensions.EarlyJobInit<RaycastRaySetupJob>();
@@ -8940,6 +12019,21 @@ internal class __JobReflectionRegistrationOutput__1221673671587648887
 			IJobForExtensions.EarlyJobInit<GenerateInsideMeshCommandsJob>();
 			IJobForExtensions.EarlyJobInit<CheckInsideMeshHitsJob>();
 			IJobForExtensions.EarlyJobInit<FilterInsideMeshHitsJob>();
+			IJobForExtensions.EarlyJobInit<ProgressSpeedingStatesJob>();
+			IJobForExtensions.EarlyJobInit<TransformStartEndTicksJob>();
+			IJobForExtensions.EarlyJobInit<CalculateRDCsJob>();
+			IJobForExtensions.EarlyJobInit<CalcDistAndBudgetJob>();
+			IJobExtensions.EarlyJobInit<AdjustDistBasedOnNormalsJob>();
+			IJobForExtensions.EarlyJobInit<TestAreSpeedingJob>();
+			IJobExtensions.EarlyJobInit<GatherFlyingBatchesJob>();
+			IJobExtensions.EarlyJobInit<BuildFlyingBatchLookupMapJob>();
+			IJobExtensions.EarlyJobInit<GatherHitColliderIndicesJob>();
+			IJobExtensions.EarlyJobInit<GatherValidWaterIndicesJob>();
+			IJobExtensions.EarlyJobInit<CacheInAirStateJob>();
+			IJobExtensions.EarlyJobInit<GatherWasInAirStatesJob>();
+			IJobExtensions.EarlyJobInit<ProcessFlyhackPauseTimeJob>();
+			IJobExtensions.EarlyJobInit<DetermineInAirJob>();
+			IJobExtensions.EarlyJobInit<TestAreFlyingJob>();
 			IJobExtensions.EarlyJobInit<PreCullingJob>();
 			IJobParallelForDeferExtensions.EarlyJobInit<FillFalseJobDefer>();
 			IJobParallelForDeferExtensions.EarlyJobInit<AdjustByTopologyJob>();
@@ -8979,6 +12073,8 @@ internal class __JobReflectionRegistrationOutput__1221673671587648887
 			IJobExtensions.EarlyJobInit<GetHeightsFastJobIndirect>();
 			IJobParallelForExtensions.EarlyJobInit<GetHeightsJob>();
 			IJobExtensions.EarlyJobInit<TerrainHeightMapJobs.GetHeightsJobIndirect>();
+			IJobExtensions.EarlyJobInit<GetNormalsJobIndirect>();
+			IJobExtensions.EarlyJobInit<GetNormalsJobIndirectDeferred>();
 			IJobExtensions.EarlyJobInit<CheckPosRadJob>();
 			IJobExtensions.EarlyJobInit<CheckPosRadBatchJob>();
 			IJobExtensions.EarlyJobInit<CheckPosRadBatchJobIndirect>();
@@ -8995,12 +12091,17 @@ internal class __JobReflectionRegistrationOutput__1221673671587648887
 			IJobExtensions.EarlyJobInit<SelectMaxWaterLevelJobIndirect>();
 			IJobExtensions.EarlyJobInit<CalcCenterJobIndirect>();
 			IJobExtensions.EarlyJobInit<InitialValidateInfoJobIndirect>();
+			IJobExtensions.EarlyJobInit<InitialValidateSimpleInfoJobIndirect>();
 			IJobExtensions.EarlyJobInit<GatherValidInfosJobIndirect>();
 			IJobExtensions.EarlyJobInit<GatherInvalidInfosJobIndirect>();
 			IJobExtensions.EarlyJobInit<UpdateWaterHeightsJobIndirect>();
+			IJobExtensions.EarlyJobInit<UpdateWaterHeightsWithVolumesJobIndirect>();
 			IJobExtensions.EarlyJobInit<SetupHeadQueryJobIndirect>();
 			IJobExtensions.EarlyJobInit<ApplyHeadQueryResultsJobIndirect>();
 			IJobExtensions.EarlyJobInit<ResolveWaterInfosJobIndirect>();
+			IJobExtensions.EarlyJobInit<ResolveIgnoreWaterInfosJob>();
+			IJobExtensions.EarlyJobInit<ResolveWaterInfosSimpleJobIndirect>();
+			IJobForExtensions.EarlyJobInit<CalcPlayerSpeedJob>();
 			IJobExtensions.EarlyJobInit<UpdateWaterCache>();
 			IJobExtensions.EarlyJobInit<GatherPosToValidateJob>();
 			IJobParallelForTransformExtensions.EarlyJobInit<RecacheTransforms>();
@@ -9049,11 +12150,14 @@ internal class __JobReflectionRegistrationOutput__1221673671587648887
 			IJobExtensions.EarlyJobInit<FillJob<float>>();
 			IJobForExtensions.EarlyJobInit<SortHitsJob<RaycastHitComparer>>();
 			IJobExtensions.EarlyJobInit<FillJob<Vector3>>();
+			IJobExtensions.EarlyJobInit<FillJob<WaterLevel.WaterInfo>>();
 			IJobExtensions.EarlyJobInit<FillJob<int>>();
 			IJobExtensions.EarlyJobInit<GatherJob<Vector3>>();
 			IJobExtensions.EarlyJobInit<GatherJob<float>>();
 			IJobExtensions.EarlyJobInit<CopyArrayJob<float>>();
 			IJobExtensions.EarlyJobInit<GatherJob<int>>();
+			IJobExtensions.EarlyJobInit<FillJob<RDC>>();
+			IJobExtensions.EarlyJobInit<ScatterValueToJobDeferred<Vector3>>();
 			IJobExtensions.EarlyJobInit<FillJob<Vector4>>();
 		}
 		catch (Exception ex)
@@ -9079,19 +12183,19 @@ internal static class $BurstDirectCallInitializer
 	[RuntimeInitializeOnLoadMethod(/*Could not decode attribute arguments.*/)]
 	private static void Initialize()
 	{
-		BuoyancyBurstUtility.FillPointData_00004F03$BurstDirectCall.Initialize();
-		BuoyancyForceAccumulationBurst.Compute_00004F05$BurstDirectCall.Initialize();
-		EnvironmentVolumeMath.CalculateTransformationBoundsBurst_00005532$BurstDirectCall.Initialize();
-		EnvironmentVolumeMath.MultiplyPoint3X4_00005533$BurstDirectCall.Initialize();
-		EnvironmentVolumeMath.UpdateVolumeTransformationAndBoundsBurst_00005534$BurstDirectCall.Initialize();
-		WaterVolumeBurst.TestBurst_000059C2$BurstDirectCall.Initialize();
-		TerrainWaterFlowMapBurst.GetFlowDirections_000062A7$BurstDirectCall.Initialize();
-		WaterSystemBurst.GetHeightArray_Burst_000065A5$BurstDirectCall.Initialize();
-		WaterSystemBurst.ComputeOceanSimHeight_Burst_000065A6$BurstDirectCall.Initialize();
-		WaterLevelBurst.GetBuoyancyWaterInfoBatched_000077E6$BurstDirectCall.Initialize();
-		WaterLevelBurst.ConstructDeepWaterCommands_000077E7$BurstDirectCall.Initialize();
-		Util.FindFreeSlot_00007C1D$BurstDirectCall.Initialize();
-		Util.FindFreeSlot_00007C1E$BurstDirectCall.Initialize();
+		BuoyancyBurstUtility.FillPointData_00004FC3$BurstDirectCall.Initialize();
+		BuoyancyForceAccumulationBurst.Compute_00004FC5$BurstDirectCall.Initialize();
+		EnvironmentVolumeMath.CalculateTransformationBoundsBurst_000055F5$BurstDirectCall.Initialize();
+		EnvironmentVolumeMath.MultiplyPoint3X4_000055F6$BurstDirectCall.Initialize();
+		EnvironmentVolumeMath.UpdateVolumeTransformationAndBoundsBurst_000055F7$BurstDirectCall.Initialize();
+		WaterVolumeBurst.TestBurst_00005A8E$BurstDirectCall.Initialize();
+		TerrainWaterFlowMapBurst.GetFlowDirections_00006394$BurstDirectCall.Initialize();
+		WaterSystemBurst.GetHeightArray_Burst_000066A8$BurstDirectCall.Initialize();
+		WaterSystemBurst.ComputeOceanSimHeight_Burst_000066A9$BurstDirectCall.Initialize();
+		WaterLevelBurst.GetBuoyancyWaterInfoBatched_00007948$BurstDirectCall.Initialize();
+		WaterLevelBurst.ConstructDeepWaterCommands_00007949$BurstDirectCall.Initialize();
+		Util.FindFreeSlot_00007D87$BurstDirectCall.Initialize();
+		Util.FindFreeSlot_00007D88$BurstDirectCall.Initialize();
 	}
 }
 

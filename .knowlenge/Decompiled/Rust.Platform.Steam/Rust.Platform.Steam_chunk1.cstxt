@@ -334,7 +334,7 @@ internal class IpListQuery : IServerQuery, IDisposable
 		_filters.Add((key, value));
 	}
 
-	public async Task RunQueryAsync(double timeoutSeconds = 10.0)
+	public async Task RunQueryAsync(double timeoutSeconds = 10.0, bool excludeEmptyServers = false)
 	{
 		if (_ips == null || _ips.Count == 0)
 		{
@@ -678,6 +678,8 @@ public class SteamPlatform : IPlatformService
 
 	private bool _initialized;
 
+	private Dictionary<int, IPlayerItemDefinition> _itemDefinitionsByIdCache;
+
 	public bool IsValid => SteamServer.IsValid;
 
 	public IReadOnlyList<IPlayerItemDefinition> ItemDefinitions { get; private set; }
@@ -814,23 +816,22 @@ public class SteamPlatform : IPlatformService
 
 	public IPlayerItemDefinition GetItemDefinition(int definitionId)
 	{
-		if (ItemDefinitions == null)
+		if (_itemDefinitionsByIdCache == null)
 		{
 			return null;
 		}
-		foreach (IPlayerItemDefinition itemDefinition in ItemDefinitions)
-		{
-			if (itemDefinition.DefinitionId == definitionId)
-			{
-				return itemDefinition;
-			}
-		}
-		return null;
+		_itemDefinitionsByIdCache.TryGetValue(definitionId, out var value);
+		return value;
 	}
 
 	private void OnDefinitionsUpdated()
 	{
-		ItemDefinitions = (IReadOnlyList<IPlayerItemDefinition>)SteamInventory.Definitions.Select((InventoryDef d) => new SteamItemDefinition(d)).ToList();
+		List<SteamItemDefinition> list = (List<SteamItemDefinition>)(ItemDefinitions = (IReadOnlyList<IPlayerItemDefinition>)SteamInventory.Definitions.Select((InventoryDef d) => new SteamItemDefinition(d)).ToList());
+		_itemDefinitionsByIdCache = new Dictionary<int, IPlayerItemDefinition>(list.Count);
+		foreach (SteamItemDefinition item in list)
+		{
+			_itemDefinitionsByIdCache[item.DefinitionId] = (IPlayerItemDefinition)(object)item;
+		}
 		_hooks.OnItemDefinitionsChanged();
 	}
 
@@ -1177,7 +1178,7 @@ public class SteamServerQuery : IServerQuery, IDisposable
 		Query.AddFilter(key, value);
 	}
 
-	public async Task RunQueryAsync(double timeoutInSeconds)
+	public async Task RunQueryAsync(double timeoutInSeconds, bool excludeEmptyServers = false)
 	{
 		await Query.RunQueryAsync((float)timeoutInSeconds);
 	}

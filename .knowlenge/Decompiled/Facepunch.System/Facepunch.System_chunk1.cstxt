@@ -1118,6 +1118,92 @@ public class ListHashSet<T> : IEnumerable<T>, IEnumerable, IList<T>, ICollection
 		}
 	}
 
+	public static void PartialCompare(ListHashSet<T> a, ListHashSet<T> b, List<T> added, int addedLimit, List<T> removed, int removedLimit, List<T> remained)
+	{
+		if (a == null && b == null)
+		{
+			return;
+		}
+		if (addedLimit == 0)
+		{
+			added = null;
+		}
+		if (removedLimit == 0)
+		{
+			removed = null;
+		}
+		if (a == null)
+		{
+			if (added != null)
+			{
+				for (int i = 0; i < addedLimit; i++)
+				{
+					added.Add(b[i]);
+				}
+			}
+		}
+		else if (b == null)
+		{
+			if (removed != null)
+			{
+				for (int j = 0; j < removedLimit; j++)
+				{
+					removed.Add(a[j]);
+				}
+			}
+		}
+		else
+		{
+			if (a.Count == 0 && b.Count == 0)
+			{
+				return;
+			}
+			HashSet<T> obj = Pool.Get<HashSet<T>>();
+			foreach (T item in b)
+			{
+				if (!obj.Contains(item))
+				{
+					bool flag = false;
+					if (a.Contains(item))
+					{
+						remained?.Add(item);
+					}
+					else if (added != null)
+					{
+						added.Add(item);
+						flag = --addedLimit <= 0;
+					}
+					obj.Add(item);
+					if (flag)
+					{
+						break;
+					}
+				}
+			}
+			foreach (T item2 in a)
+			{
+				if (obj.Contains(item2))
+				{
+					continue;
+				}
+				if (b.Contains(item2))
+				{
+					remained?.Add(item2);
+				}
+				else if (removed != null)
+				{
+					removed.Add(item2);
+					if (--removedLimit <= 0)
+					{
+						break;
+					}
+				}
+				obj.Add(item2);
+			}
+			Pool.FreeUnmanaged(ref obj);
+		}
+	}
+
 	public T GetRandom()
 	{
 		int count = vals.Count;
@@ -3058,14 +3144,27 @@ public class Grid<T>
 	{
 		public HashSet<T> Contents = new HashSet<T>();
 
+		public event Action OnNodeContentsChanged;
+
 		public void Add(T obj)
 		{
 			Contents.Add(obj);
+			this.OnNodeContentsChanged?.Invoke();
 		}
 
 		public bool Remove(T obj)
 		{
-			return Contents.Remove(obj);
+			bool num = Contents.Remove(obj);
+			if (num)
+			{
+				Action action = this.OnNodeContentsChanged;
+				if (action == null)
+				{
+					return num;
+				}
+				action();
+			}
+			return num;
 		}
 	}
 
@@ -3174,6 +3273,82 @@ public class Grid<T>
 				{
 					result.AddRange(Nodes[i, j].Contents);
 				}
+			}
+		}
+	}
+
+	public void Query(float x, float y, float radius, List<T> result, Func<T, bool> filter)
+	{
+		if (result == null)
+		{
+			return;
+		}
+		int num = Clamp((x + CenterX - radius) / (float)CellSize);
+		int num2 = Clamp((x + CenterX + radius) / (float)CellSize);
+		int num3 = Clamp((y + CenterY - radius) / (float)CellSize);
+		int num4 = Clamp((y + CenterY + radius) / (float)CellSize);
+		for (int i = num; i <= num2; i++)
+		{
+			for (int j = num3; j <= num4; j++)
+			{
+				if (Nodes[i, j] == null)
+				{
+					continue;
+				}
+				foreach (T content in Nodes[i, j].Contents)
+				{
+					if (filter == null || filter(content))
+					{
+						result.Add(content);
+					}
+				}
+			}
+		}
+	}
+
+	public bool Any(float x, float y, float radius, Func<T, bool> filter)
+	{
+		int num = Clamp((x + CenterX - radius) / (float)CellSize);
+		int num2 = Clamp((x + CenterX + radius) / (float)CellSize);
+		int num3 = Clamp((y + CenterY - radius) / (float)CellSize);
+		int num4 = Clamp((y + CenterY + radius) / (float)CellSize);
+		for (int i = num; i <= num2; i++)
+		{
+			for (int j = num3; j <= num4; j++)
+			{
+				if (Nodes[i, j] == null)
+				{
+					continue;
+				}
+				foreach (T content in Nodes[i, j].Contents)
+				{
+					if (filter == null || filter(content))
+					{
+						return true;
+					}
+				}
+			}
+		}
+		return false;
+	}
+
+	public void Subscribe(float x, float y, float radius, Action callback)
+	{
+		int num = Clamp((x + CenterX - radius) / (float)CellSize);
+		int num2 = Clamp((x + CenterX + radius) / (float)CellSize);
+		int num3 = Clamp((y + CenterY - radius) / (float)CellSize);
+		int num4 = Clamp((y + CenterY + radius) / (float)CellSize);
+		for (int i = num; i <= num2; i++)
+		{
+			for (int j = num3; j <= num4; j++)
+			{
+				Node node = Nodes[i, j];
+				if (node == null)
+				{
+					node = new Node();
+					Nodes[i, j] = node;
+				}
+				node.OnNodeContentsChanged += callback;
 			}
 		}
 	}
@@ -6401,20 +6576,34 @@ private struct MonoScriptData
 }
 
 
+using System;
 using System.Collections.Generic;
 
 internal class Node
 {
 	public HashSet<T> Contents = new HashSet<T>();
 
+	public event Action OnNodeContentsChanged;
+
 	public void Add(T obj)
 	{
 		Contents.Add(obj);
+		this.OnNodeContentsChanged?.Invoke();
 	}
 
 	public bool Remove(T obj)
 	{
-		return Contents.Remove(obj);
+		bool num = Contents.Remove(obj);
+		if (num)
+		{
+			Action action = this.OnNodeContentsChanged;
+			if (action == null)
+			{
+				return num;
+			}
+			action();
+		}
+		return num;
 	}
 }
 

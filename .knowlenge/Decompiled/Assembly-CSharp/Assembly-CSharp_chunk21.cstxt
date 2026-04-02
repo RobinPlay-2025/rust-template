@@ -1,6 +1,772 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Threading;
+using System.Threading.Tasks;
+using Azure.Core;
+using Azure.Identity;
+using Azure.Storage.Blobs;
+using ConVar;
+using UnityEngine;
+
+private class AzureBulkUploaderImpl : IUploader
+{
+	private Dictionary<AnalyticsTable, BulkAccumulator> accumulators = new Dictionary<AnalyticsTable, BulkAccumulator>();
+
+	private BlobContainerClient containerClient;
+
+	private long bytesUploaded;
+
+	private string usedBulkUploadConnectionString = string.Empty;
+
+	private string usedBulkContainerUrl = string.Empty;
+
+	private string usedAzureTenantId = string.Empty;
+
+	private string usedAzureClientId = string.Empty;
+
+	private string usedAzureClientSecret = string.Empty;
+
+	public bool Enabled
+	{
+		get
+		{
+			if (!Analytics.DryRun)
+			{
+				return CanCreateContainerClient();
+			}
+			return true;
+		}
+	}
+
+	public string Name => "Azure";
+
+	public bool IsCompressed => true;
+
+	public long BytesUploaded => bytesUploaded;
+
+	public int ItemsSerialized
+	{
+		get
+		{
+			int num = 0;
+			foreach (KeyValuePair<AnalyticsTable, BulkAccumulator> accumulator in accumulators)
+			{
+				accumulator.Deconstruct(out var _, out var value);
+				BulkAccumulator bulkAccumulator = value;
+				num += bulkAccumulator.ItemsWritten;
+			}
+			return num;
+		}
+	}
+
+	public long BytesSerialized
+	{
+		get
+		{
+			long num = 0L;
+			foreach (KeyValuePair<AnalyticsTable, BulkAccumulator> accumulator in accumulators)
+			{
+				accumulator.Deconstruct(out var _, out var value);
+				BulkAccumulator bulkAccumulator = value;
+				num += bulkAccumulator.BytesWritten;
+			}
+			return num;
+		}
+	}
+
+	public IAccumulator GetAccumulatorFor(AnalyticsTable table)
+	{
+		if (accumulators.TryGetValue(table, out var value))
+		{
+			return value;
+		}
+		BulkAccumulator bulkAccumulator = new BulkAccumulator();
+		accumulators.Add(table, bulkAccumulator);
+		return bulkAccumulator;
+	}
+
+	public async Task Upload(AnalyticsTable table, MemoryStream stream)
+	{
+		if (!accumulators.TryGetValue(table, out var accumulator))
+		{
+			return;
+		}
+		TimeWarning _ = TimeWarning.New("AzureBulkUploader.Upload", 0);
+		try
+		{
+			if (containerClient == null)
+			{
+				if (CanCreateContainerClient())
+				{
+					containerClient = CreateContainerClient();
+				}
+			}
+			else
+			{
+				if (!CanCreateContainerClient())
+				{
+					containerClient = null;
+					usedBulkUploadConnectionString = string.Empty;
+					usedBulkContainerUrl = string.Empty;
+					usedAzureTenantId = string.Empty;
+					usedAzureClientId = string.Empty;
+					usedAzureClientSecret = string.Empty;
+				}
+				if (HasEndpointChanged())
+				{
+					containerClient = CreateContainerClient();
+				}
+			}
+			if (containerClient != null || Analytics.DryRun)
+			{
+				string text = ((table.Mode == AnalyticsDocumentMode.JSON) ? ".json" : ".csv");
+				string text2 = Path.Combine(table.Name, Server.server_id, Guid.NewGuid().ToString("N") + text + ".gz");
+				if (Analytics.Log || Analytics.DryRun)
+				{
+					string text3 = ((!string.IsNullOrEmpty(usedBulkUploadConnectionString)) ? usedBulkUploadConnectionString : usedBulkContainerUrl);
+					Debug.Log((object)string.Concat(string.Concat(table.Name + " Uploading to " + text3 + "\n", "BlobPath: ", text2, "\n"), $"Data: {stream.Length} bytes compressed\n"));
+				}
+				if (!Analytics.DryRun)
+				{
+					await containerClient.UploadBlobAsync(text2, (Stream)stream, default(CancellationToken));
+				}
+				bytesUploaded += stream.Length;
+			}
+			accumulator.Recycle(stream);
+		}
+		finally
+		{
+			((IDisposable)_)?.Dispose();
+		}
+	}
+
+	private BlobContainerClient CreateContainerClient()
+	{
+		//IL_0017: Unknown result type (might be due to invalid IL or missing references)
+		//IL_001d: Expected O, but got Unknown
+		//IL_0098: Unknown result type (might be due to invalid IL or missing references)
+		//IL_009e: Expected O, but got Unknown
+		//IL_00aa: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00b0: Expected O, but got Unknown
+		BlobContainerClient result;
+		if (!string.IsNullOrEmpty(Analytics.BulkUploadConnectionString))
+		{
+			result = new BlobContainerClient(new Uri(Analytics.BulkUploadConnectionString), (BlobClientOptions)null);
+			usedBulkUploadConnectionString = Analytics.BulkUploadConnectionString;
+			usedBulkContainerUrl = string.Empty;
+			usedAzureTenantId = string.Empty;
+			usedAzureClientId = string.Empty;
+			usedAzureClientSecret = string.Empty;
+		}
+		else
+		{
+			if (string.IsNullOrEmpty(Analytics.AzureTenantId) || string.IsNullOrEmpty(Analytics.AzureClientId) || string.IsNullOrEmpty(Analytics.AzureClientSecret))
+			{
+				Debug.Log((object)"analytics_bulk_container_url set but missing Azure AD credentials, disabling bulk uploader.");
+				return null;
+			}
+			ClientSecretCredential val = new ClientSecretCredential(Analytics.AzureTenantId, Analytics.AzureClientId, Analytics.AzureClientSecret);
+			result = new BlobContainerClient(new Uri(Analytics.BulkContainerUrl), (TokenCredential)(object)val, (BlobClientOptions)null);
+			usedBulkUploadConnectionString = string.Empty;
+			usedBulkContainerUrl = Analytics.BulkContainerUrl;
+			usedAzureTenantId = Analytics.AzureTenantId;
+			usedAzureClientId = Analytics.AzureClientId;
+			usedAzureClientSecret = Analytics.AzureClientSecret;
+		}
+		return result;
+	}
+
+	private bool CanCreateContainerClient()
+	{
+		if (string.IsNullOrEmpty(Analytics.BulkUploadConnectionString))
+		{
+			if (!string.IsNullOrEmpty(Analytics.BulkContainerUrl) && !string.IsNullOrEmpty(Analytics.AzureTenantId) && !string.IsNullOrEmpty(Analytics.AzureClientId))
+			{
+				return !string.IsNullOrEmpty(Analytics.AzureClientSecret);
+			}
+			return false;
+		}
+		return true;
+	}
+
+	private bool HasEndpointChanged()
+	{
+		if (!(Analytics.BulkUploadConnectionString != usedBulkUploadConnectionString) && !(Analytics.BulkContainerUrl != usedBulkContainerUrl) && !(Analytics.AzureTenantId != usedAzureTenantId) && !(Analytics.AzureClientId != usedAzureClientId))
+		{
+			return Analytics.AzureClientSecret != usedAzureClientSecret;
+		}
+		return true;
+	}
+
+	public void ResetStats()
+	{
+		bytesUploaded = 0L;
+		foreach (KeyValuePair<AnalyticsTable, BulkAccumulator> accumulator in accumulators)
+		{
+			accumulator.Deconstruct(out var _, out var value);
+			value.ResetStats();
+		}
+	}
+
+	public IUploader Resolve()
+	{
+		return this;
+	}
+}
+
+
+using System.IO;
+using System.Threading.Tasks;
+
+public class FallbackUploader : IUploader
+{
+	private IUploader primaryUploader;
+
+	private IUploader fallbackUploader;
+
+	private string name;
+
+	public bool DisablePrimary;
+
+	public bool Enabled
+	{
+		get
+		{
+			if (!primaryUploader.Enabled)
+			{
+				return fallbackUploader.Enabled;
+			}
+			return true;
+		}
+	}
+
+	public string Name => name;
+
+	public bool IsCompressed => false;
+
+	public long BytesUploaded => 0L;
+
+	public int ItemsSerialized => 0;
+
+	public long BytesSerialized => 0L;
+
+	public FallbackUploader(IUploader primaryUploader, IUploader fallbackUploader)
+	{
+		this.primaryUploader = primaryUploader;
+		this.fallbackUploader = fallbackUploader;
+		name = primaryUploader.Name + "->" + fallbackUploader.Name;
+	}
+
+	public IAccumulator GetAccumulatorFor(AnalyticsTable table)
+	{
+		if (!DisablePrimary && primaryUploader.Enabled)
+		{
+			return primaryUploader.GetAccumulatorFor(table);
+		}
+		return fallbackUploader.GetAccumulatorFor(table);
+	}
+
+	public Task Upload(AnalyticsTable table, MemoryStream stream)
+	{
+		if (!DisablePrimary && primaryUploader.Enabled)
+		{
+			return primaryUploader.Upload(table, stream);
+		}
+		return fallbackUploader.Upload(table, stream);
+	}
+
+	public void ResetStats()
+	{
+		primaryUploader.ResetStats();
+		fallbackUploader.ResetStats();
+	}
+
+	public IUploader Resolve()
+	{
+		if (primaryUploader.Enabled)
+		{
+			return primaryUploader.Resolve();
+		}
+		return fallbackUploader.Resolve();
+	}
+}
+
+
+public struct TelemStats
+{
+	public int SerializedCount;
+
+	public long SerializedSize;
+
+	public long UploadedSize;
+
+	public int QueueCount;
+
+	public int MaxQueueCount;
+}
+
+
+public struct UploadingTable
+{
+	public AnalyticsTable Table;
+
+	public IUploader Uploader;
+}
+
+
+using System;
+using System.Collections.Concurrent;
+using System.IO;
+using System.Threading;
+using Facepunch;
+using Facepunch.Rust;
+using UnityEngine;
+
+public class AnalyticsTable
+{
+	private string name;
+
+	private TimeSpan uploadInterval;
+
+	private DateTime nextUploadStamp;
+
+	private AnalyticsDocumentMode mode;
+
+	private bool useJsonDataObject;
+
+	private int queueCount;
+
+	private int maxQueueCount;
+
+	private ConcurrentBag<EventRecord> records = new ConcurrentBag<EventRecord>();
+
+	public int QueueCount => queueCount;
+
+	public int MaxQueueCount => maxQueueCount;
+
+	public bool WantsUpload => DateTime.Now > nextUploadStamp;
+
+	public string Name => name;
+
+	public bool UseJsonDataObject => useJsonDataObject;
+
+	public AnalyticsDocumentMode Mode => mode;
+
+	public TimeSpan UploadInterval
+	{
+		get
+		{
+			return uploadInterval;
+		}
+		set
+		{
+			nextUploadStamp -= uploadInterval;
+			uploadInterval = value;
+			nextUploadStamp += uploadInterval;
+		}
+	}
+
+	public AnalyticsTable(string tableName, TimeSpan uploadInterval, AnalyticsDocumentMode mode = AnalyticsDocumentMode.JSON, bool useJsonDataObject = false)
+	{
+		name = tableName;
+		this.uploadInterval = uploadInterval;
+		nextUploadStamp = DateTime.Now + uploadInterval;
+		this.mode = mode;
+		this.useJsonDataObject = useJsonDataObject;
+	}
+
+	public void Append(EventRecord record)
+	{
+		records.Add(record);
+		int num = Interlocked.Increment(ref queueCount);
+		int num2;
+		do
+		{
+			num2 = maxQueueCount;
+		}
+		while (num > num2 && Interlocked.CompareExchange(ref maxQueueCount, num, num2) != num2);
+	}
+
+	public void Clear()
+	{
+		EventRecord result;
+		while (records.TryTake(out result))
+		{
+			result.MarkSubmitted();
+			Pool.Free<EventRecord>(ref result);
+		}
+		queueCount = 0;
+	}
+
+	public MemoryStream Accumulate(AnalyticsManager.IAccumulator accumulator, bool forceConsume)
+	{
+		TimeWarning val = TimeWarning.New("AnalyticsTable.Accumulate", 0);
+		try
+		{
+			int num = 0;
+			EventRecord result;
+			while (records.TryTake(out result))
+			{
+				accumulator.Accumulate(this, result);
+				result.MarkSubmitted();
+				Pool.Free<EventRecord>(ref result);
+				num++;
+			}
+			Interlocked.Add(ref queueCount, -num);
+			MemoryStream result2 = null;
+			if (accumulator.HasPending)
+			{
+				if (WantsUpload || forceConsume)
+				{
+					UpdateNextUploadTime();
+					result2 = accumulator.Consume(this);
+				}
+				if (Analytics.Log)
+				{
+					string text = accumulator.ConsumeLogs();
+					if (!string.IsNullOrEmpty(text))
+					{
+						Debug.Log((object)$"{Name} appending {text.Length} bytes:\n{text}");
+					}
+				}
+			}
+			return result2;
+		}
+		finally
+		{
+			((IDisposable)val)?.Dispose();
+		}
+	}
+
+	public void UpdateNextUploadTime()
+	{
+		nextUploadStamp = DateTime.Now + uploadInterval;
+	}
+
+	public void ResetStats()
+	{
+		queueCount = 0;
+		maxQueueCount = 0;
+	}
+}
+
+
+using Facepunch.Rust;
+
+public static class AzureAnalyticsUploaderEx
+{
+	public static bool NeedsCreation(this AzureAnalyticsUploader uploader)
+	{
+		return uploader?.TryFlush() ?? true;
+	}
+}
+
+
+public enum AnalyticsDocumentMode
+{
+	JSON,
+	CSV
+}
+
+
+using System;
+using System.Collections.Concurrent;
+using System.IO;
+using System.IO.Compression;
+using System.Threading;
+using System.Threading.Tasks;
+using Azure;
+using Azure.Core;
+using Azure.Identity;
+using Azure.Storage.Blobs;
+using Azure.Storage.Blobs.Models;
+using Azure.Storage.Blobs.Specialized;
+using ConVar;
+using Cysharp.Text;
+using Facepunch;
+using Facepunch.Rust;
+using UnityEngine;
+
+public class AzureAnalyticsUploader : IPooled
+{
+	public static bool UsePooling = false;
+
+	public static int SmallBufferSendLimit = 16384;
+
+	public static ClientSecretCredential Credential;
+
+	private ConcurrentQueue<EventRecord> queue = new ConcurrentQueue<EventRecord>();
+
+	private BlobClient _blobClient;
+
+	private Stream Stream;
+
+	private GZipStream ZipStream;
+
+	private Utf8ValueStringBuilder Writer;
+
+	private bool disposed;
+
+	private BlobOpenWriteOptions blobWriteOptions = new BlobOpenWriteOptions
+	{
+		HttpHeaders = new BlobHttpHeaders
+		{
+			ContentEncoding = "gzip"
+		}
+	};
+
+	public TimeSpan LoopDelay { get; set; }
+
+	public DateTime Expiry { get; private set; }
+
+	public bool StrictMode { get; set; }
+
+	public AnalyticsDocumentMode DocumentMode { get; private set; }
+
+	public bool UseJsonDataObject { get; set; }
+
+	public AzureAnalyticsUploader()
+	{
+		//IL_000c: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0011: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0012: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0017: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0027: Expected O, but got Unknown
+		//IL_002c: Expected O, but got Unknown
+		//IL_0033: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0038: Unknown result type (might be due to invalid IL or missing references)
+		Writer = ZString.CreateUtf8StringBuilder();
+	}
+
+	public void EnterPool()
+	{
+		disposed = true;
+	}
+
+	private void Initialize()
+	{
+		LoopDelay = TimeSpan.FromMilliseconds(250.0);
+		Expiry = DateTime.MinValue;
+		StrictMode = false;
+		UseJsonDataObject = false;
+		DocumentMode = AnalyticsDocumentMode.JSON;
+		EmptyUploadQueue();
+		_blobClient = null;
+		Stream = null;
+		ZipStream = null;
+		disposed = false;
+	}
+
+	public void LeavePool()
+	{
+		Initialize();
+	}
+
+	public bool TryFlush()
+	{
+		if (Expiry >= DateTime.UtcNow)
+		{
+			return false;
+		}
+		disposed = true;
+		return true;
+	}
+
+	public static AzureAnalyticsUploader Create(string table, TimeSpan timeout, AnalyticsDocumentMode mode = AnalyticsDocumentMode.JSON)
+	{
+		//IL_00a3: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00a9: Expected O, but got Unknown
+		//IL_0112: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0118: Expected O, but got Unknown
+		//IL_00f8: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0102: Expected O, but got Unknown
+		AzureAnalyticsUploader azureAnalyticsUploader;
+		if (UsePooling)
+		{
+			azureAnalyticsUploader = Pool.Get<AzureAnalyticsUploader>();
+		}
+		else
+		{
+			azureAnalyticsUploader = new AzureAnalyticsUploader();
+			azureAnalyticsUploader.Initialize();
+		}
+		azureAnalyticsUploader.Expiry = DateTime.UtcNow + timeout;
+		azureAnalyticsUploader.DocumentMode = mode;
+		if (string.IsNullOrEmpty(Analytics.GetContainerUrl()))
+		{
+			Debug.Log((object)"No analytics_bulk_container_url or analytics_bulk_connection_string set, disabling bulk uploader.");
+			azureAnalyticsUploader.disposed = true;
+			return azureAnalyticsUploader;
+		}
+		string text = ((mode == AnalyticsDocumentMode.JSON) ? ".json" : ".csv");
+		string text2 = Path.Combine(table, Server.server_id, Guid.NewGuid().ToString("N") + text + ".gz");
+		BlobContainerClient val;
+		if (!string.IsNullOrEmpty(Analytics.BulkUploadConnectionString))
+		{
+			val = new BlobContainerClient(new Uri(Analytics.BulkUploadConnectionString), (BlobClientOptions)null);
+		}
+		else
+		{
+			if (string.IsNullOrEmpty(Analytics.AzureTenantId) || string.IsNullOrEmpty(Analytics.AzureClientId) || string.IsNullOrEmpty(Analytics.AzureClientSecret))
+			{
+				Debug.Log((object)"analytics_bulk_container_url set but missing Azure AD credentials, disabling bulk uploader.");
+				azureAnalyticsUploader.disposed = true;
+				return azureAnalyticsUploader;
+			}
+			if (Credential == null)
+			{
+				Credential = new ClientSecretCredential(Analytics.AzureTenantId, Analytics.AzureClientId, Analytics.AzureClientSecret);
+			}
+			val = new BlobContainerClient(new Uri(Analytics.BulkContainerUrl), (TokenCredential)(object)Credential, (BlobClientOptions)null);
+		}
+		azureAnalyticsUploader._blobClient = val.GetBlobClient(text2);
+		Task.Run((Func<Task?>)azureAnalyticsUploader.UploadThread);
+		return azureAnalyticsUploader;
+	}
+
+	public void Append(EventRecord record)
+	{
+		if (disposed)
+		{
+			if (StrictMode)
+			{
+				throw new Exception("Trying to append to a disposed uploader: make sure to dispose the uploader properly!");
+			}
+			record.MarkSubmitted();
+			Pool.Free<EventRecord>(ref record);
+		}
+		else
+		{
+			queue.Enqueue(record);
+		}
+	}
+
+	private async Task CreateBlobAsync()
+	{
+		CancellationTokenSource cancellationTokenSource = new CancellationTokenSource();
+		cancellationTokenSource.CancelAfter(TimeSpan.FromSeconds(10.0));
+		blobWriteOptions.HttpHeaders.ContentType = ((DocumentMode == AnalyticsDocumentMode.JSON) ? "application/json" : "text/csv");
+		try
+		{
+			Stream = await _blobClient.OpenWriteAsync(true, blobWriteOptions, cancellationTokenSource.Token);
+		}
+		catch (RequestFailedException val)
+		{
+			RequestFailedException val2 = val;
+			switch (val2.Status)
+			{
+			case 403:
+				Debug.Log((object)("Access denied to container " + ((BlobBaseClient)_blobClient).BlobContainerName + ", disabling bulk uploader."));
+				break;
+			case 404:
+				Debug.Log((object)("Container " + ((BlobBaseClient)_blobClient).BlobContainerName + " doesn't exist, disabling bulk uploader."));
+				break;
+			default:
+				Debug.Log((object)$"Unknown error when opening Azure container, status code: {val2.Status}, disabling bulk uploader.");
+				Debug.LogException((Exception)(object)val2);
+				break;
+			}
+			EmptyUploadQueue();
+			return;
+		}
+		ZipStream = new GZipStream(Stream, CompressionLevel.Fastest);
+		((Utf8ValueStringBuilder)(ref Writer)).Clear();
+	}
+
+	private async Task UploadThread()
+	{
+		try
+		{
+			_ = 2;
+			try
+			{
+				while (!disposed || !queue.IsEmpty)
+				{
+					EventRecord record;
+					while (queue.TryDequeue(out record))
+					{
+						if (Stream == null)
+						{
+							await CreateBlobAsync();
+							if (Stream == null)
+							{
+								record.MarkSubmitted();
+								Pool.Free<EventRecord>(ref record);
+								continue;
+							}
+						}
+						((Utf8ValueStringBuilder)(ref Writer)).Clear();
+						if (DocumentMode == AnalyticsDocumentMode.JSON)
+						{
+							record.SerializeAsJson(ref Writer, UseJsonDataObject);
+						}
+						else if (DocumentMode == AnalyticsDocumentMode.CSV)
+						{
+							record.SerializeAsCSV(ref Writer);
+						}
+						((Utf8ValueStringBuilder)(ref Writer)).AppendLine();
+						if (((Utf8ValueStringBuilder)(ref Writer)).Length > SmallBufferSendLimit)
+						{
+							await ((Utf8ValueStringBuilder)(ref Writer)).WriteToAsync((Stream)ZipStream);
+						}
+						else
+						{
+							((Utf8ValueStringBuilder)(ref Writer)).WriteTo((Stream)ZipStream);
+						}
+						record.MarkSubmitted();
+						Pool.Free<EventRecord>(ref record);
+					}
+					await Task.Delay(LoopDelay);
+				}
+			}
+			catch (Exception ex)
+			{
+				disposed = true;
+				Debug.LogException(ex);
+				EmptyUploadQueue();
+			}
+		}
+		finally
+		{
+			await DisposeStreamsAsync();
+			if (UsePooling)
+			{
+				AzureAnalyticsUploader azureAnalyticsUploader = this;
+				Pool.Free<AzureAnalyticsUploader>(ref azureAnalyticsUploader);
+			}
+		}
+	}
+
+	private void EmptyUploadQueue()
+	{
+		EventRecord result;
+		while (queue.TryDequeue(out result))
+		{
+			result.MarkSubmitted();
+			Pool.Free<EventRecord>(ref result);
+		}
+	}
+
+	private async Task DisposeStreamsAsync()
+	{
+		if (ZipStream != null)
+		{
+			await ZipStream.DisposeAsync();
+			ZipStream = null;
+		}
+		if (Stream != null)
+		{
+			await Stream.DisposeAsync();
+			Stream = null;
+		}
+	}
+}
+
+
+using System;
+using System.Collections.Generic;
+using System.IO;
 using Cysharp.Text;
 using Facepunch;
 using Facepunch.Rust;
@@ -1505,8 +2271,8 @@ public class TickLogging
 
 	public static AnalyticsTable TickTable = new AnalyticsTable(GetTickTableName(), TimeSpan.FromSeconds(tick_uploader_lifetime), AnalyticsDocumentMode.CSV);
 
-	[Help("time (in seconds) before the tick uploader is disposed and recreated")]
 	[ServerVar]
+	[Help("time (in seconds) before the tick uploader is disposed and recreated")]
 	public static int tick_uploader_lifetime
 	{
 		get
@@ -2220,7 +2986,7 @@ public static class RuntimeProfiler
 	[RconVar(Help = "How often to flush pooling stats in seconds")]
 	public static int runtime_profiling_pool_flush_interval { get; set; } = 300;
 
-	[ServerVar]
+	[ServerVar(Help = "(Generated) Dumps all available Unity Profiler recorder handles to CSV format showing name, category, unit type, and flags; useful for discovering available performance metrics")]
 	[ClientVar(ClientAdmin = true)]
 	public static void dump_profile_recorders(Arg arg)
 	{
@@ -3107,8 +3873,8 @@ public class ModelViewer_RenderParameters
 	[Header("Anti Aliasing")]
 	public PostProcessLayer.Antialiasing antialiasing = PostProcessLayer.Antialiasing.TemporalAntialiasing;
 
-	[Range(1f, 4f)]
 	[Header("Shadows")]
+	[Range(1f, 4f)]
 	public int shadowCascades = 4;
 
 	[Range(1f, 3f)]
@@ -3128,8 +3894,8 @@ public class ModelViewer_RenderParameters
 	[Range(0f, 2f)]
 	public float sunShadowBias = 0.01f;
 
-	[Header("Contact Shadows")]
 	[Header("                ")]
+	[Header("Contact Shadows")]
 	public bool enableContactShadows = true;
 
 	[Range(0f, 1f)]
@@ -3212,8 +3978,8 @@ public class ModelViewer_RenderParameters
 	[Range(0f, 1f)]
 	public float FadeToThickness = 1f;
 
-	[Header("Reflections")]
 	[Header("                ")]
+	[Header("Reflections")]
 	public ReflectionProbeMode Type = (ReflectionProbeMode)1;
 
 	public ReflectionProbeRefreshMode RefreshMode = (ReflectionProbeRefreshMode)1;
@@ -3291,8 +4057,8 @@ public class ModelViewer_MainCameraParameters
 
 	public float followLag;
 
-	[Range(0.01f, 360f)]
 	[Header("                ")]
+	[Range(0.01f, 360f)]
 	[Header("Lens")]
 	public float fieldOfView = 15f;
 
@@ -3308,8 +4074,8 @@ public class ModelViewer_MainCameraParameters
 	[Range(0.01f, 100f)]
 	public float Ratio = 3f;
 
-	[Header("                ")]
 	[Header("Focus")]
+	[Header("                ")]
 	public bool depthOfField;
 
 	public float focalLength = 3f;
@@ -3322,9 +4088,9 @@ public class ModelViewer_MainCameraParameters
 
 	public bool debugMode;
 
+	[Header("Motion Blur")]
 	[Header("                ")]
 	[Range(0f, 360f)]
-	[Header("Motion Blur")]
 	public float shutterAngle;
 
 	[Header("Distortion")]
@@ -3422,13 +4188,13 @@ using UnityEngine;
 [Serializable]
 public class ModelViewer_SkyParameters
 {
-	[Header("Sky")]
 	[Range(0f, 1f)]
+	[Header("Sky")]
 	public float skyBrightness = 1f;
 
-	[Tooltip("Current hour of the day.")]
-	[Header("Time of Day")]
 	[Header("                ")]
+	[Header("Time of Day")]
+	[Tooltip("Current hour of the day.")]
 	public float Hour = 9f;
 
 	[Tooltip("Current day of the month.")]
@@ -3453,8 +4219,8 @@ public class ModelViewer_SkyParameters
 	[Range(-14f, 14f)]
 	public float UTC;
 
-	[Header("                ")]
 	[Header("Atmosphere")]
+	[Header("                ")]
 	public float skyContrast = 1.2f;
 
 	public float skyFogginess = 0.2f;
@@ -11008,13 +11774,13 @@ public class FimpIK_Limb : FIK_ProcessorBase
 	[Tooltip("3-Bones limb array")]
 	private IKBone[] IKBones;
 
-	[Tooltip("Blend value for goal position")]
 	[Space(4f)]
+	[Tooltip("Blend value for goal position")]
 	[Range(0f, 1f)]
 	public float IKPositionWeight = 1f;
 
-	[Tooltip("Blend value for end bone rotation")]
 	[Range(0f, 1f)]
+	[Tooltip("Blend value for end bone rotation")]
 	public float FootRotationWeight = 1f;
 
 	[Tooltip("Flex style algorithm for different limbs")]
@@ -11063,8 +11829,8 @@ public class FimpIK_Limb : FIK_ProcessorBase
 
 	private bool hasRoot;
 
-	[Range(0f, 1f)]
 	[HideInInspector]
+	[Range(0f, 1f)]
 	public float ManualHintPositionWeight;
 
 	[HideInInspector]
@@ -13813,16 +14579,16 @@ public class FBasic_TPPCameraBehaviour : MonoBehaviour
 
 	private Vector2 animatedSphericRotation = new Vector2(0f, 0f);
 
-	[Tooltip("Sensitivity value for rotating camera around following object")]
 	[Space(10f)]
+	[Tooltip("Sensitivity value for rotating camera around following object")]
 	public float RotationSensitivity = 10f;
 
-	[Header("If you want camera rotation to be smooth")]
 	[Range(0.1f, 1f)]
+	[Header("If you want camera rotation to be smooth")]
 	public float RotationSpeed = 1f;
 
-	[Range(0f, 1f)]
 	[Header("If you want camera to follow target with some smoothness")]
+	[Range(0f, 1f)]
 	public float HardFollowValue = 1f;
 
 	[Header("If you want to hold cursor (cursor switch on TAB)")]

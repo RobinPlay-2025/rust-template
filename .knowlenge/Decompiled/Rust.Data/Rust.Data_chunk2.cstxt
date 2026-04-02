@@ -4,6 +4,277 @@ using Facepunch;
 using ProtoBuf;
 using SilentOrbit.ProtocolBuffers;
 
+public class BaseNetworkable : IDisposable, IPooled, IProto<BaseNetworkable>, IProto
+{
+	[NonSerialized]
+	public NetworkableId uid;
+
+	[NonSerialized]
+	public uint group;
+
+	[NonSerialized]
+	public uint prefabID;
+
+	public bool ShouldPool = true;
+
+	private bool _disposed;
+
+	public static void ResetToPool(BaseNetworkable instance)
+	{
+		if (instance.ShouldPool)
+		{
+			instance.uid = default(NetworkableId);
+			instance.group = 0u;
+			instance.prefabID = 0u;
+			Pool.Free<BaseNetworkable>(ref instance);
+		}
+	}
+
+	public void ResetToPool()
+	{
+		ResetToPool(this);
+	}
+
+	public virtual void Dispose()
+	{
+		if (!ShouldPool)
+		{
+			throw new Exception("Trying to dispose BaseNetworkable with ShouldPool set to false!");
+		}
+		if (!_disposed)
+		{
+			ResetToPool();
+			_disposed = true;
+		}
+	}
+
+	public virtual void EnterPool()
+	{
+		_disposed = true;
+	}
+
+	public virtual void LeavePool()
+	{
+		_disposed = false;
+	}
+
+	public void CopyTo(BaseNetworkable instance)
+	{
+		instance.uid = uid;
+		instance.group = group;
+		instance.prefabID = prefabID;
+	}
+
+	public BaseNetworkable Copy()
+	{
+		BaseNetworkable baseNetworkable = Pool.Get<BaseNetworkable>();
+		CopyTo(baseNetworkable);
+		return baseNetworkable;
+	}
+
+	public static BaseNetworkable Deserialize(BufferStream stream)
+	{
+		BaseNetworkable baseNetworkable = Pool.Get<BaseNetworkable>();
+		Deserialize(stream, baseNetworkable, isDelta: false);
+		return baseNetworkable;
+	}
+
+	public static BaseNetworkable DeserializeLengthDelimited(BufferStream stream)
+	{
+		BaseNetworkable baseNetworkable = Pool.Get<BaseNetworkable>();
+		DeserializeLengthDelimited(stream, baseNetworkable, isDelta: false);
+		return baseNetworkable;
+	}
+
+	public static BaseNetworkable DeserializeLength(BufferStream stream, int length)
+	{
+		BaseNetworkable baseNetworkable = Pool.Get<BaseNetworkable>();
+		DeserializeLength(stream, length, baseNetworkable, isDelta: false);
+		return baseNetworkable;
+	}
+
+	public static BaseNetworkable Deserialize(byte[] buffer)
+	{
+		BaseNetworkable baseNetworkable = Pool.Get<BaseNetworkable>();
+		using BufferStream stream = Pool.Get<BufferStream>().Initialize(buffer);
+		Deserialize(stream, baseNetworkable, isDelta: false);
+		return baseNetworkable;
+	}
+
+	public void FromProto(BufferStream stream, bool isDelta = false)
+	{
+		Deserialize(stream, this, isDelta);
+	}
+
+	public virtual void WriteToStream(BufferStream stream)
+	{
+		Serialize(stream, this);
+	}
+
+	public virtual void WriteToStreamDelta(BufferStream stream, BaseNetworkable previous)
+	{
+		if (previous == null)
+		{
+			Serialize(stream, this);
+		}
+		else
+		{
+			SerializeDelta(stream, this, previous);
+		}
+	}
+
+	public virtual void ReadFromStream(BufferStream stream, bool isDelta = false)
+	{
+		Deserialize(stream, this, isDelta);
+	}
+
+	public virtual void ReadFromStream(BufferStream stream, int size, bool isDelta = false)
+	{
+		DeserializeLength(stream, size, this, isDelta);
+	}
+
+	public static BaseNetworkable Deserialize(BufferStream stream, BaseNetworkable instance, bool isDelta)
+	{
+		while (true)
+		{
+			int num = stream.ReadByte();
+			switch (num)
+			{
+			case 8:
+				instance.uid = new NetworkableId(ProtocolParser.ReadUInt64(stream));
+				continue;
+			case 16:
+				instance.group = ProtocolParser.ReadUInt32(stream);
+				continue;
+			case 24:
+				instance.prefabID = ProtocolParser.ReadUInt32(stream);
+				continue;
+			case -1:
+			case 0:
+				return instance;
+			}
+			Key key = ProtocolParser.ReadKey((byte)num, stream);
+			_ = key.Field;
+			ProtocolParser.SkipKey(stream, key);
+		}
+	}
+
+	public static BaseNetworkable DeserializeLengthDelimited(BufferStream stream, BaseNetworkable instance, bool isDelta)
+	{
+		long num = ProtocolParser.ReadUInt32(stream);
+		num += stream.Position;
+		while (stream.Position < num)
+		{
+			int num2 = stream.ReadByte();
+			switch (num2)
+			{
+			case -1:
+				throw new EndOfStreamException();
+			case 8:
+				instance.uid = new NetworkableId(ProtocolParser.ReadUInt64(stream));
+				continue;
+			case 16:
+				instance.group = ProtocolParser.ReadUInt32(stream);
+				continue;
+			case 24:
+				instance.prefabID = ProtocolParser.ReadUInt32(stream);
+				continue;
+			}
+			Key key = ProtocolParser.ReadKey((byte)num2, stream);
+			_ = key.Field;
+			ProtocolParser.SkipKey(stream, key);
+		}
+		if (stream.Position != num)
+		{
+			throw new ProtocolBufferException("Read past max limit");
+		}
+		return instance;
+	}
+
+	public static BaseNetworkable DeserializeLength(BufferStream stream, int length, BaseNetworkable instance, bool isDelta)
+	{
+		long num = stream.Position + length;
+		while (stream.Position < num)
+		{
+			int num2 = stream.ReadByte();
+			switch (num2)
+			{
+			case -1:
+				throw new EndOfStreamException();
+			case 8:
+				instance.uid = new NetworkableId(ProtocolParser.ReadUInt64(stream));
+				continue;
+			case 16:
+				instance.group = ProtocolParser.ReadUInt32(stream);
+				continue;
+			case 24:
+				instance.prefabID = ProtocolParser.ReadUInt32(stream);
+				continue;
+			}
+			Key key = ProtocolParser.ReadKey((byte)num2, stream);
+			_ = key.Field;
+			ProtocolParser.SkipKey(stream, key);
+		}
+		if (stream.Position != num)
+		{
+			throw new ProtocolBufferException("Read past max limit");
+		}
+		return instance;
+	}
+
+	public static void SerializeDelta(BufferStream stream, BaseNetworkable instance, BaseNetworkable previous)
+	{
+		stream.WriteByte(8);
+		ProtocolParser.WriteUInt64(stream, instance.uid.Value);
+		if (instance.group != previous.group)
+		{
+			stream.WriteByte(16);
+			ProtocolParser.WriteUInt32(stream, instance.group);
+		}
+		if (instance.prefabID != previous.prefabID)
+		{
+			stream.WriteByte(24);
+			ProtocolParser.WriteUInt32(stream, instance.prefabID);
+		}
+	}
+
+	public static void Serialize(BufferStream stream, BaseNetworkable instance)
+	{
+		if (instance.uid != default(NetworkableId))
+		{
+			stream.WriteByte(8);
+			ProtocolParser.WriteUInt64(stream, instance.uid.Value);
+		}
+		if (instance.group != 0)
+		{
+			stream.WriteByte(16);
+			ProtocolParser.WriteUInt32(stream, instance.group);
+		}
+		if (instance.prefabID != 0)
+		{
+			stream.WriteByte(24);
+			ProtocolParser.WriteUInt32(stream, instance.prefabID);
+		}
+	}
+
+	public void ToProto(BufferStream stream)
+	{
+		Serialize(stream, this);
+	}
+
+	public void InspectUids(UidInspector<ulong> action)
+	{
+		action(UidType.NetworkableId, ref uid.Value);
+	}
+}
+
+
+using System;
+using System.IO;
+using Facepunch;
+using ProtoBuf;
+using SilentOrbit.ProtocolBuffers;
+
 public class BaseNPC : IDisposable, IPooled, IProto<BaseNPC>, IProto
 {
 	[NonSerialized]
@@ -24575,6 +24846,15 @@ public class CopyPasteEntityInfo : IDisposable, IPooled, IProto<CopyPasteEntityI
 	[NonSerialized]
 	public List<Entity> entities;
 
+	[NonSerialized]
+	public byte[] screenshot;
+
+	[NonSerialized]
+	public long createdTimestamp;
+
+	[NonSerialized]
+	public int entityCount;
+
 	public bool ShouldPool = true;
 
 	private bool _disposed;
@@ -24599,6 +24879,9 @@ public class CopyPasteEntityInfo : IDisposable, IPooled, IProto<CopyPasteEntityI
 			Pool.Free<Entity>(ref list, false);
 			instance.entities = list;
 		}
+		instance.screenshot = null;
+		instance.createdTimestamp = 0L;
+		instance.entityCount = 0;
 		Pool.Free<CopyPasteEntityInfo>(ref instance);
 	}
 
@@ -24645,6 +24928,17 @@ public class CopyPasteEntityInfo : IDisposable, IPooled, IProto<CopyPasteEntityI
 		{
 			instance.entities = null;
 		}
+		if (screenshot == null)
+		{
+			instance.screenshot = null;
+		}
+		else
+		{
+			instance.screenshot = new byte[screenshot.Length];
+			Array.Copy(screenshot, instance.screenshot, instance.screenshot.Length);
+		}
+		instance.createdTimestamp = createdTimestamp;
+		instance.entityCount = entityCount;
 	}
 
 	public CopyPasteEntityInfo Copy()
@@ -24729,6 +25023,15 @@ public class CopyPasteEntityInfo : IDisposable, IPooled, IProto<CopyPasteEntityI
 			case 10:
 				instance.entities.Add(Entity.DeserializeLengthDelimited(stream));
 				continue;
+			case 18:
+				instance.screenshot = ProtocolParser.ReadBytes(stream);
+				continue;
+			case 24:
+				instance.createdTimestamp = (long)ProtocolParser.ReadUInt64(stream);
+				continue;
+			case 32:
+				instance.entityCount = (int)ProtocolParser.ReadUInt64(stream);
+				continue;
 			case -1:
 			case 0:
 				return instance;
@@ -24756,6 +25059,15 @@ public class CopyPasteEntityInfo : IDisposable, IPooled, IProto<CopyPasteEntityI
 				throw new EndOfStreamException();
 			case 10:
 				instance.entities.Add(Entity.DeserializeLengthDelimited(stream));
+				continue;
+			case 18:
+				instance.screenshot = ProtocolParser.ReadBytes(stream);
+				continue;
+			case 24:
+				instance.createdTimestamp = (long)ProtocolParser.ReadUInt64(stream);
+				continue;
+			case 32:
+				instance.entityCount = (int)ProtocolParser.ReadUInt64(stream);
 				continue;
 			}
 			Key key = ProtocolParser.ReadKey((byte)num2, stream);
@@ -24786,6 +25098,15 @@ public class CopyPasteEntityInfo : IDisposable, IPooled, IProto<CopyPasteEntityI
 			case 10:
 				instance.entities.Add(Entity.DeserializeLengthDelimited(stream));
 				continue;
+			case 18:
+				instance.screenshot = ProtocolParser.ReadBytes(stream);
+				continue;
+			case 24:
+				instance.createdTimestamp = (long)ProtocolParser.ReadUInt64(stream);
+				continue;
+			case 32:
+				instance.entityCount = (int)ProtocolParser.ReadUInt64(stream);
+				continue;
 			}
 			Key key = ProtocolParser.ReadKey((byte)num2, stream);
 			_ = key.Field;
@@ -24800,57 +25121,82 @@ public class CopyPasteEntityInfo : IDisposable, IPooled, IProto<CopyPasteEntityI
 
 	public static void SerializeDelta(BufferStream stream, CopyPasteEntityInfo instance, CopyPasteEntityInfo previous)
 	{
-		if (instance.entities == null)
+		if (instance.entities != null)
 		{
-			return;
-		}
-		for (int i = 0; i < instance.entities.Count; i++)
-		{
-			Entity entity = instance.entities[i];
-			stream.WriteByte(10);
-			BufferStream.RangeHandle range = stream.GetRange(5);
-			int position = stream.Position;
-			Entity.SerializeDelta(stream, entity, entity);
-			int val = stream.Position - position;
-			Span<byte> span = range.GetSpan();
-			int num = ProtocolParser.WriteUInt32((uint)val, span, 0);
-			if (num < 5)
+			for (int i = 0; i < instance.entities.Count; i++)
 			{
-				span[num - 1] |= 128;
-				while (num < 4)
+				Entity entity = instance.entities[i];
+				stream.WriteByte(10);
+				BufferStream.RangeHandle range = stream.GetRange(5);
+				int position = stream.Position;
+				Entity.SerializeDelta(stream, entity, entity);
+				int val = stream.Position - position;
+				Span<byte> span = range.GetSpan();
+				int num = ProtocolParser.WriteUInt32((uint)val, span, 0);
+				if (num < 5)
 				{
-					span[num++] = 128;
+					span[num - 1] |= 128;
+					while (num < 4)
+					{
+						span[num++] = 128;
+					}
+					span[4] = 0;
 				}
-				span[4] = 0;
 			}
+		}
+		if (instance.screenshot != null)
+		{
+			stream.WriteByte(18);
+			ProtocolParser.WriteBytes(stream, instance.screenshot);
+		}
+		stream.WriteByte(24);
+		ProtocolParser.WriteUInt64(stream, (ulong)instance.createdTimestamp);
+		if (instance.entityCount != previous.entityCount)
+		{
+			stream.WriteByte(32);
+			ProtocolParser.WriteUInt64(stream, (ulong)instance.entityCount);
 		}
 	}
 
 	public static void Serialize(BufferStream stream, CopyPasteEntityInfo instance)
 	{
-		if (instance.entities == null)
+		if (instance.entities != null)
 		{
-			return;
-		}
-		for (int i = 0; i < instance.entities.Count; i++)
-		{
-			Entity instance2 = instance.entities[i];
-			stream.WriteByte(10);
-			BufferStream.RangeHandle range = stream.GetRange(5);
-			int position = stream.Position;
-			Entity.Serialize(stream, instance2);
-			int val = stream.Position - position;
-			Span<byte> span = range.GetSpan();
-			int num = ProtocolParser.WriteUInt32((uint)val, span, 0);
-			if (num < 5)
+			for (int i = 0; i < instance.entities.Count; i++)
 			{
-				span[num - 1] |= 128;
-				while (num < 4)
+				Entity instance2 = instance.entities[i];
+				stream.WriteByte(10);
+				BufferStream.RangeHandle range = stream.GetRange(5);
+				int position = stream.Position;
+				Entity.Serialize(stream, instance2);
+				int val = stream.Position - position;
+				Span<byte> span = range.GetSpan();
+				int num = ProtocolParser.WriteUInt32((uint)val, span, 0);
+				if (num < 5)
 				{
-					span[num++] = 128;
+					span[num - 1] |= 128;
+					while (num < 4)
+					{
+						span[num++] = 128;
+					}
+					span[4] = 0;
 				}
-				span[4] = 0;
 			}
+		}
+		if (instance.screenshot != null)
+		{
+			stream.WriteByte(18);
+			ProtocolParser.WriteBytes(stream, instance.screenshot);
+		}
+		if (instance.createdTimestamp != 0L)
+		{
+			stream.WriteByte(24);
+			ProtocolParser.WriteUInt64(stream, (ulong)instance.createdTimestamp);
+		}
+		if (instance.entityCount != 0)
+		{
+			stream.WriteByte(32);
+			ProtocolParser.WriteUInt64(stream, (ulong)instance.entityCount);
 		}
 	}
 
