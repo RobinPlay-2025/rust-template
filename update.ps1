@@ -83,7 +83,7 @@ if ($LASTEXITCODE -ne 0) {
     # 3. Restore your plugins
     Write-Step "Step 3: Restoring your local files..."
     if ($stashed) {
-        git stash pop
+        git stash pop 2>$null >$null
         if ($LASTEXITCODE -ne 0) {
             Write-Host "[!] Warning: Conflict found. Check your plugins manually." -ForegroundColor Yellow
         } else {
