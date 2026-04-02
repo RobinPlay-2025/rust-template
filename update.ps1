@@ -16,14 +16,14 @@ if ($LASTEXITCODE -ne 0) {
     exit 1
 }
 
-# 2. System paths list
+# 2. System paths list (update scripts last)
 $SystemPaths = @(
     "Managed/",
     ".github/",
-    "update.bat",
-    "update.ps1",
     "rust-template.sln",
-    "rust.template.csproj"
+    "rust.template.csproj",
+    "update.bat",
+    "update.ps1"
 )
 
 Write-Host "--- Step 2: Replacing system files ---" -ForegroundColor Magenta
