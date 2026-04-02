@@ -1,5 +1,5 @@
 @echo off
-:: RUST-TEMPLATE LAUNCHER
+:: RUST-TEMPLATE LAUNCHER (ENGLISH)
 echo ==========================================
 echo    RUST-TEMPLATE UPDATE TOOL
 echo ==========================================
