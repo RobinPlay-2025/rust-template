@@ -1,33 +1,41 @@
-# Скрипт для ПРИНУДИТЕЛЬНОГО обновления библиотек Managed и системных файлов
-$OutputEncoding = [Console]::InputEncoding = [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+# Скрипт ЖЕСТКОГО обновления системных файлов rust-template
+$OutputEncoding = [Console]::InputEncoding = [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($true)
 
-Write-Host "==========================================" -ForegroundColor Yellow
-Write-Host "   ПРИНУДИТЕЛЬНОЕ ОБНОВЛЕНИЕ RUST-TEMPLATE" -ForegroundColor Yellow
-Write-Host "==========================================" -ForegroundColor Yellow
+function Write-Header($text) {
+    Write-Host "`n==========================================" -ForegroundColor Yellow
+    Write-Host "   $text" -ForegroundColor Yellow
+    Write-Host "==========================================`n" -ForegroundColor Yellow
+}
 
-# 1. Скачиваем заголовки обновлений
-Write-Host ">>> Шаг 1: Подключение к GitHub..." -ForegroundColor Cyan
-git fetch origin main 2>$null
+Write-Header "ПРИНУДИТЕЛЬНОЕ ОБНОВЛЕНИЕ ШАБЛОНА"
 
-# 2. ПРИНУДИТЕЛЬНОЕ обновление системных папок и файлов
-Write-Host ">>> Шаг 2: Принудительная загрузка библиотек Managed и шаблона..." -ForegroundColor Magenta
+# 1. Скачиваем актуальное состояние с GitHub
+Write-Host ">>> Шаг 1: Получение обновлений с сервера..." -ForegroundColor Cyan
+git fetch origin main
 
-# Сбрасываем возможные зависшие состояния для системных файлов
-git add Managed/ 2>$null
-git add update.bat update.ps1 .github/ 2>$null
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "[FAIL] Не удалось подключиться к GitHub!" -ForegroundColor Red
+    exit 1
+}
 
-# Принудительно восстанавливаем (заменяем) только системное
-git restore -W -S -s FETCH_HEAD Managed/ 2>$null
-git restore -W -S -s FETCH_HEAD .github/ 2>$null
-git restore -W -S -s FETCH_HEAD update.bat 2>$null
-git restore -W -S -s FETCH_HEAD update.ps1 2>$null
-git restore -W -S -s FETCH_HEAD rust-template.sln 2>$null
-git restore -W -S -s FETCH_HEAD rust.template.csproj 2>$null
+# 2. Список системных путей, которые нужно ОБЯЗАТЕЛЬНО обновить/вернуть
+$SystemPaths = @(
+    "Managed/",
+    ".github/",
+    "update.bat",
+    "update.ps1",
+    "rust-template.sln",
+    "rust.template.csproj"
+)
 
-Write-Host "[OK] Все библиотеки в Managed/ принудительно обновлены." -ForegroundColor Green
-Write-Host "[OK] Системные файлы шаблона перезаписаны успешно." -ForegroundColor Green
+Write-Host ">>> Шаг 2: Принудительная перезапись системных файлов..." -ForegroundColor Magenta
 
-Write-Host ""
-Write-Host "==========================================" -ForegroundColor Yellow
-Write-Host " Готово! Ваши плагины в plugins/ в полной безопасности." -ForegroundColor Green
-Write-Host "==========================================" -ForegroundColor Yellow
+foreach ($path in $SystemPaths) {
+    Write-Host "Обновление: $path" -ForegroundColor Gray
+    # Сбрасываем локальные изменения в этих путях и заменяем их на версии из FETCH_HEAD
+    git checkout FETCH_HEAD -- $path 2>$null
+}
+
+Write-Header "ГОТОВО! Системные файлы обновлены."
+Write-Host "Ваши плагины в папке plugins/ не были затронуты." -ForegroundColor Green
+Write-Host "Нажмите любую клавишу для выхода..." -ForegroundColor Gray
