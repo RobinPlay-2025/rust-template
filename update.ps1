@@ -1,22 +1,22 @@
-# Настройка кодировки под системную (обычно Windows-1251 для РФ)
-[Console]::OutputEncoding = [System.Text.Encoding]::Default
+# RUST-TEMPLATE SYSTEM UPDATE SCRIPT
+# Using pure ASCII to avoid encoding issues
 
 function Write-Header($text) {
     Write-Host "`n>>> $text <<<`n" -ForegroundColor Yellow
 }
 
-Write-Header "ОБНОВЛЕНИЕ ШАБЛОНА (UPDATE)"
+Write-Header "STARTING SYSTEM UPDATE"
 
-# 1. Скачиваем актуальное состояние с GitHub
-Write-Host "--- Шаг 1: Проверка связи с GitHub ---" -ForegroundColor Cyan
+# 1. Fetching updates from GitHub
+Write-Host "--- Step 1: Connecting to GitHub ---" -ForegroundColor Cyan
 git fetch origin main
 
 if ($LASTEXITCODE -ne 0) {
-    Write-Host "!!! ОШИБКА: Нет связи с сервером !!!" -ForegroundColor Red
+    Write-Host "!!! ERROR: Could not connect to GitHub !!!" -ForegroundColor Red
     exit 1
 }
 
-# 2. Список системных путей
+# 2. System paths list
 $SystemPaths = @(
     "Managed/",
     ".github/",
@@ -26,15 +26,15 @@ $SystemPaths = @(
     "rust.template.csproj"
 )
 
-Write-Host "--- Шаг 2: Замена системных файлов ---" -ForegroundColor Magenta
+Write-Host "--- Step 2: Replacing system files ---" -ForegroundColor Magenta
 
 foreach ($path in $SystemPaths) {
-    # Принудительно вытягиваем файл из FETCH_HEAD (последний скачанный main)
+    # Force update from remote FETCH_HEAD
     git checkout FETCH_HEAD -- $path 2>$null
     if ($LASTEXITCODE -eq 0) {
-        Write-Host "[OK] Обновлено: $path" -ForegroundColor Gray
+        Write-Host "[OK] Updated: $path" -ForegroundColor Gray
     }
 }
 
-Write-Header "ГОТОВО! ОБНОВЛЕНИЕ ЗАВЕРШЕНО"
-Write-Host "Ваши плагины в plugins/ не пострадали." -ForegroundColor Green
+Write-Header "DONE! UPDATE COMPLETE"
+Write-Host "Your plugins in 'plugins/' folder are safe and sound." -ForegroundColor Green
