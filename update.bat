@@ -1,5 +1,6 @@
 @echo off
-:: RUST-TEMPLATE LAUNCHER
+chcp 65001 >nul
+cd /d "%~dp0"
 echo ==========================================
 echo    RUST-TEMPLATE UPDATE TOOL
 echo ==========================================
