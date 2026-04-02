@@ -1,7 +1,6 @@
-# Скрипт для безопасного обновления шаблона rust-template
+# Safe Rust Template Update (English Version for Total Stability)
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 $OutputEncoding = [System.Text.Encoding]::UTF8
-$env:LC_ALL = 'ru_RU.UTF-8'
 
 $ErrorActionPreference = 'SilentlyContinue'
 
@@ -11,91 +10,82 @@ function Write-Step([string]$msg) {
 }
 
 Write-Host "==========================================" -ForegroundColor Yellow
-Write-Host "   ОБНОВЛЕНИЕ ШАБЛОНА RUST-TEMPLATE       " -ForegroundColor Yellow
+Write-Host "   RUST-TEMPLATE UPDATE TOOL              " -ForegroundColor Yellow
 Write-Host "==========================================" -ForegroundColor Yellow
 
-# 0. Подготовка Git
 if (!(Test-Path ".git")) {
-    Write-Step "Подготовка репозитория..."
-    git init 2>$null >$null
+    git init
 }
 
-$gitUser = git config user.name 2>$null
-if (!$gitUser) {
-    git config user.email "template-user@example.com" 2>$null >$null
-    git config user.name "Rust-Template User" 2>$null >$null
-}
+git config user.name "User" 2>$null >$null
+git config user.email "user@example.com" 2>$null >$null
 
 git remote get-url origin 2>$null >$null
 if ($LASTEXITCODE -ne 0) {
-    git remote add origin https://github.com/RobinPlay-2025/rust-template.git 2>$null >$null
+    git remote add origin https://github.com/RobinPlay-2025/rust-template.git
 } else {
-    git remote set-url origin https://github.com/RobinPlay-2025/rust-template.git 2>$null >$null
+    git remote set-url origin https://github.com/RobinPlay-2025/rust-template.git
 }
 
 if (Test-Path ".git/MERGE_HEAD") {
-    git merge --abort 2>$null >$null
+    git merge --abort
 }
 
 git rev-parse HEAD 2>$null >$null
 if ($LASTEXITCODE -ne 0) {
-    git add . 2>$null >$null
-    git commit -m "Initial State" 2>$null >$null
-    git branch -M main 2>$null >$null
+    git add .
+    git commit -m "Init"
+    git branch -M main
 }
 git branch --set-upstream-to=origin/main main 2>$null >$null
 
-# 1. Сохранение изменений
-Write-Step "1. Сохранение ваших файлов..."
+Write-Step "Step 1: Saving your local work..."
 $stashed = $false
-$changes = (git status --porcelain -uno 2>$null | Out-String).Trim()
+$changes = (git status --porcelain -uno | Out-String).Trim()
 if ($changes) {
     $dateStr = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
-    git stash push -m "Auto-backup $dateStr" 2>$null >$null
-    Write-Host "[OK] Ваши файлы сохранены в бэкап." -ForegroundColor Green
+    git stash push -m "Backup $dateStr" 2>$null >$null
+    Write-Host "[OK] Changes saved successfully." -ForegroundColor Green
     $stashed = $true
-} else {
-    Write-Host "[OK] Изменений не найдено." -ForegroundColor Green
 }
 
-# 2. Обновление
-Write-Step "2. Проверка обновлений на GitHub..."
+Write-Step "Step 2: Checking for updates..."
 git fetch origin main
 
 if ($LASTEXITCODE -ne 0) {
-    Write-Host "[!] Ошибка: Нет связи с GitHub." -ForegroundColor Red
+    Write-Host "[!] Error: No connection to GitHub." -ForegroundColor Red
 } else {
-    $newCommits = (git --no-pager log HEAD..FETCH_HEAD --oneline 2>$null | Out-String).Trim()
+    $newCommits = (git --no-pager log HEAD..FETCH_HEAD --oneline | Out-String).Trim()
     if (!$newCommits) {
-        Write-Host "[OK] У вас последняя версия." -ForegroundColor Green
+        Write-Host "[OK] You have the latest version." -ForegroundColor Green
     } else {
-        Write-Host ">>> Скачивание новых файлов..." -ForegroundColor Magenta
-        # Добавляем --no-edit, чтобы не открывались окна редактора
+        Write-Host "New updates found on GitHub:" -ForegroundColor Yellow
+        git --no-pager log HEAD..FETCH_HEAD --oneline --color
+        Write-Host ">>> Downloading updates..." -ForegroundColor Magenta
         git pull origin main --allow-unrelated-histories -X ours --no-edit --no-pager --progress
 
         if (Test-Path ".git/MERGE_HEAD") {
             git checkout --theirs Managed/* 2>$null >$null
-            git add Managed/* 2>$null >$null
-            git commit --no-edit -m "Updated Managed libraries" 2>$null >$null
+            git add Managed/*
+            git commit --no-edit -m "Updated libraries" 2>$null >$null
         }
-        Write-Host "[OK] Обновление завершено." -ForegroundColor Green
+        Write-Host "[OK] Update complete." -ForegroundColor Green
     }
 
-    # 3. Восстановление
-    Write-Step "3. Возврат ваших плагинов на место..."
+    Write-Step "Step 3: Restoring your plugins..."
     if ($stashed) {
         git stash pop 2>$null >$null
         if ($LASTEXITCODE -ne 0) {
-            Write-Host "[!] Внимание: Есть конфликты. Проверьте файлы вручную." -ForegroundColor Yellow
+            Write-Host "[!] Warning: Review merge conflicts manually." -ForegroundColor Yellow
         } else {
-            Write-Host "[OK] Ваши файлы успешно восстановлены." -ForegroundColor Green
+            Write-Host "[OK] Plugins restored successfully." -ForegroundColor Green
         }
     } else {
-        Write-Host "[OK] Ваши файлы не менялись." -ForegroundColor Green
+        Write-Host "[OK] No files were touched." -ForegroundColor Green
     }
 }
 
 Write-Host ""
 Write-Host "==========================================" -ForegroundColor Yellow
-Write-Host " Готово! Можно закрыть это окно." -ForegroundColor Green
+Write-Host " UPDATE COMPLETE! You can now CLOSE this window." -ForegroundColor Green
 Write-Host "==========================================" -ForegroundColor Yellow
