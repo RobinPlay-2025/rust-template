@@ -1,32 +1,32 @@
 @echo off
-:: RUST-TEMPLATE SIMPLE UPDATE TOOL
+:: RUST-TEMPLATE UPDATE TOOL
 
 echo ==========================================
 echo    RUST-TEMPLATE UPDATE TOOL
 echo ==========================================
 
-:: Step 1: Backup your plugins
+:: Step 1
 echo.
-echo >>> Step 1: Saving your local work...
+echo >>> Step 1: Saving your plugins...
 git stash push -m "Auto-backup"
-echo [OK] Your plugins are saved safely.
+echo [OK] Your files are safe.
 
-:: Step 2: Download Updates
+:: Step 2
 echo.
 echo >>> Step 2: Downloading updates from GitHub...
 git fetch origin main
 git pull origin main --no-edit --progress
-echo [OK] Updates downloaded successfully.
+echo [OK] Updates downloaded.
 
-:: Step 3: Restore your plugins
+:: Step 3
 echo.
 echo >>> Step 3: Restoring your plugins back...
 git stash pop
-echo [OK] Your files are restored.
+echo [OK] Done!
 
 :: Finish
 echo.
 echo ==========================================
-echo  DONE! You can now close this window.
+echo  UPDATE COMPLETE. You can close this window.
 echo ==========================================
 pause
