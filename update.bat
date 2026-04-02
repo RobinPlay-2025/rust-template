@@ -8,7 +8,7 @@ git stash push -m "Auto-update"
 echo.
 echo [Step 2] Downloading updates from GitHub...
 git fetch origin main
-git pull origin main --no-edit --progress 
+git pull origin main --no-edit --progress --no-pager
 echo.
 echo [Step 3] Restoring your plugins...
 git stash pop
