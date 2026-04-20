@@ -1,8 +1,20 @@
 param (
     [Parameter(Mandatory=$false)]
-    [ValidateSet("Oxide", "Carbon")]
-    [string]$Framework = "Oxide"
+    [ValidateSet("Oxide", "Carbon", "Ask")]
+    [string]$Framework = "Ask"
 )
+
+if ($Framework -eq "Ask") {
+    Write-Host "==========================================" -ForegroundColor Cyan
+    Write-Host "   SELECT FRAMEWORK TO UPDATE" -ForegroundColor Cyan
+    Write-Host "==========================================" -ForegroundColor Cyan
+    Write-Host "1. Oxide (Default)" -ForegroundColor White
+    Write-Host "2. Carbon" -ForegroundColor White
+    Write-Host ""
+    $choice = Read-Host "Choose option [1-2]"
+    if ($choice -eq "2") { $Framework = "Carbon" }
+    else { $Framework = "Oxide" }
+}
 
 # RUST-TEMPLATE SYSTEM UPDATE SCRIPT
 # Using pure ASCII to avoid encoding issues
