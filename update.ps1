@@ -14,6 +14,19 @@ if ($Framework -eq "Ask") {
     $choice = Read-Host "Choose option [1-2]"
     if ($choice -eq "2") { $Framework = "Carbon" }
     else { $Framework = "Oxide" }
+
+    # --- Automatic VS Code Setting Update ---
+    $SettingsPath = Join-Path $PSScriptRoot ".vscode/settings.json"
+    if (Test-Path $SettingsPath) {
+        try {
+            $json = Get-Content $SettingsPath -Raw | ConvertFrom-Json
+            $json.'dotnet.defaultSolutionConfiguration' = $Framework
+            $json | ConvertTo-Json -Depth 100 | Set-Content $SettingsPath
+            Write-Host "--- VS Code configuration set to: $Framework ---" -ForegroundColor Green
+        } catch {
+            Write-Warning "Could not update .vscode/settings.json: $_"
+        }
+    }
 }
 
 # RUST-TEMPLATE SYSTEM UPDATE SCRIPT
