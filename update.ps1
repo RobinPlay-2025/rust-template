@@ -1,3 +1,9 @@
+param (
+    [Parameter(Mandatory=$false)]
+    [ValidateSet("Oxide", "Carbon")]
+    [string]$Framework = "Oxide"
+)
+
 # RUST-TEMPLATE SYSTEM UPDATE SCRIPT
 # Using pure ASCII to avoid encoding issues
 
@@ -5,7 +11,7 @@ function Write-Header($text) {
     Write-Host "`n>>> $text <<<`n" -ForegroundColor Yellow
 }
 
-Write-Header "STARTING SYSTEM UPDATE"
+Write-Header "STARTING SYSTEM UPDATE (Framework: $Framework)"
 
 # 1. Fetching updates from GitHub
 Write-Host "--- Step 1: Downloading objects from GitHub ---" -ForegroundColor Cyan
@@ -20,6 +26,7 @@ if ($LASTEXITCODE -ne 0) {
 $SystemPaths = @(
     "Managed",
     ".github",
+    ".rust-analyzer",
     "rust-template.sln",
     "rust.template.csproj",
     "update.bat",
@@ -32,7 +39,7 @@ Write-Host "--- Step 2: Overwriting system files (With Progress %) ---" -Foregro
 $allFiles = @()
 foreach ($item in $SystemPaths) {
     $found = git ls-tree -r --name-only FETCH_HEAD $item
-    if ($found -eq $null) {
+    if ($null -eq $found) {
         $allFiles += $item
     } else {
         $allFiles += $found
