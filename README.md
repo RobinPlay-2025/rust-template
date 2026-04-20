@@ -18,13 +18,13 @@
 
 🖥️ Cursor
 
-Скачайте с https://www.cursor.com/
+Скачайте: [Cursor](https://www.cursor.com/)
 Откройте Composer и выберите Agent mode 🤖
 Установите и откройте проект
 
 🌊 Windsurf
 
-Скачайте с https://codeium.com/windsurf
+Скачайте: [Windsurf](https://codeium.com/windsurf)
 Установите и откройте репозиторий
 
 ⚡ Быстрый старт
