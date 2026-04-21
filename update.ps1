@@ -20,9 +20,9 @@ if ($Framework -eq "Ask") {
     if (Test-Path $SettingsPath) {
         try {
             $json = Get-Content $SettingsPath -Raw | ConvertFrom-Json
-            $json.'dotnet.defaultSolutionConfiguration' = $Framework
+            $json.'dotnet.defaultSolutionConfiguration' = "$Framework|Any CPU"
             $json | ConvertTo-Json -Depth 100 | Set-Content $SettingsPath
-            Write-Host "--- VS Code configuration set to: $Framework ---" -ForegroundColor Green
+            Write-Host "--- VS Code configuration set to: $Framework|Any CPU ---" -ForegroundColor Green
         } catch {
             Write-Warning "Could not update .vscode/settings.json: $_"
         }
