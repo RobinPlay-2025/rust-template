@@ -1,4 +1,15 @@
 using System;
+using System.Runtime.CompilerServices;
+using Microsoft.CodeAnalysis;
+
+[Embedded]
+[CompilerGenerated]
+internal sealed class IsUnmanagedAttribute : Attribute
+{
+}
+
+
+using System;
 using UnityEngine;
 
 public abstract class FacepunchBehaviour : MonoBehaviour
@@ -8712,376 +8723,186 @@ public abstract class SingletonComponent : FacepunchBehaviour
 }
 
 
-public interface IStableIndex
-{
-	int StableIndex { get; set; }
-}
-
-
-public class StableEntityCache
+public class StableObjectArray
 {
 	public const int NotInCache = -1;
 }
 
 
 using System;
-using System.Collections;
-using System.Collections.Generic;
-using Facepunch;
+using Unity.Collections;
 using UnityEngine;
-using UnityEngine.Jobs;
 
-public class StableObjectCache<TObject> : StableEntityCache where TObject : MonoBehaviour, IStableIndex
+public class StableObjectArray<T> : StableObjectArray, IDisposable
 {
-	public struct ValidEnumerator : IEnumerator<TObject>, IEnumerator, IDisposable
-	{
-		private StableObjectCache<TObject> cache;
+	private T[] _objects;
 
-		private int index;
+	private NativeArray<int> _stableIndexLookup;
 
-		private int found;
+	private int[] _movingIndices;
 
-		public TObject Current => cache._objects[index];
-
-		TObject IEnumerator<TObject>.Current => Current;
-
-		object IEnumerator.Current => Current;
-
-		public ValidEnumerator(StableObjectCache<TObject> cache)
-		{
-			this.cache = cache;
-			index = -1;
-			found = 0;
-		}
-
-		public void Dispose()
-		{
-			cache = null;
-		}
-
-		void IDisposable.Dispose()
-		{
-			Dispose();
-		}
-
-		public bool MoveNext()
-		{
-			if (found >= cache._count || index >= cache._objects.Length)
-			{
-				return false;
-			}
-			while (++index < cache._objects.Length && (Object)(object)cache._objects[index] == (Object)null)
-			{
-			}
-			found++;
-			return index < cache._objects.Length;
-		}
-
-		bool IEnumerator.MoveNext()
-		{
-			return MoveNext();
-		}
-
-		public void Reset()
-		{
-			index = -1;
-			found = 0;
-		}
-
-		void IEnumerator.Reset()
-		{
-			Reset();
-		}
-	}
-
-	public struct ValidView : IEnumerable<TObject>, IEnumerable
-	{
-		private StableObjectCache<TObject> cache;
-
-		public ValidView(StableObjectCache<TObject> cache)
-		{
-			this.cache = cache;
-		}
-
-		public ValidEnumerator GetEnumerator()
-		{
-			return new ValidEnumerator(cache);
-		}
-
-		IEnumerator<TObject> IEnumerable<TObject>.GetEnumerator()
-		{
-			return GetEnumerator();
-		}
-
-		IEnumerator IEnumerable.GetEnumerator()
-		{
-			return GetEnumerator();
-		}
-	}
-
-	private TObject[] _objects;
+	private int _firstFree;
 
 	private int _count;
 
-	private int[] nextIndices;
-
-	private int firstFreeIndex;
-
-	private int lastFreeIndex;
-
-	private const int Occupied = -1;
-
-	private BufferList<int> changes = new BufferList<int>();
-
-	public TObject[] Objects => _objects;
+	private bool _canRepack;
 
 	public int Count => _count;
 
 	public int Capacity => _objects.Length;
 
-	public ValidView Valid => new ValidView(this);
+	public ReadOnlySpan<T> Objects => new ReadOnlySpan<T>(_objects, 0, _count);
 
-	public ReadOnlySpan<TObject> All => Objects;
+	public T[] UnsafeObjects => _objects;
 
-	public StableObjectCache(int initialCapacity)
+	public ReadOnly<int> StableIndexLookup => _stableIndexLookup.GetSubArray(0, _count).AsReadOnly();
+
+	public StableObjectArray(int initCapacity)
 	{
-		_objects = new TObject[initialCapacity];
-		nextIndices = new int[initialCapacity];
-		SetupFreeList(0, initialCapacity);
+		//IL_0022: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0027: Unknown result type (might be due to invalid IL or missing references)
+		_objects = new T[initCapacity];
+		_movingIndices = new int[initCapacity];
+		_stableIndexLookup = new NativeArray<int>(initCapacity, (Allocator)4, (NativeArrayOptions)0);
+		SetupFreeList(0);
 	}
 
-	public void UpdateTransformAccessArray(TransformAccessArray accessArray)
+	public int Add(T obj)
 	{
-		using (TimeWarning.New("TransformAccessRefresh"))
-		{
-			if (((TransformAccessArray)(ref accessArray)).length < _objects.Length)
-			{
-				((TransformAccessArray)(ref accessArray)).capacity = _objects.Length;
-				for (int i = ((TransformAccessArray)(ref accessArray)).length; i < _objects.Length; i++)
-				{
-					((TransformAccessArray)(ref accessArray)).Add((Transform)null);
-				}
-			}
-			BufferList<int> val = Pool.Get<BufferList<int>>();
-			GetDirtyIndices(val);
-			for (int j = 0; j < val.Count; j++)
-			{
-				int num = val[j];
-				TObject val2 = _objects[num];
-				if (Object.op_Implicit((Object)(object)val2))
-				{
-					((TransformAccessArray)(ref accessArray))[num] = ((Component)(object)val2).transform;
-				}
-				else
-				{
-					((TransformAccessArray)(ref accessArray))[num] = null;
-				}
-			}
-			ResetDirtyTracking();
-			Pool.FreeUnmanaged<int>(ref val);
-		}
-	}
-
-	public void Add(TObject obj)
-	{
-		Debug.Assert((Object)(object)obj != (Object)null, "Entity is dead!");
-		Debug.Assert(obj.StableIndex == -1, "Entity is already in the cache or property not correctly initialized to StableEntityCache.NotInCache");
-		bool num = firstFreeIndex == lastFreeIndex;
-		int num2 = firstFreeIndex;
-		_objects[num2] = obj;
-		obj.StableIndex = num2;
-		firstFreeIndex = nextIndices[num2];
-		nextIndices[num2] = -1;
-		if (num)
+		int num = _count++;
+		if (_count > _objects.Length)
 		{
 			Grow();
 		}
-		_count++;
-		changes.Add(num2);
+		_objects[num] = obj;
+		int firstFree = _firstFree;
+		int freeIndex = _movingIndices[_firstFree];
+		_movingIndices[_firstFree] = num;
+		_stableIndexLookup[num] = firstFree;
+		_firstFree = AsSlotIndex(freeIndex);
+		return firstFree;
 	}
 
-	public void Remove(TObject obj)
+	public void RemoveAtSwapback(int stableIndex, bool invalidateStableIndex = false)
 	{
-		Debug.Assert(obj.StableIndex != -1, "Entity is not in the cache!");
-		int stableIndex = obj.StableIndex;
-		obj.StableIndex = -1;
-		_objects[stableIndex] = default(TObject);
-		if (stableIndex < firstFreeIndex)
+		int num = --_count;
+		int num2 = _stableIndexLookup[num];
+		int num3 = _movingIndices[stableIndex];
+		_objects[num3] = _objects[num];
+		if (invalidateStableIndex)
 		{
-			nextIndices[stableIndex] = firstFreeIndex;
-			firstFreeIndex = stableIndex;
+			_movingIndices[stableIndex] = num3;
+			_stableIndexLookup[num3] = stableIndex;
+			_movingIndices[num2] = AsFreeIndex(_firstFree);
+			_firstFree = num2;
 		}
 		else
 		{
-			nextIndices[lastFreeIndex] = stableIndex;
-			lastFreeIndex = stableIndex;
+			_movingIndices[num2] = _movingIndices[stableIndex];
+			_stableIndexLookup[num3] = num2;
+			_movingIndices[stableIndex] = AsFreeIndex(_firstFree);
+			_firstFree = stableIndex;
 		}
-		_count--;
-		changes.Add(stableIndex);
+		_objects[num] = default(T);
+		_canRepack |= !invalidateStableIndex;
 	}
 
-	public void Clear()
+	public T Get(int stableIndex)
 	{
-		if (_count > 0)
+		int num = _movingIndices[stableIndex];
+		if (num >= 0)
 		{
-			for (int i = 0; i < _objects.Length; i++)
+			return _objects[num];
+		}
+		return default(T);
+	}
+
+	public int GetIndexForSyncRemove(int stableIndex)
+	{
+		int num = _movingIndices[stableIndex];
+		Debug.Assert(num >= 0, "StableIndex is invalid!");
+		return num;
+	}
+
+	public bool Repack(Action<int, int> onSwap)
+	{
+		if (!_canRepack)
+		{
+			return false;
+		}
+		bool flag = false;
+		int num = 0;
+		int num2 = 0;
+		while (num < _count)
+		{
+			int num3 = _movingIndices[num2];
+			if (num3 == num2)
 			{
-				TObject val = _objects[i];
-				if (val != null)
-				{
-					val.StableIndex = -1;
-					_objects[i] = default(TObject);
-					changes.Add(i);
-				}
+				num++;
 			}
-			_count = 0;
-		}
-		SetupFreeList(0, _objects.Length);
-	}
-
-	public void ResetDirtyTracking()
-	{
-		changes.Clear();
-	}
-
-	public void GetDirtyIndices(BufferList<int> indices)
-	{
-		//IL_0012: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0017: Unknown result type (might be due to invalid IL or missing references)
-		indices.Clear();
-		HashSet<int> hashSet = Pool.Get<HashSet<int>>();
-		Enumerator<int> enumerator = changes.GetEnumerator();
-		try
-		{
-			while (enumerator.MoveNext())
+			else if (num3 >= 0)
 			{
-				int current = enumerator.Current;
-				if (hashSet.Add(current))
+				flag = true;
+				_movingIndices[num2] = _movingIndices[num3];
+				_movingIndices[num3] = num3;
+				onSwap?.Invoke(num2, num3);
+				if (num3 < num2 && num3 >= 0)
 				{
-					indices.Add(current);
+					num++;
 				}
+				num2--;
 			}
+			num2++;
 		}
-		finally
+		if (flag)
 		{
-			((IDisposable)enumerator/*cast due to .constrained prefix*/).Dispose();
+			for (num2 = 0; num2 < _count; num2++)
+			{
+				_stableIndexLookup[num2] = num2;
+			}
+			SetupFreeList(_count);
 		}
-		Pool.FreeUnmanaged<int>(ref hashSet);
+		_canRepack = false;
+		return flag;
 	}
 
-	private void SetupFreeList(int from, int to)
+	public void Dispose()
 	{
-		for (int i = from; i < to; i++)
-		{
-			nextIndices[i] = i + 1;
-		}
-		firstFreeIndex = from;
-		lastFreeIndex = to - 1;
+		_objects = null;
+		_stableIndexLookup.Dispose();
+		_movingIndices = null;
 	}
 
 	private void Grow()
 	{
 		int num = _objects.Length;
-		int num2 = num * 2;
+		int num2 = Mathf.Max(num * 2, 1);
 		Array.Resize(ref _objects, num2);
-		Array.Resize(ref nextIndices, num2);
-		SetupFreeList(num, num2);
-	}
-}
-
-
-using System;
-using System.Collections;
-using System.Collections.Generic;
-using UnityEngine;
-
-public struct ValidEnumerator : IEnumerator<TObject>, IEnumerator, IDisposable
-{
-	private StableObjectCache<TObject> cache;
-
-	private int index;
-
-	private int found;
-
-	public TObject Current => cache._objects[index];
-
-	TObject IEnumerator<TObject>.Current => Current;
-
-	object IEnumerator.Current => Current;
-
-	public ValidEnumerator(StableObjectCache<TObject> cache)
-	{
-		this.cache = cache;
-		index = -1;
-		found = 0;
+		Array.Resize(ref _movingIndices, num2);
+		NativeArrayEx.Expand(ref _stableIndexLookup, num2, (NativeArrayOptions)0);
+		SetupFreeList(num);
 	}
 
-	public void Dispose()
+	private void SetupFreeList(int from)
 	{
-		cache = null;
-	}
-
-	void IDisposable.Dispose()
-	{
-		Dispose();
-	}
-
-	public bool MoveNext()
-	{
-		if (found >= cache._count || index >= cache._objects.Length)
+		for (int i = from; i < _movingIndices.Length; i++)
 		{
-			return false;
+			int slot = i + 1;
+			_movingIndices[i] = AsFreeIndex(slot);
 		}
-		while (++index < cache._objects.Length && (Object)(object)cache._objects[index] == (Object)null)
-		{
-		}
-		found++;
-		return index < cache._objects.Length;
+		_firstFree = from;
 	}
 
-	bool IEnumerator.MoveNext()
+	private static int AsFreeIndex(int slot)
 	{
-		return MoveNext();
+		Debug.Assert(slot >= 0);
+		return -(slot + 1);
 	}
 
-	public void Reset()
+	private static int AsSlotIndex(int freeIndex)
 	{
-		index = -1;
-		found = 0;
-	}
-
-	void IEnumerator.Reset()
-	{
-		Reset();
-	}
-}
-
-
-using System.Collections;
-using System.Collections.Generic;
-
-public struct ValidView : IEnumerable<TObject>, IEnumerable
-{
-	private StableObjectCache<TObject> cache;
-
-	public ValidView(StableObjectCache<TObject> cache)
-	{
-		this.cache = cache;
-	}
-
-	public ValidEnumerator GetEnumerator()
-	{
-		return new ValidEnumerator(cache);
-	}
-
-	IEnumerator<TObject> IEnumerable<TObject>.GetEnumerator()
-	{
-		return GetEnumerator();
-	}
-
-	IEnumerator IEnumerable.GetEnumerator()
-	{
-		return GetEnumerator();
+		Debug.Assert(freeIndex < 0);
+		return -freeIndex - 1;
 	}
 }
 
@@ -9119,9 +8940,9 @@ using System.CodeDom.Compiler;
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
 
+[GeneratedCode("Unity.MonoScriptGenerator.MonoScriptInfoGenerator", null)]
 [CompilerGenerated]
 [EditorBrowsable(EditorBrowsableState.Never)]
-[GeneratedCode("Unity.MonoScriptGenerator.MonoScriptInfoGenerator", null)]
 internal class UnitySourceGeneratedAssemblyMonoScriptTypes_v1
 {
 	private struct MonoScriptData
@@ -9141,7 +8962,7 @@ internal class UnitySourceGeneratedAssemblyMonoScriptTypes_v1
 	private static MonoScriptData Get()
 	{
 		MonoScriptData result = default(MonoScriptData);
-		result.FilePathsData = new byte[1830]
+		result.FilePathsData = new byte[1892]
 		{
 			0, 0, 0, 2, 0, 0, 0, 49, 92, 65,
 			115, 115, 101, 116, 115, 92, 80, 108, 117, 103,
@@ -9246,88 +9067,95 @@ internal class UnitySourceGeneratedAssemblyMonoScriptTypes_v1
 			101, 112, 117, 110, 99, 104, 46, 85, 110, 105,
 			116, 121, 69, 110, 103, 105, 110, 101, 92, 77,
 			117, 114, 109, 117, 114, 72, 97, 115, 104, 46,
-			99, 115, 0, 0, 0, 1, 0, 0, 0, 49,
+			99, 115, 0, 0, 0, 3, 0, 0, 0, 54,
 			92, 65, 115, 115, 101, 116, 115, 92, 80, 108,
 			117, 103, 105, 110, 115, 92, 70, 97, 99, 101,
 			112, 117, 110, 99, 104, 46, 85, 110, 105, 116,
-			121, 69, 110, 103, 105, 110, 101, 92, 80, 97,
-			114, 97, 108, 108, 101, 108, 46, 99, 115, 0,
-			0, 0, 1, 0, 0, 0, 62, 92, 65, 115,
-			115, 101, 116, 115, 92, 80, 108, 117, 103, 105,
-			110, 115, 92, 70, 97, 99, 101, 112, 117, 110,
-			99, 104, 46, 85, 110, 105, 116, 121, 69, 110,
-			103, 105, 110, 101, 92, 80, 114, 105, 111, 114,
-			105, 116, 121, 76, 105, 115, 116, 67, 111, 109,
+			121, 69, 110, 103, 105, 110, 101, 92, 78, 97,
+			116, 105, 118, 101, 65, 114, 114, 97, 121, 69,
+			120, 46, 99, 115, 0, 0, 0, 1, 0, 0,
+			0, 49, 92, 65, 115, 115, 101, 116, 115, 92,
+			80, 108, 117, 103, 105, 110, 115, 92, 70, 97,
+			99, 101, 112, 117, 110, 99, 104, 46, 85, 110,
+			105, 116, 121, 69, 110, 103, 105, 110, 101, 92,
+			80, 97, 114, 97, 108, 108, 101, 108, 46, 99,
+			115, 0, 0, 0, 1, 0, 0, 0, 62, 92,
+			65, 115, 115, 101, 116, 115, 92, 80, 108, 117,
+			103, 105, 110, 115, 92, 70, 97, 99, 101, 112,
+			117, 110, 99, 104, 46, 85, 110, 105, 116, 121,
+			69, 110, 103, 105, 110, 101, 92, 80, 114, 105,
+			111, 114, 105, 116, 121, 76, 105, 115, 116, 67,
+			111, 109, 112, 111, 110, 101, 110, 116, 46, 99,
+			115, 0, 0, 0, 1, 0, 0, 0, 56, 92,
+			65, 115, 115, 101, 116, 115, 92, 80, 108, 117,
+			103, 105, 110, 115, 92, 70, 97, 99, 101, 112,
+			117, 110, 99, 104, 46, 85, 110, 105, 116, 121,
+			69, 110, 103, 105, 110, 101, 92, 82, 101, 110,
+			100, 101, 114, 84, 101, 120, 116, 117, 114, 101,
+			69, 120, 46, 99, 115, 0, 0, 0, 1, 0,
+			0, 0, 49, 92, 65, 115, 115, 101, 116, 115,
+			92, 80, 108, 117, 103, 105, 110, 115, 92, 70,
+			97, 99, 101, 112, 117, 110, 99, 104, 46, 85,
+			110, 105, 116, 121, 69, 110, 103, 105, 110, 101,
+			92, 83, 104, 97, 100, 101, 114, 69, 120, 46,
+			99, 115, 0, 0, 0, 2, 0, 0, 0, 59,
+			92, 65, 115, 115, 101, 116, 115, 92, 80, 108,
+			117, 103, 105, 110, 115, 92, 70, 97, 99, 101,
+			112, 117, 110, 99, 104, 46, 85, 110, 105, 116,
+			121, 69, 110, 103, 105, 110, 101, 92, 83, 105,
+			110, 103, 108, 101, 116, 111, 110, 67, 111, 109,
 			112, 111, 110, 101, 110, 116, 46, 99, 115, 0,
-			0, 0, 1, 0, 0, 0, 56, 92, 65, 115,
+			0, 0, 2, 0, 0, 0, 58, 92, 65, 115,
 			115, 101, 116, 115, 92, 80, 108, 117, 103, 105,
 			110, 115, 92, 70, 97, 99, 101, 112, 117, 110,
 			99, 104, 46, 85, 110, 105, 116, 121, 69, 110,
-			103, 105, 110, 101, 92, 82, 101, 110, 100, 101,
-			114, 84, 101, 120, 116, 117, 114, 101, 69, 120,
-			46, 99, 115, 0, 0, 0, 1, 0, 0, 0,
-			49, 92, 65, 115, 115, 101, 116, 115, 92, 80,
-			108, 117, 103, 105, 110, 115, 92, 70, 97, 99,
-			101, 112, 117, 110, 99, 104, 46, 85, 110, 105,
-			116, 121, 69, 110, 103, 105, 110, 101, 92, 83,
-			104, 97, 100, 101, 114, 69, 120, 46, 99, 115,
-			0, 0, 0, 2, 0, 0, 0, 59, 92, 65,
+			103, 105, 110, 101, 92, 83, 116, 97, 98, 108,
+			101, 79, 98, 106, 101, 99, 116, 65, 114, 114,
+			97, 121, 46, 99, 115, 0, 0, 0, 1, 0,
+			0, 0, 47, 92, 65, 115, 115, 101, 116, 115,
+			92, 80, 108, 117, 103, 105, 110, 115, 92, 70,
+			97, 99, 101, 112, 117, 110, 99, 104, 46, 85,
+			110, 105, 116, 121, 69, 110, 103, 105, 110, 101,
+			92, 83, 116, 114, 105, 110, 103, 46, 99, 115,
+			0, 0, 0, 1, 0, 0, 0, 50, 92, 65,
 			115, 115, 101, 116, 115, 92, 80, 108, 117, 103,
 			105, 110, 115, 92, 70, 97, 99, 101, 112, 117,
 			110, 99, 104, 46, 85, 110, 105, 116, 121, 69,
-			110, 103, 105, 110, 101, 92, 83, 105, 110, 103,
-			108, 101, 116, 111, 110, 67, 111, 109, 112, 111,
-			110, 101, 110, 116, 46, 99, 115, 0, 0, 0,
-			5, 0, 0, 0, 58, 92, 65, 115, 115, 101,
-			116, 115, 92, 80, 108, 117, 103, 105, 110, 115,
-			92, 70, 97, 99, 101, 112, 117, 110, 99, 104,
-			46, 85, 110, 105, 116, 121, 69, 110, 103, 105,
-			110, 101, 92, 83, 116, 97, 98, 108, 101, 79,
-			98, 106, 101, 99, 116, 67, 97, 99, 104, 101,
-			46, 99, 115, 0, 0, 0, 1, 0, 0, 0,
-			47, 92, 65, 115, 115, 101, 116, 115, 92, 80,
-			108, 117, 103, 105, 110, 115, 92, 70, 97, 99,
-			101, 112, 117, 110, 99, 104, 46, 85, 110, 105,
-			116, 121, 69, 110, 103, 105, 110, 101, 92, 83,
-			116, 114, 105, 110, 103, 46, 99, 115, 0, 0,
-			0, 1, 0, 0, 0, 50, 92, 65, 115, 115,
+			110, 103, 105, 110, 101, 92, 84, 101, 120, 116,
+			117, 114, 101, 69, 120, 46, 99, 115, 0, 0,
+			0, 1, 0, 0, 0, 52, 92, 65, 115, 115,
 			101, 116, 115, 92, 80, 108, 117, 103, 105, 110,
 			115, 92, 70, 97, 99, 101, 112, 117, 110, 99,
 			104, 46, 85, 110, 105, 116, 121, 69, 110, 103,
-			105, 110, 101, 92, 84, 101, 120, 116, 117, 114,
-			101, 69, 120, 46, 99, 115, 0, 0, 0, 1,
-			0, 0, 0, 52, 92, 65, 115, 115, 101, 116,
-			115, 92, 80, 108, 117, 103, 105, 110, 115, 92,
-			70, 97, 99, 101, 112, 117, 110, 99, 104, 46,
-			85, 110, 105, 116, 121, 69, 110, 103, 105, 110,
-			101, 92, 84, 105, 109, 101, 87, 97, 114, 110,
-			105, 110, 103, 46, 99, 115, 0, 0, 0, 1,
-			0, 0, 0, 52, 92, 65, 115, 115, 101, 116,
-			115, 92, 80, 108, 117, 103, 105, 110, 115, 92,
-			70, 97, 99, 101, 112, 117, 110, 99, 104, 46,
-			85, 110, 105, 116, 121, 69, 110, 103, 105, 110,
-			101, 92, 84, 114, 97, 110, 115, 102, 111, 114,
-			109, 69, 120, 46, 99, 115, 0, 0, 0, 1,
-			0, 0, 0, 53, 92, 65, 115, 115, 101, 116,
-			115, 92, 80, 108, 117, 103, 105, 110, 115, 92,
-			70, 97, 99, 101, 112, 117, 110, 99, 104, 46,
-			85, 110, 105, 116, 121, 69, 110, 103, 105, 110,
-			101, 92, 85, 116, 105, 108, 105, 116, 121, 92,
-			77, 101, 115, 104, 46, 99, 115, 0, 0, 0,
-			1, 0, 0, 0, 51, 92, 65, 115, 115, 101,
-			116, 115, 92, 80, 108, 117, 103, 105, 110, 115,
-			92, 70, 97, 99, 101, 112, 117, 110, 99, 104,
-			46, 85, 110, 105, 116, 121, 69, 110, 103, 105,
-			110, 101, 92, 85, 116, 105, 108, 105, 116, 121,
-			92, 79, 115, 46, 99, 115, 0, 0, 0, 1,
-			0, 0, 0, 56, 92, 65, 115, 115, 101, 116,
-			115, 92, 80, 108, 117, 103, 105, 110, 115, 92,
-			70, 97, 99, 101, 112, 117, 110, 99, 104, 46,
-			85, 110, 105, 116, 121, 69, 110, 103, 105, 110,
-			101, 92, 85, 116, 105, 108, 105, 116, 121, 92,
-			84, 101, 120, 116, 117, 114, 101, 46, 99, 115
+			105, 110, 101, 92, 84, 105, 109, 101, 87, 97,
+			114, 110, 105, 110, 103, 46, 99, 115, 0, 0,
+			0, 1, 0, 0, 0, 52, 92, 65, 115, 115,
+			101, 116, 115, 92, 80, 108, 117, 103, 105, 110,
+			115, 92, 70, 97, 99, 101, 112, 117, 110, 99,
+			104, 46, 85, 110, 105, 116, 121, 69, 110, 103,
+			105, 110, 101, 92, 84, 114, 97, 110, 115, 102,
+			111, 114, 109, 69, 120, 46, 99, 115, 0, 0,
+			0, 1, 0, 0, 0, 53, 92, 65, 115, 115,
+			101, 116, 115, 92, 80, 108, 117, 103, 105, 110,
+			115, 92, 70, 97, 99, 101, 112, 117, 110, 99,
+			104, 46, 85, 110, 105, 116, 121, 69, 110, 103,
+			105, 110, 101, 92, 85, 116, 105, 108, 105, 116,
+			121, 92, 77, 101, 115, 104, 46, 99, 115, 0,
+			0, 0, 1, 0, 0, 0, 51, 92, 65, 115,
+			115, 101, 116, 115, 92, 80, 108, 117, 103, 105,
+			110, 115, 92, 70, 97, 99, 101, 112, 117, 110,
+			99, 104, 46, 85, 110, 105, 116, 121, 69, 110,
+			103, 105, 110, 101, 92, 85, 116, 105, 108, 105,
+			116, 121, 92, 79, 115, 46, 99, 115, 0, 0,
+			0, 1, 0, 0, 0, 56, 92, 65, 115, 115,
+			101, 116, 115, 92, 80, 108, 117, 103, 105, 110,
+			115, 92, 70, 97, 99, 101, 112, 117, 110, 99,
+			104, 46, 85, 110, 105, 116, 121, 69, 110, 103,
+			105, 110, 101, 92, 85, 116, 105, 108, 105, 116,
+			121, 92, 84, 101, 120, 116, 117, 114, 101, 46,
+			99, 115
 		};
-		result.TypesData = new byte[1148]
+		result.TypesData = new byte[1171]
 		{
 			0, 0, 0, 0, 25, 70, 97, 99, 101, 112,
 			117, 110, 99, 104, 46, 69, 120, 116, 101, 110,
@@ -9396,56 +9224,59 @@ internal class UnitySourceGeneratedAssemblyMonoScriptTypes_v1
 			11, 124, 77, 117, 114, 109, 117, 114, 72, 97,
 			115, 104, 0, 0, 0, 0, 13, 124, 77, 117,
 			114, 109, 117, 114, 72, 97, 115, 104, 69, 120,
-			0, 0, 0, 0, 22, 85, 110, 105, 116, 121,
-			69, 110, 103, 105, 110, 101, 124, 80, 97, 114,
-			97, 108, 108, 101, 108, 69, 120, 0, 0, 0,
-			0, 22, 124, 80, 114, 105, 111, 114, 105, 116,
-			121, 76, 105, 115, 116, 67, 111, 109, 112, 111,
-			110, 101, 110, 116, 0, 0, 0, 0, 32, 70,
-			97, 99, 101, 112, 117, 110, 99, 104, 46, 69,
-			120, 116, 101, 110, 100, 124, 82, 101, 110, 100,
-			101, 114, 84, 101, 120, 116, 117, 114, 101, 69,
-			120, 0, 0, 0, 0, 9, 124, 83, 104, 97,
-			100, 101, 114, 69, 120, 1, 0, 0, 0, 19,
-			124, 83, 105, 110, 103, 108, 101, 116, 111, 110,
-			67, 111, 109, 112, 111, 110, 101, 110, 116, 1,
-			0, 0, 0, 19, 124, 83, 105, 110, 103, 108,
-			101, 116, 111, 110, 67, 111, 109, 112, 111, 110,
-			101, 110, 116, 0, 0, 0, 0, 13, 124, 73,
-			83, 116, 97, 98, 108, 101, 73, 110, 100, 101,
-			120, 0, 0, 0, 0, 18, 124, 83, 116, 97,
-			98, 108, 101, 69, 110, 116, 105, 116, 121, 67,
-			97, 99, 104, 101, 0, 0, 0, 0, 18, 124,
+			0, 0, 0, 0, 31, 85, 110, 105, 116, 121,
+			46, 67, 111, 108, 108, 101, 99, 116, 105, 111,
+			110, 115, 124, 78, 97, 116, 105, 118, 101, 65,
+			114, 114, 97, 121, 69, 120, 0, 0, 0, 0,
+			35, 85, 110, 105, 116, 121, 46, 67, 111, 108,
+			108, 101, 99, 116, 105, 111, 110, 115, 124, 78,
+			97, 116, 105, 118, 101, 82, 101, 102, 101, 114,
+			101, 110, 99, 101, 69, 120, 0, 0, 0, 0,
+			30, 85, 110, 105, 116, 121, 46, 67, 111, 108,
+			108, 101, 99, 116, 105, 111, 110, 115, 124, 78,
+			97, 116, 105, 118, 101, 76, 105, 115, 116, 69,
+			120, 0, 0, 0, 0, 22, 85, 110, 105, 116,
+			121, 69, 110, 103, 105, 110, 101, 124, 80, 97,
+			114, 97, 108, 108, 101, 108, 69, 120, 0, 0,
+			0, 0, 22, 124, 80, 114, 105, 111, 114, 105,
+			116, 121, 76, 105, 115, 116, 67, 111, 109, 112,
+			111, 110, 101, 110, 116, 0, 0, 0, 0, 32,
+			70, 97, 99, 101, 112, 117, 110, 99, 104, 46,
+			69, 120, 116, 101, 110, 100, 124, 82, 101, 110,
+			100, 101, 114, 84, 101, 120, 116, 117, 114, 101,
+			69, 120, 0, 0, 0, 0, 9, 124, 83, 104,
+			97, 100, 101, 114, 69, 120, 1, 0, 0, 0,
+			19, 124, 83, 105, 110, 103, 108, 101, 116, 111,
+			110, 67, 111, 109, 112, 111, 110, 101, 110, 116,
+			1, 0, 0, 0, 19, 124, 83, 105, 110, 103,
+			108, 101, 116, 111, 110, 67, 111, 109, 112, 111,
+			110, 101, 110, 116, 1, 0, 0, 0, 18, 124,
 			83, 116, 97, 98, 108, 101, 79, 98, 106, 101,
-			99, 116, 67, 97, 99, 104, 101, 0, 0, 0,
-			0, 33, 83, 116, 97, 98, 108, 101, 79, 98,
-			106, 101, 99, 116, 67, 97, 99, 104, 101, 124,
-			86, 97, 108, 105, 100, 69, 110, 117, 109, 101,
-			114, 97, 116, 111, 114, 0, 0, 0, 0, 27,
-			83, 116, 97, 98, 108, 101, 79, 98, 106, 101,
-			99, 116, 67, 97, 99, 104, 101, 124, 86, 97,
-			108, 105, 100, 86, 105, 101, 119, 0, 0, 0,
-			0, 28, 85, 110, 105, 116, 121, 69, 110, 103,
-			105, 110, 101, 124, 83, 116, 114, 105, 110, 103,
-			69, 120, 116, 101, 110, 115, 105, 111, 110, 115,
-			0, 0, 0, 0, 21, 85, 110, 105, 116, 121,
-			69, 110, 103, 105, 110, 101, 124, 84, 101, 120,
-			116, 117, 114, 101, 69, 120, 0, 0, 0, 0,
-			12, 124, 84, 105, 109, 101, 87, 97, 114, 110,
-			105, 110, 103, 0, 0, 0, 0, 28, 70, 97,
-			99, 101, 112, 117, 110, 99, 104, 46, 69, 120,
-			116, 101, 110, 100, 124, 84, 114, 97, 110, 115,
-			102, 111, 114, 109, 69, 120, 0, 0, 0, 0,
-			22, 70, 97, 99, 101, 112, 117, 110, 99, 104,
-			46, 85, 116, 105, 108, 105, 116, 121, 124, 77,
-			101, 115, 104, 0, 0, 0, 0, 20, 70, 97,
-			99, 101, 112, 117, 110, 99, 104, 46, 85, 116,
-			105, 108, 105, 116, 121, 124, 79, 115, 0, 0,
-			0, 0, 25, 70, 97, 99, 101, 112, 117, 110,
-			99, 104, 46, 85, 116, 105, 108, 105, 116, 121,
-			124, 84, 101, 120, 116, 117, 114, 101
+			99, 116, 65, 114, 114, 97, 121, 1, 0, 0,
+			0, 18, 124, 83, 116, 97, 98, 108, 101, 79,
+			98, 106, 101, 99, 116, 65, 114, 114, 97, 121,
+			0, 0, 0, 0, 28, 85, 110, 105, 116, 121,
+			69, 110, 103, 105, 110, 101, 124, 83, 116, 114,
+			105, 110, 103, 69, 120, 116, 101, 110, 115, 105,
+			111, 110, 115, 0, 0, 0, 0, 21, 85, 110,
+			105, 116, 121, 69, 110, 103, 105, 110, 101, 124,
+			84, 101, 120, 116, 117, 114, 101, 69, 120, 0,
+			0, 0, 0, 12, 124, 84, 105, 109, 101, 87,
+			97, 114, 110, 105, 110, 103, 0, 0, 0, 0,
+			28, 70, 97, 99, 101, 112, 117, 110, 99, 104,
+			46, 69, 120, 116, 101, 110, 100, 124, 84, 114,
+			97, 110, 115, 102, 111, 114, 109, 69, 120, 0,
+			0, 0, 0, 22, 70, 97, 99, 101, 112, 117,
+			110, 99, 104, 46, 85, 116, 105, 108, 105, 116,
+			121, 124, 77, 101, 115, 104, 0, 0, 0, 0,
+			20, 70, 97, 99, 101, 112, 117, 110, 99, 104,
+			46, 85, 116, 105, 108, 105, 116, 121, 124, 79,
+			115, 0, 0, 0, 0, 25, 70, 97, 99, 101,
+			112, 117, 110, 99, 104, 46, 85, 116, 105, 108,
+			105, 116, 121, 124, 84, 101, 120, 116, 117, 114,
+			101
 		};
-		result.TotalFiles = 29;
+		result.TotalFiles = 30;
 		result.TotalTypes = 52;
 		result.IsEditorOnly = false;
 		return result;
@@ -9467,6 +9298,210 @@ private struct MonoScriptData
 }
 
 
+using System;
+using System.Collections.Generic;
+using System.Diagnostics;
+using Unity.Collections;
+using Unity.Collections.LowLevel.Unsafe;
+using Unity.Jobs;
+using UnityEngine;
+
+public static class NativeArrayEx
+{
+	public static void Add<T>(this ref NativeArray<T> array, T item, ref int size) where T : unmanaged
+	{
+		if (size >= array.Length)
+		{
+			Expand(ref array, array.Length * 2, (NativeArrayOptions)1);
+		}
+		array[size] = item;
+		size++;
+	}
+
+	public static void RemoveUnordered<T>(this ref NativeArray<T> array, int index, ref int count) where T : unmanaged
+	{
+		int num = count - 1;
+		if (index != num)
+		{
+			array[index] = array[num];
+		}
+		count--;
+	}
+
+	public static void Expand<T>(this ref NativeArray<T> array, int newCapacity, NativeArrayOptions options = 1, bool copyContents = true, bool usePowerOfTwo = false) where T : struct
+	{
+		//IL_0019: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0045: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0046: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0034: Unknown result type (might be due to invalid IL or missing references)
+		if (newCapacity <= array.Length)
+		{
+			return;
+		}
+		NativeArray<T> val = default(NativeArray<T>);
+		val..ctor(usePowerOfTwo ? Mathf.NextPowerOfTwo(newCapacity) : newCapacity, (Allocator)4, options);
+		if (array.IsCreated)
+		{
+			if (copyContents)
+			{
+				array.CopyTo(val.GetSubArray(0, array.Length));
+			}
+			array.Dispose();
+		}
+		array = val;
+	}
+
+	public static void SafeDispose<T>(this ref NativeArray<T> array) where T : unmanaged
+	{
+		if (array.IsCreated)
+		{
+			array.Dispose();
+		}
+	}
+
+	public static void SafeDispose<T>(this ref NativeArray<T> array, JobHandle dependsOn) where T : unmanaged
+	{
+		//IL_0009: Unknown result type (might be due to invalid IL or missing references)
+		//IL_000a: Unknown result type (might be due to invalid IL or missing references)
+		if (array.IsCreated)
+		{
+			array.Dispose(dependsOn);
+		}
+	}
+
+	public unsafe static void MemClear<T>(this in NativeArray<T> array) where T : struct
+	{
+		//IL_0001: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0011: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0016: Unknown result type (might be due to invalid IL or missing references)
+		UnsafeUtility.MemClear(NativeArrayUnsafeUtility.GetUnsafeBufferPointerWithoutChecks<T>(array), (long)(UnsafeUtility.SizeOf<T>() * array.Length));
+	}
+
+	public unsafe static void MemSet<T>(this in NativeArray<T> array, byte value) where T : struct
+	{
+		//IL_0001: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0012: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0017: Unknown result type (might be due to invalid IL or missing references)
+		UnsafeUtility.MemSet(NativeArrayUnsafeUtility.GetUnsafeBufferPointerWithoutChecks<T>(array), value, (long)(UnsafeUtility.SizeOf<T>() * array.Length));
+	}
+
+	public unsafe static NativeBitArray AsBitArray<T>(this ref NativeArray<T> array) where T : struct
+	{
+		//IL_0001: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0012: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0017: Unknown result type (might be due to invalid IL or missing references)
+		return NativeBitArrayUnsafeUtility.ConvertExistingDataToNativeBitArray(NativeArrayUnsafeUtility.GetUnsafeBufferPointerWithoutChecks<T>(array), array.Length, AllocatorHandle.op_Implicit((Allocator)1));
+	}
+
+	[Conditional("ENABLE_UNITY_COLLECTIONS_CHECKS")]
+	private static void CheckReinterpretLoadRange<U, T>(this ref ReadOnly<T> array, int sourceIndex) where U : struct where T : struct
+	{
+	}
+
+	public unsafe static U ReinterpretLoad<U, T>(this ref ReadOnly<T> array, int sourceIndex) where U : struct where T : struct
+	{
+		//IL_0001: Unknown result type (might be due to invalid IL or missing references)
+		return UnsafeUtility.ReadArrayElement<U>((void*)((byte*)NativeArrayUnsafeUtility.GetUnsafeReadOnlyPtr<T>(array) + (long)UnsafeUtility.SizeOf<T>() * (long)sourceIndex), 0);
+	}
+
+	public static bool TryFindRegion<T>(this ref NativeArray<T> array, T value, ref int index, ref int length) where T : struct, IEquatable<T>
+	{
+		index += length;
+		while (index < array.Length && !EqualityComparer<T>.Default.Equals(array[index], value))
+		{
+			index++;
+		}
+		if (index == array.Length)
+		{
+			return false;
+		}
+		length = 1;
+		while (index + length < array.Length && EqualityComparer<T>.Default.Equals(array[index + length], value))
+		{
+			length++;
+		}
+		return true;
+	}
+
+	public static bool GenericEquals<T>(T a, T b) where T : IEquatable<T>
+	{
+		return a.Equals(b);
+	}
+}
+
+
+using Unity.Collections;
+
+public static class NativeReferenceEx
+{
+	public static void SafeDispose<T>(this ref NativeReference<T> reference) where T : unmanaged
+	{
+		if (reference.IsCreated)
+		{
+			reference.Dispose();
+		}
+	}
+}
+
+
+using Unity.Collections;
+
+public static class NativeListEx
+{
+	public static void Expand<T>(this ref NativeList<T> list, int newCapacity, bool copyContents = true) where T : unmanaged
+	{
+		//IL_0042: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0047: Unknown result type (might be due to invalid IL or missing references)
+		//IL_004c: Unknown result type (might be due to invalid IL or missing references)
+		//IL_002e: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0033: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0038: Unknown result type (might be due to invalid IL or missing references)
+		if (!list.IsCreated || newCapacity > list.Capacity)
+		{
+			if (list.IsCreated)
+			{
+				if (copyContents)
+				{
+					list.Capacity = newCapacity;
+				}
+				else
+				{
+					list.Dispose();
+					list = new NativeList<T>(newCapacity, AllocatorHandle.op_Implicit((Allocator)4));
+				}
+			}
+			else
+			{
+				list = new NativeList<T>(newCapacity, AllocatorHandle.op_Implicit((Allocator)4));
+			}
+		}
+		if (!copyContents)
+		{
+			list.Clear();
+		}
+	}
+
+	public static void SafeDispose<T>(this ref NativeList<T> list) where T : unmanaged
+	{
+		if (list.IsCreated)
+		{
+			list.Dispose();
+		}
+	}
+
+	public static void CopyFrom<T>(this ref NativeList<T> list, in ReadOnly<T> from) where T : unmanaged
+	{
+		//IL_0002: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0007: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0016: Unknown result type (might be due to invalid IL or missing references)
+		//IL_001b: Unknown result type (might be due to invalid IL or missing references)
+		//IL_001f: Unknown result type (might be due to invalid IL or missing references)
+		list.Resize(from.Length, (NativeArrayOptions)0);
+		from.CopyTo(list.AsArray());
+	}
+}
+
+
 public class LeanDummy
 {
 }
@@ -9476,6 +9511,8 @@ using UnityEngine;
 
 public static class ColorEx
 {
+	private const byte k_MaxByteForOverexposedColor = 191;
+
 	public static string ToHex(this Color32 color)
 	{
 		return color.r.ToString("X2") + color.g.ToString("X2") + color.b.ToString("X2");
@@ -9529,6 +9566,37 @@ public static class ColorEx
 	{
 		//IL_0010: Unknown result type (might be due to invalid IL or missing references)
 		return new Color32((byte)(value >> 24), (byte)(value >> 16), (byte)(value >> 8), (byte)value);
+	}
+
+	public static Vector4 ToVector4(this Color color)
+	{
+		//IL_0000: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0006: Unknown result type (might be due to invalid IL or missing references)
+		//IL_000c: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0012: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0018: Unknown result type (might be due to invalid IL or missing references)
+		return new Vector4(color.r, color.g, color.b, color.a);
+	}
+
+	public static float GetHDRIntensity(this Color color)
+	{
+		float maxColorComponent = ((Color)(ref color)).maxColorComponent;
+		float num = 191f / maxColorComponent;
+		if (maxColorComponent != 0f && (!(maxColorComponent <= 1f) || !(maxColorComponent >= 0.003921569f)))
+		{
+			return Mathf.Log(255f / num) / Mathf.Log(2f);
+		}
+		return 1f;
+	}
+
+	public static Color WithHDRIntensity(this Color color, float hdrIntensity)
+	{
+		//IL_0012: Unknown result type (might be due to invalid IL or missing references)
+		//IL_001a: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0022: Unknown result type (might be due to invalid IL or missing references)
+		//IL_002a: Unknown result type (might be due to invalid IL or missing references)
+		float num = 0.7490196f * Mathf.Pow(2f, hdrIntensity);
+		return new Color(color.r * num, color.g * num, color.b * num);
 	}
 }
 

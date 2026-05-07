@@ -1,4 +1,1199 @@
 using System;
+using ConVar;
+using Facepunch;
+using Network;
+using ProtoBuf;
+using UnityEngine;
+using UnityEngine.Assertions;
+
+public class OrientableLight : SimpleLight
+{
+	public Transform pivotOrigin;
+
+	public Transform yaw;
+
+	public Transform pitch;
+
+	public bool pivotAutoAdjust = true;
+
+	[Space]
+	public Vector2 pitchClamp = new Vector2(-50f, 50f);
+
+	public Vector2 yawClamp = new Vector2(-50f, 50f);
+
+	[Space]
+	public float serverLerpSpeed = 15f;
+
+	public float clientLerpSpeed = 10f;
+
+	[Space]
+	public GameObjectRef reorientEffect;
+
+	public const Flags Flag_FacingDown = Flags.Reserved18;
+
+	private float pitchAmount;
+
+	private float yawAmount;
+
+	private float lastPitchAmount;
+
+	private float lastYawAmount;
+
+	public static Phrase TipPhrase = new Phrase("gametip_spotlight", "Use a hammer to adjust the spotlight direction");
+
+	private bool IsFacingDown => HasFlag(Flags.Reserved18);
+
+	public override bool OnRpcMessage(BasePlayer player, uint rpc, Message msg)
+	{
+		TimeWarning val = TimeWarning.New("OrientableLight.OnRpcMessage", 0);
+		try
+		{
+			if (rpc == 3353964129u && (Object)(object)player != (Object)null)
+			{
+				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
+				if (Global.developer > 2)
+				{
+					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - SERVER_SetDir"));
+				}
+				TimeWarning val2 = TimeWarning.New("SERVER_SetDir", 0);
+				try
+				{
+					TimeWarning val3 = TimeWarning.New("Conditions", 0);
+					try
+					{
+						if (!RPC_Server.CallsPerSecond.Test(3353964129u, "SERVER_SetDir", this, player, 3uL))
+						{
+							return true;
+						}
+						if (!RPC_Server.IsVisible.Test(3353964129u, "SERVER_SetDir", this, player, 3f))
+						{
+							return true;
+						}
+					}
+					finally
+					{
+						((IDisposable)val3)?.Dispose();
+					}
+					try
+					{
+						val3 = TimeWarning.New("Call", 0);
+						try
+						{
+							RPCMessage rPCMessage = default(RPCMessage);
+							rPCMessage.connection = msg.connection;
+							rPCMessage.player = player;
+							rPCMessage.read = msg.read;
+							RPCMessage msg2 = rPCMessage;
+							SERVER_SetDir(msg2);
+						}
+						finally
+						{
+							((IDisposable)val3)?.Dispose();
+						}
+					}
+					catch (Exception ex)
+					{
+						Debug.LogException(ex);
+						player.Kick("RPC Error in SERVER_SetDir");
+					}
+				}
+				finally
+				{
+					((IDisposable)val2)?.Dispose();
+				}
+				return true;
+			}
+		}
+		finally
+		{
+			((IDisposable)val)?.Dispose();
+		}
+		return base.OnRpcMessage(player, rpc, msg);
+	}
+
+	public override int ConsumptionAmount()
+	{
+		return 5;
+	}
+
+	public void UpdateRotation(float delta)
+	{
+		//IL_001b: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0020: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0031: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0036: Unknown result type (might be due to invalid IL or missing references)
+		//IL_004d: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0052: Unknown result type (might be due to invalid IL or missing references)
+		//IL_005a: Unknown result type (might be due to invalid IL or missing references)
+		//IL_007a: Unknown result type (might be due to invalid IL or missing references)
+		//IL_007f: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0087: Unknown result type (might be due to invalid IL or missing references)
+		if (base.isServer)
+		{
+			Quaternion val = Quaternion.Euler(pitchAmount, 0f, 0f);
+			Quaternion val2 = Quaternion.Euler(0f, yawAmount, 0f);
+			((Component)pitch).transform.localRotation = Mathx.Lerp(((Component)pitch).transform.localRotation, val, serverLerpSpeed, delta);
+			((Component)yaw).transform.localRotation = Mathx.Lerp(((Component)yaw).transform.localRotation, val2, serverLerpSpeed, delta);
+		}
+	}
+
+	private void ResetRotation()
+	{
+		//IL_0021: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0036: Unknown result type (might be due to invalid IL or missing references)
+		lastPitchAmount = 0f;
+		lastYawAmount = 0f;
+		((Component)yaw).transform.localRotation = Quaternion.identity;
+		((Component)pitch).transform.localRotation = Quaternion.identity;
+		SetPivot();
+	}
+
+	private void SetPivot()
+	{
+		//IL_0037: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0026: Unknown result type (might be due to invalid IL or missing references)
+		if (pivotAutoAdjust)
+		{
+			if (IsFacingDown)
+			{
+				pivotOrigin.localRotation = Quaternion.Euler(90f, 0f, 180f);
+			}
+			else
+			{
+				pivotOrigin.localRotation = Quaternion.identity;
+			}
+		}
+	}
+
+	public override void ServerInit()
+	{
+		//IL_000c: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0011: Unknown result type (might be due to invalid IL or missing references)
+		base.ServerInit();
+		bool b = Mathf.Abs(Vector3.Dot(((Component)this).transform.forward, Vector3.up)) > 0.9f;
+		SetFlag(Flags.Reserved18, b);
+		SetPivot();
+	}
+
+	public void ServerTick()
+	{
+		if (!base.IsDestroyed)
+		{
+			UpdateRotation(Time.deltaTime);
+		}
+	}
+
+	public override void OnDeployed(BaseEntity parent, BasePlayer deployedBy, Item fromItem)
+	{
+		base.OnDeployed(parent, deployedBy, fromItem);
+		ResetRotation();
+		ClientRPC(RpcTarget.Player("CLIENT_OnDeployed", deployedBy));
+	}
+
+	[RPC_Server]
+	[RPC_Server.CallsPerSecond(3uL)]
+	[RPC_Server.IsVisible(3f)]
+	public void SERVER_SetDir(RPCMessage msg)
+	{
+		//IL_0016: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0026: Unknown result type (might be due to invalid IL or missing references)
+		//IL_002b: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0030: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0037: Unknown result type (might be due to invalid IL or missing references)
+		//IL_003c: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0040: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0045: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0049: Unknown result type (might be due to invalid IL or missing references)
+		//IL_004e: Unknown result type (might be due to invalid IL or missing references)
+		//IL_004f: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0050: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0056: Unknown result type (might be due to invalid IL or missing references)
+		//IL_005b: Unknown result type (might be due to invalid IL or missing references)
+		//IL_005f: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0064: Unknown result type (might be due to invalid IL or missing references)
+		//IL_006b: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0070: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0075: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0076: Unknown result type (might be due to invalid IL or missing references)
+		//IL_007b: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0080: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0084: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0089: Unknown result type (might be due to invalid IL or missing references)
+		//IL_008e: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0135: Unknown result type (might be due to invalid IL or missing references)
+		//IL_013c: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0142: Unknown result type (might be due to invalid IL or missing references)
+		BasePlayer player = msg.player;
+		if (player.CanBuild())
+		{
+			Vector3 val = Vector3Ex.Direction(player.eyes.position, ((Component)yaw).transform.position);
+			Ray val2 = player.eyes.HeadRay();
+			Vector3 normWorld = ((Ray)(ref val2)).direction;
+			Vector3 normalized = ((Vector3)(ref normWorld)).normalized;
+			normWorld = Vector3.Lerp(val, normalized, 0.3f);
+			Vector3 normalized2 = ((Vector3)(ref normWorld)).normalized;
+			Quaternion val3 = Quaternion.LookRotation(Quaternion.Inverse(pivotOrigin.rotation) * normalized2);
+			Vector3 val4 = BaseMountable.ConvertVector(((Quaternion)(ref val3)).eulerAngles);
+			float num = val4.x;
+			float num2 = val4.y;
+			if (!IsFacingDown)
+			{
+				num = Mathf.Clamp(num, pitchClamp.x, pitchClamp.y);
+				num2 = Mathf.Clamp(num2, yawClamp.x, yawClamp.y);
+			}
+			pitchAmount += Mathf.DeltaAngle(pitchAmount, num);
+			yawAmount += Mathf.DeltaAngle(yawAmount, num2);
+			if (reorientEffect.isValid)
+			{
+				string resourcePath = reorientEffect.resourcePath;
+				Vector3 position = ((Component)this).transform.position;
+				normWorld = default(Vector3);
+				Effect.server.Run(resourcePath, position, normWorld);
+			}
+			SendNetworkUpdate();
+		}
+	}
+
+	public override void Save(SaveInfo info)
+	{
+		base.Save(info);
+		if (info.msg.rcEntity == null)
+		{
+			info.msg.rcEntity = Pool.Get<RCEntity>();
+		}
+		info.msg.rcEntity.aim.x = pitchAmount;
+		info.msg.rcEntity.aim.y = yawAmount;
+		info.msg.rcEntity.aim.z = 0f;
+		if (!base.isServer)
+		{
+			return;
+		}
+		if (lastPitchAmount != pitchAmount || lastYawAmount != yawAmount)
+		{
+			((FacepunchBehaviour)this).InvokeRepeating((Action)ServerTick, 0f, 0f);
+			((FacepunchBehaviour)this).Invoke((Action)delegate
+			{
+				((FacepunchBehaviour)this).CancelInvoke((Action)ServerTick);
+			}, 5f);
+		}
+		lastPitchAmount = pitchAmount;
+		lastYawAmount = yawAmount;
+	}
+
+	public override void Load(LoadInfo info)
+	{
+		base.Load(info);
+		if (info.msg.rcEntity != null && base.isServer)
+		{
+			pitchAmount = info.msg.rcEntity.aim.x;
+			yawAmount = info.msg.rcEntity.aim.y;
+		}
+	}
+}
+
+
+using System;
+using System.Runtime.CompilerServices;
+using ConVar;
+using Facepunch;
+using Network;
+using TMPro;
+using UnityEngine;
+using UnityEngine.Assertions;
+
+public class OrnateFrame : PhotoFrame
+{
+	[Header("Ornate Frame Dependencies")]
+	public TextMeshPro frameTextComponent;
+
+	public GameObjectRef configureFrameDialog;
+
+	private string __sync_FrameText;
+
+	private Color __sync_TextColour;
+
+	[Sync(Autosave = true)]
+	public string FrameText
+	{
+		[CompilerGenerated]
+		get
+		{
+			return __sync_FrameText;
+		}
+		[CompilerGenerated]
+		set
+		{
+			if (!IsSyncVarEqual(__sync_FrameText, value))
+			{
+				__sync_FrameText = value;
+				byte nameID = __GetWeaverID("FrameText");
+				QueueSyncVar(nameID);
+			}
+		}
+	}
+
+	[Sync(Autosave = true)]
+	public Color TextColour
+	{
+		[CompilerGenerated]
+		get
+		{
+			//IL_0001: Unknown result type (might be due to invalid IL or missing references)
+			return __sync_TextColour;
+		}
+		[CompilerGenerated]
+		set
+		{
+			//IL_0002: Unknown result type (might be due to invalid IL or missing references)
+			//IL_0007: Unknown result type (might be due to invalid IL or missing references)
+			//IL_0015: Unknown result type (might be due to invalid IL or missing references)
+			//IL_0016: Unknown result type (might be due to invalid IL or missing references)
+			if (!IsSyncVarEqual<Color>(__sync_TextColour, value))
+			{
+				__sync_TextColour = value;
+				byte nameID = __GetWeaverID("TextColour");
+				QueueSyncVar(nameID);
+			}
+		}
+	}
+
+	public override bool OnRpcMessage(BasePlayer player, uint rpc, Message msg)
+	{
+		TimeWarning val = TimeWarning.New("OrnateFrame.OnRpcMessage", 0);
+		try
+		{
+			if (rpc == 3398916869u && (Object)(object)player != (Object)null)
+			{
+				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
+				if (Global.developer > 2)
+				{
+					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - RPC_ConfigureFrame"));
+				}
+				TimeWarning val2 = TimeWarning.New("RPC_ConfigureFrame", 0);
+				try
+				{
+					TimeWarning val3 = TimeWarning.New("Conditions", 0);
+					try
+					{
+						if (!RPC_Server.CallsPerSecond.Test(3398916869u, "RPC_ConfigureFrame", this, player, 2uL))
+						{
+							return true;
+						}
+						if (!RPC_Server.IsVisible.Test(3398916869u, "RPC_ConfigureFrame", this, player, 3f))
+						{
+							return true;
+						}
+					}
+					finally
+					{
+						((IDisposable)val3)?.Dispose();
+					}
+					try
+					{
+						val3 = TimeWarning.New("Call", 0);
+						try
+						{
+							RPCMessage rPCMessage = default(RPCMessage);
+							rPCMessage.connection = msg.connection;
+							rPCMessage.player = player;
+							rPCMessage.read = msg.read;
+							RPCMessage msg2 = rPCMessage;
+							RPC_ConfigureFrame(msg2);
+						}
+						finally
+						{
+							((IDisposable)val3)?.Dispose();
+						}
+					}
+					catch (Exception ex)
+					{
+						Debug.LogException(ex);
+						player.Kick("RPC Error in RPC_ConfigureFrame");
+					}
+				}
+				finally
+				{
+					((IDisposable)val2)?.Dispose();
+				}
+				return true;
+			}
+		}
+		finally
+		{
+			((IDisposable)val)?.Dispose();
+		}
+		return base.OnRpcMessage(player, rpc, msg);
+	}
+
+	public virtual bool CanUpdateFrame(BasePlayer player)
+	{
+		if (player.IsAdmin || player.IsDeveloper)
+		{
+			return true;
+		}
+		if (!player.CanBuild())
+		{
+			return false;
+		}
+		if (IsLocked())
+		{
+			return (ulong)player.userID == base.OwnerID;
+		}
+		return true;
+	}
+
+	public override void ServerInit()
+	{
+		//IL_0007: Unknown result type (might be due to invalid IL or missing references)
+		base.ServerInit();
+		TextColour = Color.black;
+	}
+
+	[RPC_Server]
+	[RPC_Server.CallsPerSecond(2uL)]
+	[RPC_Server.IsVisible(3f)]
+	public void RPC_ConfigureFrame(RPCMessage msg)
+	{
+		//IL_0018: Unknown result type (might be due to invalid IL or missing references)
+		//IL_001d: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0026: Unknown result type (might be due to invalid IL or missing references)
+		string frameText = msg.read.String(256, false);
+		Color textColour = msg.read.Color();
+		SetFrameText(frameText);
+		SetTextColour(textColour);
+	}
+
+	public void SetFrameText(string text)
+	{
+		FrameText = text;
+	}
+
+	public void SetTextColour(Color colour)
+	{
+		//IL_0001: Unknown result type (might be due to invalid IL or missing references)
+		TextColour = colour;
+	}
+
+	protected override bool WriteSyncVar(byte id, NetWrite writer)
+	{
+		//IL_001d: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0022: Unknown result type (might be due to invalid IL or missing references)
+		//IL_007c: Unknown result type (might be due to invalid IL or missing references)
+		//IL_005c: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0061: Unknown result type (might be due to invalid IL or missing references)
+		NetworkableId iD;
+		switch (id)
+		{
+		case 1:
+			if (Global.developer > 2)
+			{
+				iD = net.ID;
+				Debug.Log((object)("SyncVar Writing: FrameText for " + ((object)(NetworkableId)(ref iD)/*cast due to .constrained prefix*/).ToString()));
+			}
+			SyncVarNetWrite(writer, __sync_FrameText);
+			return true;
+		case 2:
+			if (Global.developer > 2)
+			{
+				iD = net.ID;
+				Debug.Log((object)("SyncVar Writing: TextColour for " + ((object)(NetworkableId)(ref iD)/*cast due to .constrained prefix*/).ToString()));
+			}
+			SyncVarNetWrite<Color>(writer, __sync_TextColour);
+			return true;
+		default:
+			return base.WriteSyncVar(id, writer);
+		}
+	}
+
+	protected override bool OnSyncVar(byte id, NetRead reader, bool fromAutoSave = false)
+	{
+		//IL_0035: Unknown result type (might be due to invalid IL or missing references)
+		//IL_003c: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0041: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0043: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0044: Unknown result type (might be due to invalid IL or missing references)
+		switch (id)
+		{
+		case 1:
+			try
+			{
+				_ = __sync_FrameText;
+				string _sync_FrameText = reader.String(256, false);
+				__sync_FrameText = _sync_FrameText;
+			}
+			catch (Exception ex2)
+			{
+				Debug.LogException(ex2);
+			}
+			return true;
+		case 2:
+			try
+			{
+				_ = __sync_TextColour;
+				Color _sync_TextColour = reader.Color();
+				__sync_TextColour = _sync_TextColour;
+			}
+			catch (Exception ex)
+			{
+				Debug.LogException(ex);
+			}
+			return true;
+		default:
+			return base.OnSyncVar(id, reader, fromAutoSave);
+		}
+	}
+
+	private byte __GetWeaverID(string propertyName)
+	{
+		if (!(propertyName == "FrameText"))
+		{
+			if (propertyName == "TextColour")
+			{
+				return 2;
+			}
+			return byte.MaxValue;
+		}
+		return 1;
+	}
+
+	protected override void WriteAutoSaveSyncVars(NetWrite writer)
+	{
+		base.WriteAutoSaveSyncVars(writer);
+		WriteSyncVar(1, writer);
+		WriteSyncVar(2, writer);
+	}
+
+	protected override void ReadAutoSaveSyncVars(NetRead reader)
+	{
+		base.ReadAutoSaveSyncVars(reader);
+		OnSyncVar(1, reader, fromAutoSave: true);
+		OnSyncVar(2, reader, fromAutoSave: true);
+	}
+
+	protected override bool AutoSaveSyncVars(SaveInfo save)
+	{
+		NetWrite val = ((BaseNetwork)Net.sv).StartWrite();
+		WriteAutoSaveSyncVars(val);
+		var (src, num) = val.GetBuffer();
+		if (_autosaveBuffer == null)
+		{
+			_autosaveBuffer = BaseEntity._autosaveBufferPool.Rent(num);
+		}
+		if (_autosaveBuffer.Length < num)
+		{
+			BaseEntity._autosaveBufferPool.Return(_autosaveBuffer);
+			_autosaveBuffer = BaseEntity._autosaveBufferPool.Rent(num);
+		}
+		Buffer.BlockCopy(src, 0, _autosaveBuffer, 0, num);
+		save.msg.baseEntity.syncVars = _autosaveBuffer;
+		Pool.Free<NetWrite>(ref val);
+		return true;
+	}
+
+	protected override bool AutoLoadSyncVars(LoadInfo load)
+	{
+		if (load.msg.baseEntity != null && load.msg.baseEntity.syncVars != null)
+		{
+			NetRead val = Pool.Get<NetRead>();
+			val.Init(load.msg.baseEntity.syncVars.AsSpan());
+			ReadAutoSaveSyncVars(val);
+			Pool.Free<NetRead>(ref val);
+		}
+		return true;
+	}
+
+	protected override void ResetSyncVars()
+	{
+		//IL_0013: Unknown result type (might be due to invalid IL or missing references)
+		base.ResetSyncVars();
+		__sync_FrameText = null;
+		__sync_TextColour = default(Color);
+	}
+
+	protected override bool ShouldInvalidateCache(byte id)
+	{
+		return id switch
+		{
+			1 => true, 
+			2 => true, 
+			_ => base.ShouldInvalidateCache(id), 
+		};
+	}
+}
+
+
+using System;
+using ConVar;
+using Facepunch;
+using Network;
+using Oxide.Core;
+using ProtoBuf;
+using UnityEngine;
+using UnityEngine.Assertions;
+
+public class PagerEntity : BaseEntity, IRFObject
+{
+	public static Flags Flag_Silent = Flags.Reserved1;
+
+	private int frequency = 55;
+
+	public float beepRepeat = 2f;
+
+	public GameObjectRef pagerEffect;
+
+	public GameObjectRef silentEffect;
+
+	private float nextChangeTime;
+
+	public override bool OnRpcMessage(BasePlayer player, uint rpc, Message msg)
+	{
+		TimeWarning val = TimeWarning.New("PagerEntity.OnRpcMessage", 0);
+		try
+		{
+			if (rpc == 2778616053u && (Object)(object)player != (Object)null)
+			{
+				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
+				if (Global.developer > 2)
+				{
+					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - ServerSetFrequency"));
+				}
+				TimeWarning val2 = TimeWarning.New("ServerSetFrequency", 0);
+				try
+				{
+					TimeWarning val3 = TimeWarning.New("Conditions", 0);
+					try
+					{
+						if (!RPC_Server.IsVisible.Test(2778616053u, "ServerSetFrequency", this, player, 3f))
+						{
+							return true;
+						}
+					}
+					finally
+					{
+						((IDisposable)val3)?.Dispose();
+					}
+					try
+					{
+						val3 = TimeWarning.New("Call", 0);
+						try
+						{
+							RPCMessage rPCMessage = default(RPCMessage);
+							rPCMessage.connection = msg.connection;
+							rPCMessage.player = player;
+							rPCMessage.read = msg.read;
+							RPCMessage msg2 = rPCMessage;
+							ServerSetFrequency(msg2);
+						}
+						finally
+						{
+							((IDisposable)val3)?.Dispose();
+						}
+					}
+					catch (Exception ex)
+					{
+						Debug.LogException(ex);
+						player.Kick("RPC Error in ServerSetFrequency");
+					}
+				}
+				finally
+				{
+					((IDisposable)val2)?.Dispose();
+				}
+				return true;
+			}
+		}
+		finally
+		{
+			((IDisposable)val)?.Dispose();
+		}
+		return base.OnRpcMessage(player, rpc, msg);
+	}
+
+	public int GetFrequency()
+	{
+		return frequency;
+	}
+
+	public override void SwitchParent(BaseEntity ent)
+	{
+		SetParent(ent, worldPositionStays: false, sendImmediate: true);
+	}
+
+	public override void ServerInit()
+	{
+		base.ServerInit();
+		RFManager.AddListener(frequency, this);
+	}
+
+	internal override void DoServerDestroy()
+	{
+		RFManager.RemoveListener(frequency, this);
+		base.DoServerDestroy();
+	}
+
+	public Vector3 GetPosition()
+	{
+		//IL_0006: Unknown result type (might be due to invalid IL or missing references)
+		return ((Component)this).transform.position;
+	}
+
+	public float GetMaxRange()
+	{
+		return float.PositiveInfinity;
+	}
+
+	public void RFSignalUpdate(bool on)
+	{
+		if (!base.IsDestroyed)
+		{
+			bool flag = IsOn();
+			if (on != flag)
+			{
+				SetFlag(Flags.On, on);
+				SendNetworkUpdate();
+			}
+		}
+	}
+
+	public void SetSilentMode(bool wantsSilent)
+	{
+		SetFlag(Flag_Silent, wantsSilent);
+	}
+
+	public void SetOff()
+	{
+		SetFlag(Flags.On, b: false);
+	}
+
+	public void ChangeFrequency(int newFreq)
+	{
+		RFManager.ChangeFrequency(frequency, newFreq, this, isListener: true);
+		frequency = newFreq;
+	}
+
+	[RPC_Server.IsVisible(3f)]
+	[RPC_Server]
+	public void ServerSetFrequency(RPCMessage msg)
+	{
+		if (!((Object)(object)msg.player == (Object)null) && msg.player.CanBuild() && !(Time.time < nextChangeTime))
+		{
+			nextChangeTime = Time.time + 2f;
+			int num = msg.read.Int32();
+			if (Interface.CallHook("OnRfFrequencyChange", (object)this, (object)num, (object)msg.player) == null)
+			{
+				RFManager.ChangeFrequency(frequency, num, this, isListener: true);
+				frequency = num;
+				SendNetworkUpdateImmediate();
+				Interface.CallHook("OnRfFrequencyChanged", (object)this, (object)num, (object)msg.player);
+			}
+		}
+	}
+
+	public override void Save(SaveInfo info)
+	{
+		base.Save(info);
+		info.msg.ioEntity = Pool.Get<IOEntity>();
+		info.msg.ioEntity.genericInt1 = frequency;
+	}
+
+	internal override void OnParentRemoved()
+	{
+		SetParent(null, worldPositionStays: false, sendImmediate: true);
+	}
+
+	public void OnParentDestroying()
+	{
+		if (base.isServer)
+		{
+			((Component)this).transform.parent = null;
+		}
+	}
+
+	public override void Load(LoadInfo info)
+	{
+		base.Load(info);
+		if (info.msg.ioEntity != null)
+		{
+			frequency = info.msg.ioEntity.genericInt1;
+		}
+		if (base.isServer && info.fromDisk)
+		{
+			ChangeFrequency(frequency);
+		}
+	}
+}
+
+
+using System;
+using ConVar;
+using Network;
+using Rust;
+using UnityEngine;
+using UnityEngine.Assertions;
+
+public class PaintballGun : BaseProjectile
+{
+	[Header("Paintball Gun")]
+	public Renderer[] worldModelAmmoRenderers;
+
+	private static readonly int shaderProperty_Fill = Shader.PropertyToID("_Fill");
+
+	private static readonly int shaderProperty_Color = Shader.PropertyToID("_Color");
+
+	private static MaterialPropertyBlock ammoRendererBlock;
+
+	private int currentPaintballColor;
+
+	private int paintballColorPreReload;
+
+	public override bool OnRpcMessage(BasePlayer player, uint rpc, Message msg)
+	{
+		TimeWarning val = TimeWarning.New("PaintballGun.OnRpcMessage", 0);
+		try
+		{
+			if (rpc == 3661258788u && (Object)(object)player != (Object)null)
+			{
+				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
+				if (Global.developer > 2)
+				{
+					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - Server_PaintballColorChanged"));
+				}
+				TimeWarning val2 = TimeWarning.New("Server_PaintballColorChanged", 0);
+				try
+				{
+					TimeWarning val3 = TimeWarning.New("Conditions", 0);
+					try
+					{
+						if (!RPC_Server.IsActiveItem.Test(3661258788u, "Server_PaintballColorChanged", this, player))
+						{
+							return true;
+						}
+					}
+					finally
+					{
+						((IDisposable)val3)?.Dispose();
+					}
+					try
+					{
+						val3 = TimeWarning.New("Call", 0);
+						try
+						{
+							RPCMessage rPCMessage = default(RPCMessage);
+							rPCMessage.connection = msg.connection;
+							rPCMessage.player = player;
+							rPCMessage.read = msg.read;
+							RPCMessage msg2 = rPCMessage;
+							Server_PaintballColorChanged(msg2);
+						}
+						finally
+						{
+							((IDisposable)val3)?.Dispose();
+						}
+					}
+					catch (Exception ex)
+					{
+						Debug.LogException(ex);
+						player.Kick("RPC Error in Server_PaintballColorChanged");
+					}
+				}
+				finally
+				{
+					((IDisposable)val2)?.Dispose();
+				}
+				return true;
+			}
+		}
+		finally
+		{
+			((IDisposable)val)?.Dispose();
+		}
+		return base.OnRpcMessage(player, rpc, msg);
+	}
+
+	public override int GetImpactEffectNumberValue(HitInfo hitInfo)
+	{
+		AttackEntity weapon = hitInfo.Weapon;
+		if ((Object)(object)weapon != (Object)null)
+		{
+			Item item = weapon.GetCachedItem();
+			if (item != null && item.instanceData != null)
+			{
+				return item.instanceData.dataInt;
+			}
+		}
+		return base.GetImpactEffectNumberValue(hitInfo);
+	}
+
+	public override DamageType GetDamageTypeForEffect(HitInfo info)
+	{
+		return DamageType.Paintball;
+	}
+
+	public override Effect.Type GetEffectType(HitInfo info)
+	{
+		if (info.HitEntity.IsValid() && info.HitEntity.GetImpactEffect(info).isValid)
+		{
+			return base.GetEffectType(info);
+		}
+		return Effect.Type.PaintballSplat;
+	}
+
+	public override bool ForceSendMagazine(SaveInfo saveInfo)
+	{
+		return true;
+	}
+
+	public override void DidAttackServerside()
+	{
+		SendNetworkUpdate();
+	}
+
+	[RPC_Server]
+	[RPC_Server.IsActiveItem]
+	private void Server_PaintballColorChanged(RPCMessage msg)
+	{
+		if (PaintballColorLookup.instance == null)
+		{
+			Debug.LogError((object)"Failed to retrieve PaintballColorLookup instance");
+			return;
+		}
+		int num = currentPaintballColor;
+		int num2 = msg.read.Int32();
+		if (num != num2)
+		{
+			currentPaintballColor = Mathf.Clamp(num2, 0, PaintballColorLookup.instance.GetColorsCount() - 1);
+			BasePlayer player = msg.player;
+			player.Server_UpdatePaintballColor(currentPaintballColor);
+			if (primaryMagazine.contents > 0)
+			{
+				player.GiveItem(ItemManager.CreateByItemID(primaryMagazine.ammoType.itemid, primaryMagazine.contents, 0uL));
+				SetAmmoCount(0);
+			}
+			SendNetworkUpdateImmediate();
+			ItemManager.DoRemoves();
+			player.inventory.ServerUpdate(0f);
+		}
+	}
+}
+
+
+using System;
+using System.Collections.Generic;
+using System.Diagnostics;
+using ConVar;
+using Facepunch;
+using Network;
+using Oxide.Core;
+using ProtoBuf;
+using Rust;
+using UnityEngine;
+using UnityEngine.Assertions;
+
+public class PaintedItemStorageEntity : BaseEntity, IServerFileReceiver, IUGCBrowserEntity
+{
+	public uint _currentImageCrc;
+
+	private ulong lastEditedBy;
+
+	public uint[] GetContentCRCs
+	{
+		get
+		{
+			if (_currentImageCrc == 0)
+			{
+				return Array.Empty<uint>();
+			}
+			return new uint[1] { _currentImageCrc };
+		}
+	}
+
+	public UGCType ContentType => UGCType.ImageJpg;
+
+	public List<ulong> EditingHistory
+	{
+		get
+		{
+			if (lastEditedBy == 0)
+			{
+				return new List<ulong>();
+			}
+			return new List<ulong> { lastEditedBy };
+		}
+	}
+
+	public BaseNetworkable UgcEntity => this;
+
+	public string ContentString => string.Empty;
+
+	public override bool ShouldTransferAssociatedFiles => true;
+
+	public override bool OnRpcMessage(BasePlayer player, uint rpc, Message msg)
+	{
+		TimeWarning val = TimeWarning.New("PaintedItemStorageEntity.OnRpcMessage", 0);
+		try
+		{
+			if (rpc == 2439017595u && (Object)(object)player != (Object)null)
+			{
+				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
+				if (Global.developer > 2)
+				{
+					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - Server_UpdateImage"));
+				}
+				TimeWarning val2 = TimeWarning.New("Server_UpdateImage", 0);
+				try
+				{
+					TimeWarning val3 = TimeWarning.New("Conditions", 0);
+					try
+					{
+						if (!RPC_Server.CallsPerSecond.Test(2439017595u, "Server_UpdateImage", this, player, 3uL))
+						{
+							return true;
+						}
+					}
+					finally
+					{
+						((IDisposable)val3)?.Dispose();
+					}
+					try
+					{
+						val3 = TimeWarning.New("Call", 0);
+						try
+						{
+							RPCMessage rPCMessage = default(RPCMessage);
+							rPCMessage.connection = msg.connection;
+							rPCMessage.player = player;
+							rPCMessage.read = msg.read;
+							RPCMessage msg2 = rPCMessage;
+							Server_UpdateImage(msg2);
+						}
+						finally
+						{
+							((IDisposable)val3)?.Dispose();
+						}
+					}
+					catch (Exception ex)
+					{
+						Debug.LogException(ex);
+						player.Kick("RPC Error in Server_UpdateImage");
+					}
+				}
+				finally
+				{
+					((IDisposable)val2)?.Dispose();
+				}
+				return true;
+			}
+		}
+		finally
+		{
+			((IDisposable)val)?.Dispose();
+		}
+		return base.OnRpcMessage(player, rpc, msg);
+	}
+
+	public override void Load(LoadInfo info)
+	{
+		base.Load(info);
+		if (info.msg.paintedItem != null)
+		{
+			_currentImageCrc = info.msg.paintedItem.imageCrc;
+			if (base.isServer)
+			{
+				lastEditedBy = info.msg.paintedItem.editedBy;
+			}
+		}
+	}
+
+	public override void Save(SaveInfo info)
+	{
+		base.Save(info);
+		info.msg.paintedItem = Pool.Get<PaintedItem>();
+		info.msg.paintedItem.imageCrc = _currentImageCrc;
+		info.msg.paintedItem.editedBy = lastEditedBy;
+	}
+
+	[RPC_Server]
+	[RPC_Server.CallsPerSecond(3uL)]
+	private void Server_UpdateImage(RPCMessage msg)
+	{
+		//IL_005a: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0065: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00a0: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00e6: Unknown result type (might be due to invalid IL or missing references)
+		//IL_014b: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0132: Unknown result type (might be due to invalid IL or missing references)
+		if ((Object)(object)msg.player == (Object)null || (ulong)msg.player.userID != base.OwnerID)
+		{
+			return;
+		}
+		foreach (Item item2 in msg.player.inventory.containerWear.itemList)
+		{
+			if (item2.instanceData != null && item2.instanceData.subEntity == net.ID)
+			{
+				return;
+			}
+		}
+		Item item = msg.player.inventory.FindBySubEntityID(net.ID);
+		if (item == null || item.isBroken)
+		{
+			return;
+		}
+		byte[] array = msg.read.BytesWithSize(10485760u, false);
+		if (array == null)
+		{
+			if (_currentImageCrc != 0)
+			{
+				FileStorage.server.RemoveExact(_currentImageCrc, FileStorage.Type.png, net.ID, 0u);
+			}
+			_currentImageCrc = 0u;
+		}
+		else
+		{
+			if (!ImageProcessing.IsValidPNG(array, 512, 512))
+			{
+				return;
+			}
+			uint currentImageCrc = _currentImageCrc;
+			if (_currentImageCrc != 0)
+			{
+				FileStorage.server.RemoveExact(_currentImageCrc, FileStorage.Type.png, net.ID, 0u);
+			}
+			_currentImageCrc = FileStorage.server.Store(array, FileStorage.Type.png, net.ID);
+			if (_currentImageCrc != currentImageCrc)
+			{
+				item.LoseCondition(0.25f);
+			}
+			lastEditedBy = msg.player.userID;
+		}
+		Interface.CallHook("OnItemPainted", (object)this, (object)item, (object)msg.player, (object)array);
+		SendNetworkUpdate();
+	}
+
+	internal override void DoServerDestroy()
+	{
+		//IL_0020: Unknown result type (might be due to invalid IL or missing references)
+		base.DoServerDestroy();
+		if (!Application.isQuitting && net != null)
+		{
+			FileStorage.server.RemoveAllByEntity(net.ID);
+		}
+	}
+
+	public void ClearContent()
+	{
+		_currentImageCrc = 0u;
+		SendNetworkUpdate();
+	}
+
+	[Conditional("PAINTED_ITEM_DEBUG")]
+	private void DebugOnlyLog(string str)
+	{
+		Debug.Log((object)str, (Object)(object)this);
+	}
+}
+
+
+using System;
 using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 using ConVar;
@@ -130,7 +1325,7 @@ public class PartyBalloon : BaseCombatEntity
 				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
 				if (Global.developer > 2)
 				{
-					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - LockBalloon "));
+					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - LockBalloon"));
 				}
 				TimeWarning val2 = TimeWarning.New("LockBalloon", 0);
 				try
@@ -181,7 +1376,7 @@ public class PartyBalloon : BaseCombatEntity
 				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
 				if (Global.developer > 2)
 				{
-					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - RPC_ConfigureBalloon "));
+					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - RPC_ConfigureBalloon"));
 				}
 				TimeWarning val2 = TimeWarning.New("RPC_ConfigureBalloon", 0);
 				try
@@ -236,7 +1431,7 @@ public class PartyBalloon : BaseCombatEntity
 				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
 				if (Global.developer > 2)
 				{
-					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - UnLockBalloon "));
+					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - UnLockBalloon"));
 				}
 				TimeWarning val2 = TimeWarning.New("UnLockBalloon", 0);
 				try
@@ -334,8 +1529,8 @@ public class PartyBalloon : BaseCombatEntity
 		TextColour = Color.white;
 	}
 
-	[RPC_Server.CallsPerSecond(2uL)]
 	[RPC_Server]
+	[RPC_Server.CallsPerSecond(2uL)]
 	[RPC_Server.IsVisible(3f)]
 	public void RPC_ConfigureBalloon(RPCMessage msg)
 	{
@@ -370,8 +1565,8 @@ public class PartyBalloon : BaseCombatEntity
 		TextColour = colour;
 	}
 
-	[RPC_Server.MaxDistance(3f)]
 	[RPC_Server]
+	[RPC_Server.MaxDistance(3f)]
 	public void LockBalloon(RPCMessage msg)
 	{
 		if (msg.player.CanInteract() && CanUpdateBalloon(msg.player))
@@ -382,8 +1577,8 @@ public class PartyBalloon : BaseCombatEntity
 		}
 	}
 
-	[RPC_Server.MaxDistance(3f)]
 	[RPC_Server]
+	[RPC_Server.MaxDistance(3f)]
 	public void UnLockBalloon(RPCMessage msg)
 	{
 		if (msg.player.CanInteract() && CanUnlockBalloon(msg.player))
@@ -1577,7 +2772,7 @@ public class PhotoFrame : StorageContainer, ILOD, IImageReceiver, ISignage, IUGC
 				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
 				if (Global.developer > 2)
 				{
-					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - LockSign "));
+					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - LockSign"));
 				}
 				TimeWarning val2 = TimeWarning.New("LockSign", 0);
 				try
@@ -1628,7 +2823,7 @@ public class PhotoFrame : StorageContainer, ILOD, IImageReceiver, ISignage, IUGC
 				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
 				if (Global.developer > 2)
 				{
-					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - UnLockSign "));
+					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - UnLockSign"));
 				}
 				TimeWarning val2 = TimeWarning.New("UnLockSign", 0);
 				try
@@ -1679,7 +2874,7 @@ public class PhotoFrame : StorageContainer, ILOD, IImageReceiver, ISignage, IUGC
 				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
 				if (Global.developer > 2)
 				{
-					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - UpdateSign "));
+					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - UpdateSign"));
 				}
 				TimeWarning val2 = TimeWarning.New("UpdateSign", 0);
 				try
@@ -1955,8 +3150,8 @@ public class PhotoFrame : StorageContainer, ILOD, IImageReceiver, ISignage, IUGC
 		return CanUpdateSign(player);
 	}
 
-	[RPC_Server.MaxDistance(5f)]
 	[RPC_Server.CallsPerSecond(3uL)]
+	[RPC_Server.MaxDistance(5f)]
 	[RPC_Server]
 	public void UpdateSign(RPCMessage msg)
 	{
@@ -2176,7 +3371,7 @@ public class Planner : HeldEntity
 				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
 				if (Global.developer > 2)
 				{
-					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - DoPlace "));
+					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - DoPlace"));
 				}
 				TimeWarning val2 = TimeWarning.New("DoPlace", 0);
 				try
@@ -2227,7 +3422,7 @@ public class Planner : HeldEntity
 				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
 				if (Global.developer > 2)
 				{
-					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - StartDurationPlace "));
+					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - StartDurationPlace"));
 				}
 				TimeWarning val2 = TimeWarning.New("StartDurationPlace", 0);
 				try
@@ -2497,7 +3692,7 @@ public class Planner : HeldEntity
 			ConstructionGrade constructionGrade = construction.grades[msg.setToGrade];
 			if (buildingBlock.currentGrade != constructionGrade)
 			{
-				buildingBlock.ChangeGradeAndSkin(constructionGrade.gradeBase.type, constructionGrade.gradeBase.skin);
+				buildingBlock.ChangeGradeAndSkin(constructionGrade.gradeBase.type, constructionGrade.gradeBase.skin, playEffect: false, updateSkin: true, null);
 			}
 		}
 	}
@@ -3093,7 +4288,7 @@ public class PlanterBox : StorageContainer, ISplashable
 				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
 				if (Global.developer > 2)
 				{
-					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - RPC_RequestSaturationUpdate "));
+					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - RPC_RequestSaturationUpdate"));
 				}
 				TimeWarning val2 = TimeWarning.New("RPC_RequestSaturationUpdate", 0);
 				try
@@ -3767,7 +4962,7 @@ public class PlayerHelicopter : BaseHelicopter, IEngineControllerUser, IEntity, 
 				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
 				if (Global.developer > 2)
 				{
-					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - RPC_OpenFuel "));
+					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - RPC_OpenFuel"));
 				}
 				TimeWarning val2 = TimeWarning.New("RPC_OpenFuel", 0);
 				try
@@ -4328,8 +5523,8 @@ public class PlayerHelicopter : BaseHelicopter, IEngineControllerUser, IEntity, 
 		return IsOn();
 	}
 
-	[RPC_Server]
 	[RPC_Server.IsVisible(6f)]
+	[RPC_Server]
 	public void RPC_OpenFuel(RPCMessage msg)
 	{
 		BasePlayer player = msg.player;
@@ -4583,8 +5778,8 @@ using UnityEngine.Assertions;
 
 public class PlayerHelicopterWithFlares : PlayerHelicopter, ICanFireHelicopterFlares
 {
-	[SerializeField]
 	[Header("Helicopter Flares")]
+	[SerializeField]
 	private GameObjectRef flareStoragePrefab;
 
 	[SerializeField]
@@ -4614,7 +5809,7 @@ public class PlayerHelicopterWithFlares : PlayerHelicopter, ICanFireHelicopterFl
 				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
 				if (Global.developer > 2)
 				{
-					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - RPC_OpenStorage "));
+					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - RPC_OpenStorage"));
 				}
 				TimeWarning val2 = TimeWarning.New("RPC_OpenStorage", 0);
 				try
@@ -4885,7 +6080,7 @@ public class PlayerInventory : EntityComponent<BasePlayer>, IAmmoContainer
 				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
 				if (Global.developer > 2)
 				{
-					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - ItemCmd "));
+					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - ItemCmd"));
 				}
 				TimeWarning val2 = TimeWarning.New("ItemCmd", 0);
 				try
@@ -4893,7 +6088,7 @@ public class PlayerInventory : EntityComponent<BasePlayer>, IAmmoContainer
 					TimeWarning val3 = TimeWarning.New("Conditions", 0);
 					try
 					{
-						if (!BaseEntity.RPC_Server.FromOwner.Test(3482449460u, "ItemCmd", GetBaseEntity(), player, includeMounted: false))
+						if (!BaseEntity.RPC_Server.FromOwner.Test(3482449460u, "ItemCmd", GetBaseEntity(), player))
 						{
 							return true;
 						}
@@ -4936,7 +6131,7 @@ public class PlayerInventory : EntityComponent<BasePlayer>, IAmmoContainer
 				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
 				if (Global.developer > 2)
 				{
-					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - MoveItem "));
+					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - MoveItem"));
 				}
 				TimeWarning val2 = TimeWarning.New("MoveItem", 0);
 				try
@@ -4944,7 +6139,7 @@ public class PlayerInventory : EntityComponent<BasePlayer>, IAmmoContainer
 					TimeWarning val3 = TimeWarning.New("Conditions", 0);
 					try
 					{
-						if (!BaseEntity.RPC_Server.FromOwner.Test(3041092525u, "MoveItem", GetBaseEntity(), player, includeMounted: false))
+						if (!BaseEntity.RPC_Server.FromOwner.Test(3041092525u, "MoveItem", GetBaseEntity(), player))
 						{
 							return true;
 						}
@@ -5257,7 +6452,7 @@ public class PlayerInventory : EntityComponent<BasePlayer>, IAmmoContainer
 		return CanMoveFromResponse.Success();
 	}
 
-	[BaseEntity.RPC_Server.FromOwner(false)]
+	[BaseEntity.RPC_Server.FromOwner]
 	[BaseEntity.RPC_Server]
 	private void ItemCmd(BaseEntity.RPCMessage msg)
 	{
@@ -5382,8 +6577,8 @@ public class PlayerInventory : EntityComponent<BasePlayer>, IAmmoContainer
 		return inheritedDropVelocity + val2 * 4f + Vector3Ex.Range(-0.5f, 0.5f);
 	}
 
+	[BaseEntity.RPC_Server.FromOwner]
 	[BaseEntity.RPC_Server]
-	[BaseEntity.RPC_Server.FromOwner(false)]
 	public void MoveItem(BaseEntity.RPCMessage msg)
 	{
 		//IL_0014: Unknown result type (might be due to invalid IL or missing references)
@@ -5493,7 +6688,7 @@ public class PlayerInventory : EntityComponent<BasePlayer>, IAmmoContainer
 					}
 					if (!GiveItem(item, val2))
 					{
-						msg.player.ShowToast(GameTip.Styles.Error, PlayerInventoryErrors.GiveItemFailedError, true);
+						msg.player.ShowToast(GameTip.Styles.Error, PlayerInventoryErrors.GiveItemFailedError, false);
 					}
 					return;
 				}
@@ -7146,9 +8341,17 @@ public class PlayerMetabolism : BaseMetabolism<BasePlayer>
 	{
 		base.ServerUpdate(ownerEntity, delta);
 		Interface.CallHook("OnPlayerMetabolize", (object)this, (object)ownerEntity, (object)delta);
-		if (owner.IsConnected)
+		TimeWarning val = TimeWarning.New("PlayerMetabolism.ServerUpdate", 0);
+		try
 		{
-			SendChangesToClient();
+			if (owner.IsConnected)
+			{
+				SendChanges();
+			}
+		}
+		finally
+		{
+			((IDisposable)val)?.Dispose();
 		}
 	}
 
@@ -7230,6 +8433,7 @@ public class PlayerMetabolism : BaseMetabolism<BasePlayer>
 		owner.SetPlayerFlag(BasePlayer.PlayerFlags.Workbench1, currentCraftLevel == 1f);
 		owner.SetPlayerFlag(BasePlayer.PlayerFlags.Workbench2, currentCraftLevel == 2f);
 		owner.SetPlayerFlag(BasePlayer.PlayerFlags.Workbench3, currentCraftLevel == 3f);
+		owner.SendActiveWorkbenchIfChanged();
 	}
 
 	protected override void RunMetabolism(BaseCombatEntity ownerEntity, float delta)
@@ -7442,7 +8646,7 @@ public class PlayerMetabolism : BaseMetabolism<BasePlayer>
 		}
 	}
 
-	public void SendChangesToClient()
+	public void SendChanges()
 	{
 		if (!HasChanged())
 		{
@@ -7452,7 +8656,21 @@ public class PlayerMetabolism : BaseMetabolism<BasePlayer>
 		PlayerMetabolism val = Save();
 		try
 		{
-			base.baseEntity.ClientRPC(RpcTarget.PlayerAndSpectators("UpdateMetabolism", base.baseEntity), val);
+			base.baseEntity.ClientRPC(RpcTarget.FromFlags(RpcTarget.RpcTargetFlags.All, "UpdateMetabolism", base.baseEntity), val);
+		}
+		finally
+		{
+			((IDisposable)val)?.Dispose();
+		}
+	}
+
+	public void ForceSendChangesToSpectators()
+	{
+		isDirty = false;
+		PlayerMetabolism val = Save();
+		try
+		{
+			base.baseEntity.ClientRPC(RpcTarget.FromFlags(RpcTarget.RpcTargetFlags.Spectators, "UpdateMetabolism", base.baseEntity), val);
 		}
 		finally
 		{
@@ -7752,7 +8970,7 @@ public class PowerCounter : IOEntity
 				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
 				if (Global.developer > 2)
 				{
-					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - SERVER_SetTarget "));
+					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - SERVER_SetTarget"));
 				}
 				TimeWarning val2 = TimeWarning.New("SERVER_SetTarget", 0);
 				try
@@ -7803,7 +9021,7 @@ public class PowerCounter : IOEntity
 				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
 				if (Global.developer > 2)
 				{
-					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - ToggleDisplayMode "));
+					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - ToggleDisplayMode"));
 				}
 				TimeWarning val2 = TimeWarning.New("ToggleDisplayMode", 0);
 				try
@@ -7907,8 +9125,8 @@ public class PowerCounter : IOEntity
 		}
 	}
 
-	[RPC_Server]
 	[RPC_Server.IsVisible(3f)]
+	[RPC_Server]
 	public void ToggleDisplayMode(RPCMessage msg)
 	{
 		bool flag = msg.read.Bit();
@@ -8089,7 +9307,7 @@ public class PoweredRemoteControlEntity : IOEntity, IRemoteControllable, IAdminU
 				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
 				if (Global.developer > 2)
 				{
-					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - Server_AdminUpdateIdentifier "));
+					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - Server_AdminUpdateIdentifier"));
 				}
 				TimeWarning val2 = TimeWarning.New("Server_AdminUpdateIdentifier", 0);
 				try
@@ -8140,7 +9358,7 @@ public class PoweredRemoteControlEntity : IOEntity, IRemoteControllable, IAdminU
 				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
 				if (Global.developer > 2)
 				{
-					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - SERVER_RequestOpenRCPanel "));
+					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - SERVER_RequestOpenRCPanel"));
 				}
 				TimeWarning val2 = TimeWarning.New("SERVER_RequestOpenRCPanel", 0);
 				try
@@ -8199,7 +9417,7 @@ public class PoweredRemoteControlEntity : IOEntity, IRemoteControllable, IAdminU
 				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
 				if (Global.developer > 2)
 				{
-					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - Server_SetID "));
+					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - Server_SetID"));
 				}
 				TimeWarning val2 = TimeWarning.New("Server_SetID", 0);
 				try
@@ -8355,8 +9573,8 @@ public class PoweredRemoteControlEntity : IOEntity, IRemoteControllable, IAdminU
 		}
 	}
 
-	[RPC_Server]
 	[RPC_Server.MaxDistance(3f)]
+	[RPC_Server]
 	public void Server_SetID(RPCMessage msg)
 	{
 		string oldID = msg.read.String(256, false);
@@ -8384,10 +9602,10 @@ public class PoweredRemoteControlEntity : IOEntity, IRemoteControllable, IAdminU
 		}
 	}
 
-	[RPC_Server]
+	[RPC_Server.CallsPerSecond(3uL)]
 	[RPC_Server.IsVisible(3f)]
 	[RPC_Server.MaxDistance(3f)]
-	[RPC_Server.CallsPerSecond(3uL)]
+	[RPC_Server]
 	public void SERVER_RequestOpenRCPanel(RPCMessage msg)
 	{
 		BasePlayer player = msg.player;
@@ -8508,7 +9726,7 @@ public class PressButton : IOEntity
 				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
 				if (Global.developer > 2)
 				{
-					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - RPC_Press "));
+					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - RPC_Press"));
 				}
 				TimeWarning val2 = TimeWarning.New("RPC_Press", 0);
 				try
@@ -8559,7 +9777,7 @@ public class PressButton : IOEntity
 				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
 				if (Global.developer > 2)
 				{
-					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - RPC_SetColor "));
+					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - RPC_SetColor"));
 				}
 				TimeWarning val2 = TimeWarning.New("RPC_SetColor", 0);
 				try
@@ -8765,7 +9983,7 @@ public class ProceduralLift : BaseEntity
 				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
 				if (Global.developer > 2)
 				{
-					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - RPC_UseLift "));
+					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - RPC_UseLift"));
 				}
 				TimeWarning val2 = TimeWarning.New("RPC_UseLift", 0);
 				try
@@ -8879,12 +10097,17 @@ public class ProceduralLift : BaseEntity
 	private void MoveToFloor(int floor)
 	{
 		floorIndex = Mathf.Clamp(floor, 0, stops.Length - 1);
-		if (base.isServer)
+		if (!base.isServer)
 		{
-			SetFlag(Flags.Busy, b: true);
-			SendNetworkUpdateImmediate();
-			((FacepunchBehaviour)this).CancelInvoke((Action)ResetLift);
+			return;
 		}
+		SetFlag(Flags.Busy, b: true);
+		foreach (BaseEntity child in children)
+		{
+			child.SetFlag(Flags.Busy, b: true);
+		}
+		SendNetworkUpdateImmediate();
+		((FacepunchBehaviour)this).CancelInvoke((Action)ResetLift);
 	}
 
 	private void SnapToFloor(int floor)
@@ -8893,24 +10116,34 @@ public class ProceduralLift : BaseEntity
 		floorIndex = Mathf.Clamp(floor, 0, stops.Length - 1);
 		ProceduralLiftStop proceduralLiftStop = stops[floorIndex];
 		((Component)cabin).transform.position = ((Component)proceduralLiftStop).transform.position;
-		if (base.isServer)
+		if (!base.isServer)
 		{
-			SetFlag(Flags.Busy, b: false);
-			SendNetworkUpdateImmediate();
-			((FacepunchBehaviour)this).CancelInvoke((Action)ResetLift);
+			return;
 		}
+		SetFlag(Flags.Busy, b: false);
+		foreach (BaseEntity child in children)
+		{
+			child.SetFlag(Flags.Busy, b: false);
+		}
+		SendNetworkUpdateImmediate();
+		((FacepunchBehaviour)this).CancelInvoke((Action)ResetLift);
 	}
 
 	private void OnFinishedMoving()
 	{
-		if (base.isServer)
+		if (!base.isServer)
 		{
-			SetFlag(Flags.Busy, b: false);
-			SendNetworkUpdateImmediate();
-			if (floorIndex != 0)
-			{
-				((FacepunchBehaviour)this).Invoke((Action)ResetLift, resetDelay);
-			}
+			return;
+		}
+		SetFlag(Flags.Busy, b: false);
+		foreach (BaseEntity child in children)
+		{
+			child.SetFlag(Flags.Busy, b: false);
+		}
+		SendNetworkUpdateImmediate();
+		if (floorIndex != 0)
+		{
+			((FacepunchBehaviour)this).Invoke((Action)ResetLift, resetDelay);
 		}
 	}
 
@@ -9088,7 +10321,7 @@ public class ProjectileWeaponMod : BaseEntity
 				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
 				if (Global.developer > 2)
 				{
-					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - SetZoomLevel "));
+					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - SetZoomLevel"));
 				}
 				TimeWarning val2 = TimeWarning.New("SetZoomLevel", 0);
 				try
@@ -9096,7 +10329,7 @@ public class ProjectileWeaponMod : BaseEntity
 					TimeWarning val3 = TimeWarning.New("Conditions", 0);
 					try
 					{
-						if (!RPC_Server.FromOwner.Test(3713130066u, "SetZoomLevel", this, player, includeMounted: false))
+						if (!RPC_Server.FromOwner.Test(3713130066u, "SetZoomLevel", this, player))
 						{
 							return true;
 						}
@@ -9157,7 +10390,7 @@ public class ProjectileWeaponMod : BaseEntity
 	}
 
 	[RPC_Server]
-	[RPC_Server.FromOwner(false)]
+	[RPC_Server.FromOwner]
 	public void SetZoomLevel(int zoomLevel)
 	{
 		serverZoomLevel = zoomLevel;
@@ -9434,8 +10667,8 @@ using UnityEngine;
 
 public class Ragdoll : EntityComponent<BaseEntity>, IPrefabPreProcess
 {
-	[Header("Ragdoll")]
 	[Tooltip("If true, ragdoll physics are simulated on the server instead of the client")]
+	[Header("Ragdoll")]
 	public bool simOnServer;
 
 	public float lerpToServerSimTime = 0.5f;
@@ -9463,32 +10696,32 @@ public class Ragdoll : EntityComponent<BaseEntity>, IPrefabPreProcess
 	[SerializeField]
 	private List<Transform> rbTransforms = new List<Transform>();
 
-	[ReadOnly]
 	[SerializeField]
+	[ReadOnly]
 	private List<Joint> joints = new List<Joint>();
 
 	[SerializeField]
 	[ReadOnly]
 	private List<CharacterJoint> characterJoints = new List<CharacterJoint>();
 
-	[SerializeField]
 	[ReadOnly]
+	[SerializeField]
 	private List<ConfigurableJoint> configurableJoints = new List<ConfigurableJoint>();
 
-	[SerializeField]
 	[ReadOnly]
+	[SerializeField]
 	private List<Collider> colliders = new List<Collider>();
 
-	[SerializeField]
 	[ReadOnly]
+	[SerializeField]
 	private int[] boneIndex;
 
 	[ReadOnly]
 	[SerializeField]
 	private Vector3[] genericBonePos;
 
-	[SerializeField]
 	[ReadOnly]
+	[SerializeField]
 	private Quaternion[] genericBoneRot;
 
 	[SerializeField]
@@ -9964,7 +11197,7 @@ public class ReactiveTarget : Signage
 				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
 				if (Global.developer > 2)
 				{
-					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - RPC_Lower "));
+					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - RPC_Lower"));
 				}
 				TimeWarning val2 = TimeWarning.New("RPC_Lower", 0);
 				try
@@ -10000,7 +11233,7 @@ public class ReactiveTarget : Signage
 				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
 				if (Global.developer > 2)
 				{
-					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - RPC_Reset "));
+					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - RPC_Reset"));
 				}
 				TimeWarning val2 = TimeWarning.New("RPC_Reset", 0);
 				try
@@ -10287,7 +11520,7 @@ public class ReclaimTerminal : StorageContainer
 				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
 				if (Global.developer > 2)
 				{
-					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - RPC_ReloadLoot "));
+					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - RPC_ReloadLoot"));
 				}
 				TimeWarning val2 = TimeWarning.New("RPC_ReloadLoot", 0);
 				try
@@ -10352,8 +11585,8 @@ public class ReclaimTerminal : StorageContainer
 	}
 
 	[RPC_Server.CallsPerSecond(1uL)]
-	[RPC_Server]
 	[RPC_Server.MaxDistance(3f)]
+	[RPC_Server]
 	public void RPC_ReloadLoot(RPCMessage msg)
 	{
 		BasePlayer player = msg.player;
@@ -10487,7 +11720,7 @@ public class RecorderTool : ThrownWeapon, ICassettePlayer
 				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
 				if (Global.developer > 2)
 				{
-					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - OnCassetteRecordingEnded "));
+					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - OnCassetteRecordingEnded"));
 				}
 				TimeWarning val2 = TimeWarning.New("OnCassetteRecordingEnded", 0);
 				try
@@ -10499,7 +11732,7 @@ public class RecorderTool : ThrownWeapon, ICassettePlayer
 						{
 							return true;
 						}
-						if (!RPC_Server.FromOwner.Test(4278517885u, "OnCassetteRecordingEnded", this, player, includeMounted: false))
+						if (!RPC_Server.FromOwner.Test(4278517885u, "OnCassetteRecordingEnded", this, player))
 						{
 							return true;
 						}
@@ -10542,7 +11775,7 @@ public class RecorderTool : ThrownWeapon, ICassettePlayer
 				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
 				if (Global.developer > 2)
 				{
-					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - Server_TogglePlaying "));
+					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - Server_TogglePlaying"));
 				}
 				TimeWarning val2 = TimeWarning.New("Server_TogglePlaying", 0);
 				try
@@ -10554,7 +11787,7 @@ public class RecorderTool : ThrownWeapon, ICassettePlayer
 						{
 							return true;
 						}
-						if (!RPC_Server.FromOwner.Test(3075830603u, "Server_TogglePlaying", this, player, includeMounted: false))
+						if (!RPC_Server.FromOwner.Test(3075830603u, "Server_TogglePlaying", this, player))
 						{
 							return true;
 						}
@@ -10605,9 +11838,9 @@ public class RecorderTool : ThrownWeapon, ICassettePlayer
 		return (Object)(object)cachedCassette != (Object)null;
 	}
 
-	[RPC_Server.CallsPerSecond(2uL)]
 	[RPC_Server]
-	[RPC_Server.FromOwner(false)]
+	[RPC_Server.CallsPerSecond(2uL)]
+	[RPC_Server.FromOwner]
 	public void Server_TogglePlaying(RPCMessage msg)
 	{
 		bool b = ((Stream)(object)msg.read).ReadByte() == 1;
@@ -10644,9 +11877,9 @@ public class RecorderTool : ThrownWeapon, ICassettePlayer
 		}
 	}
 
-	[RPC_Server]
-	[RPC_Server.FromOwner(false)]
 	[RPC_Server.CallsPerSecond(3uL)]
+	[RPC_Server.FromOwner]
+	[RPC_Server]
 	public void OnCassetteRecordingEnded(RPCMessage rpc)
 	{
 		if (GetItem() != null)
@@ -10712,7 +11945,7 @@ public class Recycler : StorageContainer
 				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
 				if (Global.developer > 2)
 				{
-					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - SVSwitch "));
+					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - SVSwitch"));
 				}
 				TimeWarning val2 = TimeWarning.New("SVSwitch", 0);
 				try
@@ -10790,7 +12023,17 @@ public class Recycler : StorageContainer
 		base.ServerInit();
 		ItemContainer itemContainer = base.inventory;
 		itemContainer.canAcceptItem = (Func<Item, int, bool>)Delegate.Combine(itemContainer.canAcceptItem, new Func<Item, int, bool>(RecyclerItemFilter));
+		ItemContainer itemContainer2 = base.inventory;
+		itemContainer2.onItemAddedRemoved = (Action<Item, bool>)Delegate.Combine(itemContainer2.onItemAddedRemoved, new Action<Item, bool>(OnItemAddedRemoved));
 		UpdateInSafeZone();
+	}
+
+	private void OnItemAddedRemoved(Item item, bool added)
+	{
+		if (added && IsOn() && (Object)(object)base.LastLootedByPlayer != (Object)null)
+		{
+			item.CollectedForCrafting(base.LastLootedByPlayer);
+		}
 	}
 
 	public bool RecyclerItemFilter(Item item, int targetSlot)
@@ -10819,8 +12062,8 @@ public class Recycler : StorageContainer
 		return true;
 	}
 
-	[RPC_Server]
 	[RPC_Server.MaxDistance(3f)]
+	[RPC_Server]
 	private void SVSwitch(RPCMessage msg)
 	{
 		bool flag = msg.read.Bit();
@@ -11625,7 +12868,7 @@ public class RelationshipManager : BaseEntity
 				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
 				if (Global.developer > 2)
 				{
-					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - SERVER_ChangeRelationship "));
+					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - SERVER_ChangeRelationship"));
 				}
 				TimeWarning val2 = TimeWarning.New("SERVER_ChangeRelationship", 0);
 				try
@@ -11676,7 +12919,7 @@ public class RelationshipManager : BaseEntity
 				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
 				if (Global.developer > 2)
 				{
-					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - SERVER_ReceiveMugshot "));
+					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - SERVER_ReceiveMugshot"));
 				}
 				TimeWarning val2 = TimeWarning.New("SERVER_ReceiveMugshot", 0);
 				try
@@ -11727,7 +12970,7 @@ public class RelationshipManager : BaseEntity
 				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
 				if (Global.developer > 2)
 				{
-					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - SERVER_SendFreshContacts "));
+					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - SERVER_SendFreshContacts"));
 				}
 				TimeWarning val2 = TimeWarning.New("SERVER_SendFreshContacts", 0);
 				try
@@ -11778,7 +13021,7 @@ public class RelationshipManager : BaseEntity
 				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
 				if (Global.developer > 2)
 				{
-					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - SERVER_UpdatePlayerNote "));
+					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - SERVER_UpdatePlayerNote"));
 				}
 				TimeWarning val2 = TimeWarning.New("SERVER_UpdatePlayerNote", 0);
 				try
@@ -11829,7 +13072,7 @@ public class RelationshipManager : BaseEntity
 				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
 				if (Global.developer > 2)
 				{
-					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - TryCreateTeam "));
+					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - TryCreateTeam"));
 				}
 				TimeWarning val2 = TimeWarning.New("TryCreateTeam", 0);
 				try
@@ -12004,13 +13247,13 @@ public class RelationshipManager : BaseEntity
 		//IL_001e: Unknown result type (might be due to invalid IL or missing references)
 		//IL_0094: Unknown result type (might be due to invalid IL or missing references)
 		//IL_009f: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00ef: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00f4: Unknown result type (might be due to invalid IL or missing references)
 		PlayerRelationships playerRelationships = GetRelationships(player.userID);
 		List<BasePlayer> list = Pool.Get<List<BasePlayer>>();
 		BaseNetworkable.GetCloseConnections(((Component)player).transform.position, GetAcquaintanceMaxDist(), list);
 		foreach (BasePlayer item in list)
 		{
-			if ((Object)(object)item == (Object)(object)player || item.isClient || !item.IsAlive() || item.IsSleeping() || item.limitNetworking)
+			if ((Object)(object)item == (Object)(object)player || !item.IsAlive() || item.IsSleeping() || item.isInvisible || item.limitNetworking)
 			{
 				continue;
 			}
@@ -12020,7 +13263,20 @@ public class RelationshipManager : BaseEntity
 				continue;
 			}
 			relations.lastSeenTime = Time.realtimeSinceStartup;
-			if ((relations.type == RelationshipType.NONE || relations.type == RelationshipType.Acquaintance) && ((BasePlayer.allowRelationshipServerOcclusion && player.SupportsServerOcclusion() && player.OcclusionLineOfSight(item)) || player.IsPlayerVisibleToUs(item, Vector3.zero, 1218519041)))
+			if (relations.type != 0 && relations.type != RelationshipType.Acquaintance)
+			{
+				continue;
+			}
+			bool flag = false;
+			if (BasePlayer.allowRelationshipServerOcclusion && player.SupportsServerOcclusion())
+			{
+				flag = player.OcclusionGetCachedVisibility(item);
+			}
+			if (flag)
+			{
+				flag = player.IsPlayerVisibleToUs(item, Vector3.zero, 1218519041);
+			}
+			if (flag)
 			{
 				int num = Mathf.CeilToInt(deltaSeconds);
 				if (player.InSafeZone() || item.InSafeZone())
@@ -12110,16 +13366,17 @@ public class RelationshipManager : BaseEntity
 
 	public void SetRelationship(BasePlayer player, BasePlayer otherPlayer, RelationshipType type, int weight = 1, bool sendImmediate = false)
 	{
-		//IL_0125: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0130: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0135: Unknown result type (might be due to invalid IL or missing references)
-		//IL_013a: Unknown result type (might be due to invalid IL or missing references)
-		//IL_013e: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0143: Unknown result type (might be due to invalid IL or missing references)
-		//IL_014b: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0150: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0169: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0174: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0117: Unknown result type (might be due to invalid IL or missing references)
+		//IL_013f: Unknown result type (might be due to invalid IL or missing references)
+		//IL_014a: Unknown result type (might be due to invalid IL or missing references)
+		//IL_014f: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0154: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0158: Unknown result type (might be due to invalid IL or missing references)
+		//IL_015d: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0165: Unknown result type (might be due to invalid IL or missing references)
+		//IL_016a: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0183: Unknown result type (might be due to invalid IL or missing references)
+		//IL_018e: Unknown result type (might be due to invalid IL or missing references)
 		if (!contacts)
 		{
 			return;
@@ -12149,15 +13406,19 @@ public class RelationshipManager : BaseEntity
 		if (flag || relations.mugshotCrc == 0 || num3 >= mugshotUpdateInterval)
 		{
 			bool flag2 = otherPlayer.IsAlive();
-			bool num4 = player.SecondsSinceAttacked > 10f && !player.IsAiming;
-			float num5 = 100f;
-			if (num4)
+			bool flag3 = player.SecondsSinceAttacked > 10f && !player.IsAiming;
+			if (!player.IsPlayerVisibleToUs(otherPlayer, Vector3.zero, 1218519041))
+			{
+				flag3 = false;
+			}
+			float num4 = 100f;
+			if (flag3)
 			{
 				Vector3 val = otherPlayer.eyes.position - player.eyes.position;
 				Vector3 normalized = ((Vector3)(ref val)).normalized;
-				bool flag3 = Vector3.Dot(player.eyes.HeadForward(), normalized) >= 0.6f;
-				float num6 = Vector3Ex.Distance2D(((Component)player).transform.position, ((Component)otherPlayer).transform.position);
-				if (flag2 && num6 < num5 && flag3)
+				bool flag4 = Vector3.Dot(player.eyes.HeadForward(), normalized) >= 0.6f;
+				float num5 = Vector3Ex.Distance2D(((Component)player).transform.position, ((Component)otherPlayer).transform.position);
+				if (flag2 && num5 < num4 && flag4)
 				{
 					ClientRPC(RpcTarget.Player("CLIENT_DoMugshot", player), num2);
 					relations.lastMugshotTime = Time.realtimeSinceStartup;
@@ -12282,8 +13543,8 @@ public class RelationshipManager : BaseEntity
 		return playerRelationships;
 	}
 
-	[RPC_Server.CallsPerSecond(1uL)]
 	[RPC_Server]
+	[RPC_Server.CallsPerSecond(1uL)]
 	public void SERVER_SendFreshContacts(RPCMessage msg)
 	{
 		BasePlayer player = msg.player;
@@ -12323,8 +13584,8 @@ public class RelationshipManager : BaseEntity
 		}
 	}
 
-	[RPC_Server.CallsPerSecond(10uL)]
 	[RPC_Server]
+	[RPC_Server.CallsPerSecond(10uL)]
 	public void SERVER_UpdatePlayerNote(RPCMessage msg)
 	{
 		EncryptedValue<ulong> userID = msg.player.userID;
@@ -12432,7 +13693,7 @@ public class RelationshipManager : BaseEntity
 			}
 			Database = null;
 			Database = new RelationshipManagerDB();
-			((Database)Database).Open($"{ConVar.Server.rootFolder}/relationship.{283}.db", true);
+			((Database)Database).Open($"{ConVar.Server.rootFolder}/relationship.{284}.db", true);
 			Database.Initialize();
 		}
 		catch (Exception ex)
@@ -12793,7 +14054,7 @@ public class RelationshipManager : BaseEntity
 		if (Object.op_Implicit((Object)(object)basePlayer2) && (Object)(object)basePlayer2 != (Object)(object)basePlayer && !basePlayer2.IsNpc && basePlayer2.currentTeam == 0L)
 		{
 			float num = 7f;
-			if (!(Vector3.Distance(((Component)basePlayer2).transform.position, ((Component)basePlayer).transform.position) > num) && Interface.CallHook("IOnTeamInvite", (object)basePlayer, (object)basePlayer2) == null && Interface.CallHook("OnTeamMemberInvite", (object)playerTeam, (object)basePlayer, (object)basePlayer2.userID.Get(), (object)false) == null)
+			if (!(Vector3.Distance(((Component)basePlayer2).transform.position, ((Component)basePlayer).transform.position) > num) && Interface.CallHook("OnTeamMemberInvite", (object)playerTeam, (object)basePlayer, (object)basePlayer2.userID.Get(), (object)false) == null)
 			{
 				playerTeam.SendInvite(basePlayer2);
 			}
@@ -12911,18 +14172,34 @@ public class RelationshipManager : BaseEntity
 		{
 			if (basePlayer.Team == null)
 			{
-				arg.ReplyWith("You must be in a team if you are going to ommit the team argument");
-				return;
+				PlayerTeam playerTeam = ServerInstance.CreateTeam();
+				playerTeam.teamLeader = basePlayer.userID;
+				playerTeam.AddPlayer(basePlayer);
+				if ((ulong)basePlayer.userID == uInt)
+				{
+					arg.ReplyWith("Created a new team");
+					return;
+				}
 			}
 			num = basePlayer.Team.teamID;
 		}
-		PlayerTeam playerTeam = ServerInstance.FindTeam(num);
-		if (playerTeam == null)
+		PlayerTeam playerTeam2 = ServerInstance.FindTeam(num);
+		if (playerTeam2 == null)
 		{
 			arg.ReplyWith($"No team with ID {num} exists");
 			return;
 		}
-		playerTeam.AddPlayer(uInt);
+		PlayerTeam playerTeam3 = ServerInstance.FindPlayersTeam(uInt);
+		if (playerTeam3 != null)
+		{
+			if (playerTeam3.teamID == playerTeam2.teamID)
+			{
+				arg.ReplyWith($"{uInt} is already in team {num}");
+				return;
+			}
+			playerTeam3.RemovePlayer(uInt);
+		}
+		playerTeam2.AddPlayer(uInt);
 		arg.ReplyWith($"Added {uInt} to team {num}");
 	}
 
@@ -13514,7 +14791,7 @@ public class RemoteControlEntity : BaseCombatEntity, IRemoteControllable, IAdmin
 				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
 				if (Global.developer > 2)
 				{
-					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - Server_AdminUpdateIdentifier "));
+					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - Server_AdminUpdateIdentifier"));
 				}
 				TimeWarning val2 = TimeWarning.New("Server_AdminUpdateIdentifier", 0);
 				try
@@ -13565,7 +14842,7 @@ public class RemoteControlEntity : BaseCombatEntity, IRemoteControllable, IAdmin
 				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
 				if (Global.developer > 2)
 				{
-					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - SERVER_RequestOpenRCPanel "));
+					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - SERVER_RequestOpenRCPanel"));
 				}
 				TimeWarning val2 = TimeWarning.New("SERVER_RequestOpenRCPanel", 0);
 				try
@@ -13624,7 +14901,7 @@ public class RemoteControlEntity : BaseCombatEntity, IRemoteControllable, IAdmin
 				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
 				if (Global.developer > 2)
 				{
-					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - Server_SetID "));
+					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - Server_SetID"));
 				}
 				TimeWarning val2 = TimeWarning.New("Server_SetID", 0);
 				try
@@ -13773,8 +15050,8 @@ public class RemoteControlEntity : BaseCombatEntity, IRemoteControllable, IAdmin
 		return true;
 	}
 
-	[RPC_Server.MaxDistance(3f)]
 	[RPC_Server]
+	[RPC_Server.MaxDistance(3f)]
 	public void Server_SetID(RPCMessage msg)
 	{
 		string oldID = msg.read.String(256, false);
@@ -13919,7 +15196,7 @@ public class RepairBench : StorageContainer
 				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
 				if (Global.developer > 2)
 				{
-					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - ChangeSkin "));
+					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - ChangeSkin"));
 				}
 				TimeWarning val2 = TimeWarning.New("ChangeSkin", 0);
 				try
@@ -13970,7 +15247,7 @@ public class RepairBench : StorageContainer
 				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
 				if (Global.developer > 2)
 				{
-					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - RepairItem "));
+					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - RepairItem"));
 				}
 				TimeWarning val2 = TimeWarning.New("RepairItem", 0);
 				try
@@ -14103,8 +15380,8 @@ public class RepairBench : StorageContainer
 		}
 	}
 
-	[RPC_Server]
 	[RPC_Server.IsVisible(3f)]
+	[RPC_Server]
 	public void ChangeSkin(RPCMessage msg)
 	{
 		//IL_0043: Unknown result type (might be due to invalid IL or missing references)
@@ -14299,8 +15576,8 @@ public class RepairBench : StorageContainer
 		}
 	}
 
-	[RPC_Server]
 	[RPC_Server.IsVisible(3f)]
+	[RPC_Server]
 	public void RepairItem(RPCMessage msg)
 	{
 		Item slot = base.inventory.GetSlot(0);
@@ -14455,7 +15732,7 @@ public class ResearchTable : StorageContainer
 				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
 				if (Global.developer > 2)
 				{
-					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - DoResearch "));
+					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - DoResearch"));
 				}
 				TimeWarning val2 = TimeWarning.New("DoResearch", 0);
 				try
@@ -14697,8 +15974,8 @@ public class ResearchTable : StorageContainer
 		base.PlayerStoppedLooting(player);
 	}
 
-	[RPC_Server]
 	[RPC_Server.IsVisible(3f)]
+	[RPC_Server]
 	public void DoResearch(RPCMessage msg)
 	{
 		//IL_00d6: Unknown result type (might be due to invalid IL or missing references)
@@ -14855,7 +16132,7 @@ public class ResourceContainer : EntityComponent<BaseEntity>
 				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
 				if (Global.developer > 2)
 				{
-					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - StartLootingContainer "));
+					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - StartLootingContainer"));
 				}
 				TimeWarning val2 = TimeWarning.New("StartLootingContainer", 0);
 				try
@@ -14933,13 +16210,13 @@ using UnityEngine.Assertions;
 
 public class RFBroadcaster : IOEntity, IRFObject
 {
+	public bool playerUsable = true;
+
 	public int frequency;
 
 	public GameObjectRef frequencyPanelPrefab;
 
 	public const Flags Flag_Broadcasting = Flags.Reserved3;
-
-	public bool playerUsable = true;
 
 	private float nextChangeTime;
 
@@ -14953,7 +16230,7 @@ public class RFBroadcaster : IOEntity, IRFObject
 				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
 				if (Global.developer > 2)
 				{
-					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - SERVER_RequestOpenPanel "));
+					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - SERVER_RequestOpenPanel"));
 				}
 				TimeWarning val2 = TimeWarning.New("SERVER_RequestOpenPanel", 0);
 				try
@@ -15012,7 +16289,7 @@ public class RFBroadcaster : IOEntity, IRFObject
 				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
 				if (Global.developer > 2)
 				{
-					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - ServerSetFrequency "));
+					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - ServerSetFrequency"));
 				}
 				TimeWarning val2 = TimeWarning.New("ServerSetFrequency", 0);
 				try
@@ -15070,14 +16347,18 @@ public class RFBroadcaster : IOEntity, IRFObject
 		return base.OnRpcMessage(player, rpc, msg);
 	}
 
+	private bool CanChangeFrequency(BasePlayer player)
+	{
+		if (playerUsable && (Object)(object)player != (Object)null)
+		{
+			return player.CanBuild();
+		}
+		return false;
+	}
+
 	public int GetFrequency()
 	{
 		return frequency;
-	}
-
-	public override bool WantsPower(int inputIndex)
-	{
-		return true;
 	}
 
 	public Vector3 GetPosition()
@@ -15095,32 +16376,40 @@ public class RFBroadcaster : IOEntity, IRFObject
 	{
 	}
 
-	[RPC_Server.IsVisible(3f)]
+	public override bool WantsPower(int inputIndex)
+	{
+		return true;
+	}
+
 	[RPC_Server]
+	[RPC_Server.IsVisible(3f)]
 	[RPC_Server.CallsPerSecond(3uL)]
 	public void ServerSetFrequency(RPCMessage msg)
 	{
-		if (!CanChangeFrequency(msg.player) || Time.time < nextChangeTime)
+		if (CanChangeFrequency(msg.player) && !(Time.time < nextChangeTime))
 		{
-			return;
+			nextChangeTime = Time.time + 2f;
+			int num = RFManager.ClampFrequency(msg.read.Int32());
+			if (RFManager.IsReserved(num))
+			{
+				RFManager.ReserveErrorPrint(msg.player);
+			}
+			else if (Interface.CallHook("OnRfFrequencyChange", (object)this, (object)num, (object)msg.player) == null)
+			{
+				SetFrequency(num);
+				Hurt(MaxHealth() * 0.01f, DamageType.Decay, this);
+				Interface.CallHook("OnRfFrequencyChanged", (object)this, (object)num, (object)msg.player);
+			}
 		}
-		nextChangeTime = Time.time + 2f;
-		int freq = msg.read.Int32();
+	}
+
+	public void SetFrequency(int freq)
+	{
 		freq = RFManager.ClampFrequency(freq);
-		if (RFManager.IsReserved(freq))
-		{
-			RFManager.ReserveErrorPrint(msg.player);
-			return;
-		}
 		RFManager.ChangeFrequency(frequency, freq, this, isListener: false, IsPowered());
-		if (Interface.CallHook("OnRfFrequencyChange", (object)this, (object)freq, (object)msg.player) == null)
-		{
-			frequency = freq;
-			MarkDirty();
-			SendNetworkUpdate();
-			Hurt(MaxHealth() * 0.01f, DamageType.Decay, this);
-			Interface.CallHook("OnRfFrequencyChanged", (object)this, (object)freq, (object)msg.player);
-		}
+		frequency = freq;
+		MarkDirty();
+		SendNetworkUpdate();
 	}
 
 	public override void Save(SaveInfo info)
@@ -15181,15 +16470,6 @@ public class RFBroadcaster : IOEntity, IRFObject
 			ClientRPC(RpcTarget.Player("CLIENT_OpenPanel", player), frequency);
 		}
 	}
-
-	private bool CanChangeFrequency(BasePlayer player)
-	{
-		if (playerUsable && (Object)(object)player != (Object)null)
-		{
-			return player.CanBuild();
-		}
-		return false;
-	}
 }
 
 
@@ -15216,7 +16496,7 @@ public class RFReceiver : IOEntity, IRFObject
 				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
 				if (Global.developer > 2)
 				{
-					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - SERVER_RequestOpenPanel "));
+					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - SERVER_RequestOpenPanel"));
 				}
 				TimeWarning val2 = TimeWarning.New("SERVER_RequestOpenPanel", 0);
 				try
@@ -15271,7 +16551,7 @@ public class RFReceiver : IOEntity, IRFObject
 				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
 				if (Global.developer > 2)
 				{
-					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - ServerSetFrequency "));
+					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - ServerSetFrequency"));
 				}
 				TimeWarning val2 = TimeWarning.New("ServerSetFrequency", 0);
 				try
@@ -15329,28 +16609,18 @@ public class RFReceiver : IOEntity, IRFObject
 		return base.OnRpcMessage(player, rpc, msg);
 	}
 
+	private bool CanChangeFrequency(BasePlayer player)
+	{
+		if ((Object)(object)player != (Object)null)
+		{
+			return player.CanBuild();
+		}
+		return false;
+	}
+
 	public int GetFrequency()
 	{
 		return frequency;
-	}
-
-	public override bool WantsPower(int inputIndex)
-	{
-		return IsOn();
-	}
-
-	public override void ResetIOState()
-	{
-		SetFlag(Flags.On, b: false);
-	}
-
-	public override int GetPassthroughAmount(int outputSlot = 0)
-	{
-		if (!IsOn())
-		{
-			return 0;
-		}
-		return GetCurrentEnergy();
 	}
 
 	public Vector3 GetPosition()
@@ -15364,12 +16634,6 @@ public class RFReceiver : IOEntity, IRFObject
 		return 100000f;
 	}
 
-	internal override void DoServerDestroy()
-	{
-		RFManager.RemoveListener(frequency, this);
-		base.DoServerDestroy();
-	}
-
 	public void RFSignalUpdate(bool on)
 	{
 		if (!base.IsDestroyed && IsOn() != on && !(!IsPowered() && on))
@@ -15378,6 +16642,31 @@ public class RFReceiver : IOEntity, IRFObject
 			SendNetworkUpdate_Flags();
 			MarkDirty();
 		}
+	}
+
+	internal override void DoServerDestroy()
+	{
+		RFManager.RemoveListener(frequency, this);
+		base.DoServerDestroy();
+	}
+
+	public override void ResetIOState()
+	{
+		SetFlag(Flags.On, b: false);
+	}
+
+	public override bool WantsPower(int inputIndex)
+	{
+		return IsOn();
+	}
+
+	public override int GetPassthroughAmount(int outputSlot = 0)
+	{
+		if (!IsOn())
+		{
+			return 0;
+		}
+		return GetCurrentEnergy();
 	}
 
 	public override void UpdateFromInput(int inputAmount, int inputSlot)
@@ -15395,29 +16684,34 @@ public class RFReceiver : IOEntity, IRFObject
 		}
 	}
 
+	[RPC_Server.CallsPerSecond(3uL)]
 	[RPC_Server]
 	[RPC_Server.IsVisible(3f)]
-	[RPC_Server.CallsPerSecond(3uL)]
 	public void ServerSetFrequency(RPCMessage msg)
 	{
 		if (!((Object)(object)msg.player == (Object)null) && msg.player.CanBuild())
 		{
-			int num = msg.read.Int32();
+			int num = RFManager.ClampFrequency(msg.read.Int32());
 			if (Interface.CallHook("OnRfFrequencyChange", (object)this, (object)num, (object)msg.player) == null)
 			{
-				num = RFManager.ClampFrequency(num);
-				RFManager.ChangeFrequency(frequency, num, this, isListener: true);
-				frequency = num;
-				MarkDirty();
-				SendNetworkUpdate();
+				SetFrequency(num);
 				Interface.CallHook("OnRfFrequencyChanged", (object)this, (object)num, (object)msg.player);
 			}
 		}
 	}
 
+	public void SetFrequency(int freq)
+	{
+		freq = RFManager.ClampFrequency(freq);
+		RFManager.ChangeFrequency(frequency, freq, this, isListener: true, IsPowered());
+		frequency = freq;
+		MarkDirty();
+		SendNetworkUpdate();
+	}
+
+	[RPC_Server]
 	[RPC_Server.IsVisible(3f)]
 	[RPC_Server.CallsPerSecond(3uL)]
-	[RPC_Server]
 	public void SERVER_RequestOpenPanel(RPCMessage msg)
 	{
 		BasePlayer player = msg.player;
@@ -15447,15 +16741,6 @@ public class RFReceiver : IOEntity, IRFObject
 				RFSignalUpdate(on: false);
 			}
 		}
-	}
-
-	private bool CanChangeFrequency(BasePlayer player)
-	{
-		if ((Object)(object)player != (Object)null)
-		{
-			return player.CanBuild();
-		}
-		return false;
 	}
 }
 
@@ -15499,7 +16784,7 @@ public class RFTimedExplosive : TimedExplosive, IRFObject
 				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
 				if (Global.developer > 2)
 				{
-					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - Pickup "));
+					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - Pickup"));
 				}
 				TimeWarning val2 = TimeWarning.New("Pickup", 0);
 				try
@@ -15550,7 +16835,7 @@ public class RFTimedExplosive : TimedExplosive, IRFObject
 				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
 				if (Global.developer > 2)
 				{
-					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - PickupTimer "));
+					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - PickupTimer"));
 				}
 				TimeWarning val2 = TimeWarning.New("PickupTimer", 0);
 				try
@@ -15747,8 +17032,8 @@ public class RFTimedExplosive : TimedExplosive, IRFObject
 		}
 	}
 
-	[RPC_Server.IsVisible(3f)]
 	[RPC_Server]
+	[RPC_Server.IsVisible(3f)]
 	public void Pickup(RPCMessage msg)
 	{
 		if (Interface.CallHook("ICanPickupEntity", (object)msg.player, (object)this) != null || !msg.player.CanInteract() || !IsArmed())
@@ -15868,7 +17153,7 @@ public class RHIB : MotorRowboat
 				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
 				if (Global.developer > 2)
 				{
-					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - Server_Release "));
+					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - Server_Release"));
 				}
 				TimeWarning val2 = TimeWarning.New("Server_Release", 0);
 				try
@@ -15922,8 +17207,8 @@ public class RHIB : MotorRowboat
 		return base.OnRpcMessage(player, rpc, msg);
 	}
 
-	[RPC_Server.IsVisible(6f)]
 	[RPC_Server]
+	[RPC_Server.IsVisible(6f)]
 	public void Server_Release(RPCMessage msg)
 	{
 		if (!((Object)(object)GetParentEntity() == (Object)null))
@@ -16137,8 +17422,8 @@ public class RidableHorse : BaseVehicle, IInventoryProvider, IMedicalToolTarget,
 
 	public float equipmentSpeedMod;
 
-	[Header("Horse")]
 	[SerializeField]
+	[Header("Horse")]
 	private Animator animator;
 
 	[SerializeField]
@@ -16198,13 +17483,13 @@ public class RidableHorse : BaseVehicle, IInventoryProvider, IMedicalToolTarget,
 
 	public AnimationCurve slopeAngleSpeedFactor;
 
-	[Header("Collision Damage")]
 	[Space]
+	[Header("Collision Damage")]
 	[SerializeField]
 	private GameObjectRef collisionEffect;
 
-	[SerializeField]
 	[Tooltip("Ignore low magnitude so e.g. Players running into stationary vehicles doesn't trigger damage or FX")]
+	[SerializeField]
 	private float minCollisionDamageForce = 20000f;
 
 	[Tooltip("Cap max magnitude so unusual events can't cause mega damage")]
@@ -16321,8 +17606,8 @@ public class RidableHorse : BaseVehicle, IInventoryProvider, IMedicalToolTarget,
 	[Header("Healing")]
 	public float healingMultiplier = 4f;
 
-	[Min(0f)]
 	[Tooltip("How much stamina to replenish when healing. Value is not final - scaled further if we have a high stamina core.")]
+	[Min(0f)]
 	public float staminaReplenishAmount = 1f;
 
 	public ItemDefinition[] prohibitedMedicalItems = Array.Empty<ItemDefinition>();
@@ -16490,12 +17775,12 @@ public class RidableHorse : BaseVehicle, IInventoryProvider, IMedicalToolTarget,
 
 	private bool isSubmerged;
 
-	[SerializeField]
 	[HideInInspector]
+	[SerializeField]
 	private float baseDrag;
 
-	[SerializeField]
 	[HideInInspector]
+	[SerializeField]
 	private float baseAngularDrag;
 
 	private HorseAvoidanceState currentAvoidanceState;
@@ -16590,7 +17875,7 @@ public class RidableHorse : BaseVehicle, IInventoryProvider, IMedicalToolTarget,
 				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
 				if (Global.developer > 2)
 				{
-					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - SERVER_Claim "));
+					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - SERVER_Claim"));
 				}
 				TimeWarning val2 = TimeWarning.New("SERVER_Claim", 0);
 				try
@@ -16641,7 +17926,7 @@ public class RidableHorse : BaseVehicle, IInventoryProvider, IMedicalToolTarget,
 				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
 				if (Global.developer > 2)
 				{
-					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - SERVER_Lead "));
+					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - SERVER_Lead"));
 				}
 				TimeWarning val2 = TimeWarning.New("SERVER_Lead", 0);
 				try
@@ -16696,7 +17981,7 @@ public class RidableHorse : BaseVehicle, IInventoryProvider, IMedicalToolTarget,
 				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
 				if (Global.developer > 2)
 				{
-					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - SERVER_OpenLoot "));
+					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - SERVER_OpenLoot"));
 				}
 				TimeWarning val2 = TimeWarning.New("SERVER_OpenLoot", 0);
 				try
@@ -16747,7 +18032,7 @@ public class RidableHorse : BaseVehicle, IInventoryProvider, IMedicalToolTarget,
 				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
 				if (Global.developer > 2)
 				{
-					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - SERVER_RequestDetach "));
+					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - SERVER_RequestDetach"));
 				}
 				TimeWarning val2 = TimeWarning.New("SERVER_RequestDetach", 0);
 				try
@@ -16806,7 +18091,7 @@ public class RidableHorse : BaseVehicle, IInventoryProvider, IMedicalToolTarget,
 				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
 				if (Global.developer > 2)
 				{
-					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - SERVER_RequestSaddleSwap "));
+					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - SERVER_RequestSaddleSwap"));
 				}
 				TimeWarning val2 = TimeWarning.New("SERVER_RequestSaddleSwap", 0);
 				try
@@ -16857,7 +18142,7 @@ public class RidableHorse : BaseVehicle, IInventoryProvider, IMedicalToolTarget,
 				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
 				if (Global.developer > 2)
 				{
-					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - SERVER_RequestTow "));
+					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - SERVER_RequestTow"));
 				}
 				TimeWarning val2 = TimeWarning.New("SERVER_RequestTow", 0);
 				try
@@ -17156,8 +18441,8 @@ public class RidableHorse : BaseVehicle, IInventoryProvider, IMedicalToolTarget,
 		SendNetworkUpdate();
 	}
 
-	[RPC_Server.IsVisible(3f)]
 	[RPC_Server]
+	[RPC_Server.IsVisible(3f)]
 	private void SERVER_OpenLoot(RPCMessage rpc)
 	{
 		if (storageInventory == null)
@@ -17182,8 +18467,8 @@ public class RidableHorse : BaseVehicle, IInventoryProvider, IMedicalToolTarget,
 		}
 	}
 
-	[RPC_Server.IsVisible(3f)]
 	[RPC_Server]
+	[RPC_Server.IsVisible(3f)]
 	public void SERVER_RequestSaddleSwap(RPCMessage msg)
 	{
 		BasePlayer player = msg.player;
@@ -17203,8 +18488,8 @@ public class RidableHorse : BaseVehicle, IInventoryProvider, IMedicalToolTarget,
 		}
 	}
 
-	[RPC_Server]
 	[RPC_Server.IsVisible(3f)]
+	[RPC_Server]
 	public void SERVER_Claim(RPCMessage msg)
 	{
 		BasePlayer player = msg.player;
@@ -19556,7 +20841,7 @@ public class RidableHorse : BaseVehicle, IInventoryProvider, IMedicalToolTarget,
 	public override void PlayerMounted(BasePlayer player, BaseMountable seat)
 	{
 		base.PlayerMounted(player, seat);
-		UpdateClients();
+		UpdateClients(force: true);
 		TryLeaveHitch();
 		if (IsLeading)
 		{
@@ -19720,10 +21005,10 @@ public class RidableHorse : BaseVehicle, IInventoryProvider, IMedicalToolTarget,
 
 	private void UpdateClients()
 	{
-		UpdateClients(force: true);
+		UpdateClients(force: false);
 	}
 
-	private void UpdateClients(bool force = false)
+	private void UpdateClients(bool force)
 	{
 		if (force || AnyMounted() || IsLeading)
 		{
@@ -19801,10 +21086,10 @@ public class RidableHorse : BaseVehicle, IInventoryProvider, IMedicalToolTarget,
 		}
 	}
 
-	[RPC_Server.CallsPerSecond(1uL)]
-	[RPC_Server.IsVisible(3f)]
-	[RPC_Server.MaxDistance(3f)]
 	[RPC_Server]
+	[RPC_Server.CallsPerSecond(1uL)]
+	[RPC_Server.MaxDistance(3f)]
+	[RPC_Server.IsVisible(3f)]
 	public void SERVER_RequestDetach(RPCMessage msg)
 	{
 		//IL_0049: Unknown result type (might be due to invalid IL or missing references)
@@ -20082,7 +21367,7 @@ public class RustigeEgg : BaseCombatEntity
 				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
 				if (Global.developer > 2)
 				{
-					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - RPC_Open "));
+					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - RPC_Open"));
 				}
 				TimeWarning val2 = TimeWarning.New("RPC_Open", 0);
 				try
@@ -20133,7 +21418,7 @@ public class RustigeEgg : BaseCombatEntity
 				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
 				if (Global.developer > 2)
 				{
-					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - RPC_Spin "));
+					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - RPC_Spin"));
 				}
 				TimeWarning val2 = TimeWarning.New("RPC_Spin", 0);
 				try
@@ -20346,7 +21631,7 @@ public class Sail : DecayEntity, IBoatBuildingPiece, IBoatPropulsion
 				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
 				if (Global.developer > 2)
 				{
-					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - LowerSail "));
+					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - LowerSail"));
 				}
 				TimeWarning val2 = TimeWarning.New("LowerSail", 0);
 				try
@@ -20401,7 +21686,7 @@ public class Sail : DecayEntity, IBoatBuildingPiece, IBoatPropulsion
 				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
 				if (Global.developer > 2)
 				{
-					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - RaiseSail "));
+					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - RaiseSail"));
 				}
 				TimeWarning val2 = TimeWarning.New("RaiseSail", 0);
 				try
@@ -20456,7 +21741,7 @@ public class Sail : DecayEntity, IBoatBuildingPiece, IBoatPropulsion
 				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
 				if (Global.developer > 2)
 				{
-					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - RotateSail "));
+					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - RotateSail"));
 				}
 				TimeWarning val2 = TimeWarning.New("RotateSail", 0);
 				try
@@ -20760,9 +22045,9 @@ public class Sail : DecayEntity, IBoatBuildingPiece, IBoatPropulsion
 		return DeployVolume.Check(((Component)this).transform.position, ((Component)this).transform.rotation * Quaternion.AngleAxis(180f, Vector3.up), volumes, ~(1 << ((Component)this).gameObject.layer));
 	}
 
+	[RPC_Server]
 	[RPC_Server.CallsPerSecond(5uL)]
 	[RPC_Server.IsVisible(3f)]
-	[RPC_Server]
 	public void LowerSail(RPCMessage msg)
 	{
 		Lower(msg.player);
@@ -20802,8 +22087,8 @@ public class Sail : DecayEntity, IBoatBuildingPiece, IBoatPropulsion
 		ToggleColliders();
 	}
 
-	[RPC_Server.CallsPerSecond(5uL)]
 	[RPC_Server.IsVisible(3f)]
+	[RPC_Server.CallsPerSecond(5uL)]
 	[RPC_Server]
 	public void RaiseSail(RPCMessage msg)
 	{
@@ -20842,9 +22127,9 @@ public class Sail : DecayEntity, IBoatBuildingPiece, IBoatPropulsion
 		OnRaisedOrLowered();
 	}
 
-	[RPC_Server.CallsPerSecond(5uL)]
-	[RPC_Server.IsVisible(3f)]
 	[RPC_Server]
+	[RPC_Server.IsVisible(3f)]
+	[RPC_Server.CallsPerSecond(5uL)]
 	public void RotateSail(RPCMessage msg)
 	{
 		RotateSail(msg.player);
@@ -21045,7 +22330,7 @@ public class SamSite : ContainerIOEntity
 				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
 				if (Global.developer > 2)
 				{
-					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - ToggleDefenderMode "));
+					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - ToggleDefenderMode"));
 				}
 				TimeWarning val2 = TimeWarning.New("ToggleDefenderMode", 0);
 				try
@@ -21622,9 +22907,9 @@ public class SamSite : ContainerIOEntity
 		}
 	}
 
+	[RPC_Server]
 	[RPC_Server.IsVisible(3f)]
 	[RPC_Server.CallsPerSecond(1uL)]
-	[RPC_Server]
 	private void ToggleDefenderMode(RPCMessage msg)
 	{
 		if (staticRespawn)
@@ -22068,7 +23353,7 @@ public class SearchLight : IOEntity
 				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
 				if (Global.developer > 2)
 				{
-					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - RPC_UseLight "));
+					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - RPC_UseLight"));
 				}
 				TimeWarning val2 = TimeWarning.New("RPC_UseLight", 0);
 				try
@@ -22297,7 +23582,7 @@ public class SeismicSensor : IOEntity
 				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
 				if (Global.developer > 2)
 				{
-					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - RPC_SetRange "));
+					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - RPC_SetRange"));
 				}
 				TimeWarning val2 = TimeWarning.New("RPC_SetRange", 0);
 				try
@@ -22395,8 +23680,8 @@ public class SeismicSensor : IOEntity
 		SendNetworkUpdate();
 	}
 
-	[RPC_Server]
 	[RPC_Server.IsVisible(3f)]
+	[RPC_Server]
 	[RPC_Server.CallsPerSecond(5uL)]
 	public void RPC_SetRange(RPCMessage msg)
 	{
@@ -22565,7 +23850,7 @@ public class Shield : HeldEntity
 				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
 				if (Global.developer > 2)
 				{
-					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - ServerToggleBlock "));
+					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - ServerToggleBlock"));
 				}
 				TimeWarning val2 = TimeWarning.New("ServerToggleBlock", 0);
 				try
@@ -22577,7 +23862,7 @@ public class Shield : HeldEntity
 						{
 							return true;
 						}
-						if (!RPC_Server.FromOwner.Test(2238556937u, "ServerToggleBlock", this, player, includeMounted: false))
+						if (!RPC_Server.FromOwner.Test(2238556937u, "ServerToggleBlock", this, player))
 						{
 							return true;
 						}
@@ -22661,9 +23946,9 @@ public class Shield : HeldEntity
 		return ShieldCollider.sharedMaterial.GetName();
 	}
 
+	[RPC_Server.FromOwner]
 	[RPC_Server]
 	[RPC_Server.CallsPerSecond(10uL)]
-	[RPC_Server.FromOwner(false)]
 	private void ServerToggleBlock(RPCMessage msg)
 	{
 		bool flag = msg.read.Bit();
@@ -22941,7 +24226,7 @@ public class ShopFront : StorageContainer
 				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
 				if (Global.developer > 2)
 				{
-					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - AcceptClicked "));
+					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - AcceptClicked"));
 				}
 				TimeWarning val2 = TimeWarning.New("AcceptClicked", 0);
 				try
@@ -22992,7 +24277,7 @@ public class ShopFront : StorageContainer
 				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
 				if (Global.developer > 2)
 				{
-					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - CancelClicked "));
+					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - CancelClicked"));
 				}
 				TimeWarning val2 = TimeWarning.New("CancelClicked", 0);
 				try
@@ -23164,8 +24449,8 @@ public class ShopFront : StorageContainer
 		SendNetworkUpdate();
 	}
 
-	[RPC_Server.IsVisible(3f)]
 	[RPC_Server]
+	[RPC_Server.IsVisible(3f)]
 	public void AcceptClicked(RPCMessage msg)
 	{
 		if (IsTradingPlayer(msg.player) && !((Object)(object)vendorPlayer == (Object)null) && !((Object)(object)customerPlayer == (Object)null) && Interface.CallHook("OnShopAcceptClick", (object)this, (object)msg.player) == null)
@@ -23467,7 +24752,7 @@ public class ShutterFrame : PhotoFrame, IFlagNotify
 				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
 				if (Global.developer > 2)
 				{
-					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - RPC_ToggleShutter "));
+					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - RPC_ToggleShutter"));
 				}
 				TimeWarning val2 = TimeWarning.New("RPC_ToggleShutter", 0);
 				try
@@ -23582,9 +24867,9 @@ public class ShutterFrame : PhotoFrame, IFlagNotify
 		}
 	}
 
-	[RPC_Server]
 	[RPC_Server.CallsPerSecond(2uL)]
 	[RPC_Server.IsVisible(6f)]
+	[RPC_Server]
 	public void RPC_ToggleShutter(RPCMessage msg)
 	{
 		IsShutterOpen = !IsShutterOpen;
@@ -23761,7 +25046,7 @@ public class SiegeTower : BaseSiegeWeapon
 				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
 				if (Global.developer > 2)
 				{
-					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - SV_RequestRaise "));
+					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - SV_RequestRaise"));
 				}
 				TimeWarning val2 = TimeWarning.New("SV_RequestRaise", 0);
 				try
@@ -24291,7 +25576,7 @@ public class Signage : IOEntity, ILOD, ISignage, IUGCBrowserEntity, IEaselPainta
 				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
 				if (Global.developer > 2)
 				{
-					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - LockSign "));
+					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - LockSign"));
 				}
 				TimeWarning val2 = TimeWarning.New("LockSign", 0);
 				try
@@ -24342,7 +25627,7 @@ public class Signage : IOEntity, ILOD, ISignage, IUGCBrowserEntity, IEaselPainta
 				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
 				if (Global.developer > 2)
 				{
-					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - UnLockSign "));
+					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - UnLockSign"));
 				}
 				TimeWarning val2 = TimeWarning.New("UnLockSign", 0);
 				try
@@ -24393,7 +25678,7 @@ public class Signage : IOEntity, ILOD, ISignage, IUGCBrowserEntity, IEaselPainta
 				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
 				if (Global.developer > 2)
 				{
-					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - UpdateSign "));
+					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - UpdateSign"));
 				}
 				TimeWarning val2 = TimeWarning.New("UpdateSign", 0);
 				try
@@ -24596,8 +25881,8 @@ public class Signage : IOEntity, ILOD, ISignage, IUGCBrowserEntity, IEaselPainta
 		return textureIDs;
 	}
 
-	[RPC_Server]
 	[RPC_Server.MaxDistance(3f)]
+	[RPC_Server]
 	public void LockSign(RPCMessage msg)
 	{
 		if (msg.player.CanInteract() && CanUpdateSign(msg.player))
@@ -24609,8 +25894,8 @@ public class Signage : IOEntity, ILOD, ISignage, IUGCBrowserEntity, IEaselPainta
 		}
 	}
 
-	[RPC_Server]
 	[RPC_Server.MaxDistance(3f)]
+	[RPC_Server]
 	public void UnLockSign(RPCMessage msg)
 	{
 		if (msg.player.CanInteract() && CanUnlockSign(msg.player))
@@ -24793,9 +26078,9 @@ public class Signage : IOEntity, ILOD, ISignage, IUGCBrowserEntity, IEaselPainta
 		}
 	}
 
-	[RPC_Server]
-	[RPC_Server.CallsPerSecond(5uL)]
 	[RPC_Server.MaxDistance(5f)]
+	[RPC_Server.CallsPerSecond(5uL)]
+	[RPC_Server]
 	public void UpdateSign(RPCMessage msg)
 	{
 		//IL_00b4: Unknown result type (might be due to invalid IL or missing references)
@@ -24998,7 +26283,7 @@ public class SimpleBuildingBlock : StabilityEntity, ISimpleUpgradable, ISprayCal
 				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
 				if (Global.developer > 2)
 				{
-					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - DoSimpleUpgrade "));
+					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - DoSimpleUpgrade"));
 				}
 				TimeWarning val2 = TimeWarning.New("DoSimpleUpgrade", 0);
 				try
@@ -25097,8 +26382,8 @@ public class SimpleBuildingBlock : StabilityEntity, ISimpleUpgradable, ISprayCal
 	}
 
 	[RPC_Server.IsVisible(3f)]
-	[RPC_Server]
 	[RPC_Server.CallsPerSecond(5uL)]
+	[RPC_Server]
 	public void DoSimpleUpgrade(RPCMessage msg)
 	{
 		if (base.SecondsSinceAttacked < 30f)
@@ -25303,7 +26588,7 @@ public class SingleUseMissionStorageContainer : LootContainer
 				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
 				if (Global.developer > 2)
 				{
-					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - Server_UpdateNoteText "));
+					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - Server_UpdateNoteText"));
 				}
 				TimeWarning val2 = TimeWarning.New("Server_UpdateNoteText", 0);
 				try
@@ -25755,7 +27040,7 @@ public class SleepingBag : DecayEntity
 				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
 				if (Global.developer > 2)
 				{
-					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - AssignToFriend "));
+					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - AssignToFriend"));
 				}
 				TimeWarning val2 = TimeWarning.New("AssignToFriend", 0);
 				try
@@ -25806,7 +27091,7 @@ public class SleepingBag : DecayEntity
 				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
 				if (Global.developer > 2)
 				{
-					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - Rename "));
+					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - Rename"));
 				}
 				TimeWarning val2 = TimeWarning.New("Rename", 0);
 				try
@@ -25857,7 +27142,7 @@ public class SleepingBag : DecayEntity
 				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
 				if (Global.developer > 2)
 				{
-					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - RPC_MakeBed "));
+					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - RPC_MakeBed"));
 				}
 				TimeWarning val2 = TimeWarning.New("RPC_MakeBed", 0);
 				try
@@ -25908,7 +27193,7 @@ public class SleepingBag : DecayEntity
 				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
 				if (Global.developer > 2)
 				{
-					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - RPC_MakePublic "));
+					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - RPC_MakePublic"));
 				}
 				TimeWarning val2 = TimeWarning.New("RPC_MakePublic", 0);
 				try
@@ -26729,8 +28014,8 @@ public class SleepingBag : DecayEntity
 		}
 	}
 
-	[RPC_Server]
 	[RPC_Server.IsVisible(3f)]
+	[RPC_Server]
 	public void AssignToFriend(RPCMessage msg)
 	{
 		if (!msg.player.CanInteract() || deployerUserID != (ulong)msg.player.userID || !canReassignToFriends)
@@ -27071,7 +28356,7 @@ public class SleepingBagCamper : SleepingBag
 				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
 				if (Global.developer > 2)
 				{
-					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - ServerClearBed "));
+					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - ServerClearBed"));
 				}
 				TimeWarning val2 = TimeWarning.New("ServerClearBed", 0);
 				try
@@ -27328,7 +28613,7 @@ public class SlotMachine : BaseMountable, INotifyLOD
 				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
 				if (Global.developer > 2)
 				{
-					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - RPC_Deposit "));
+					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - RPC_Deposit"));
 				}
 				TimeWarning val2 = TimeWarning.New("RPC_Deposit", 0);
 				try
@@ -27379,7 +28664,7 @@ public class SlotMachine : BaseMountable, INotifyLOD
 				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
 				if (Global.developer > 2)
 				{
-					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - RPC_Spin "));
+					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - RPC_Spin"));
 				}
 				TimeWarning val2 = TimeWarning.New("RPC_Spin", 0);
 				try
@@ -27430,7 +28715,7 @@ public class SlotMachine : BaseMountable, INotifyLOD
 				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
 				if (Global.developer > 2)
 				{
-					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - Server_RequestMultiplierChange "));
+					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - Server_RequestMultiplierChange"));
 				}
 				TimeWarning val2 = TimeWarning.New("Server_RequestMultiplierChange", 0);
 				try
@@ -27577,8 +28862,8 @@ public class SlotMachine : BaseMountable, INotifyLOD
 		return component.inventory.GetSlot(0)?.amount ?? 0;
 	}
 
-	[RPC_Server]
 	[RPC_Server.MaxDistance(3f)]
+	[RPC_Server]
 	private void RPC_Spin(RPCMessage rpc)
 	{
 		if (IsSpinning || (Object)(object)rpc.player != (Object)(object)GetMounted())
@@ -27743,9 +29028,9 @@ public class SlotMachine : BaseMountable, INotifyLOD
 		}
 	}
 
-	[RPC_Server]
-	[RPC_Server.MaxDistance(3f)]
 	[RPC_Server.CallsPerSecond(5uL)]
+	[RPC_Server.MaxDistance(3f)]
+	[RPC_Server]
 	private void Server_RequestMultiplierChange(RPCMessage msg)
 	{
 		if (!((Object)(object)msg.player != (Object)(object)GetMounted()) && !HasFlag(Flags.Reserved2))
@@ -27956,7 +29241,7 @@ public class SmallEngine : DecayEntity, IBoatBuildingPiece, IBoatPropulsion, IEn
 				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
 				if (Global.developer > 2)
 				{
-					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - RPC_OpenFuel "));
+					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - RPC_OpenFuel"));
 				}
 				TimeWarning val2 = TimeWarning.New("RPC_OpenFuel", 0);
 				try
@@ -28007,7 +29292,7 @@ public class SmallEngine : DecayEntity, IBoatBuildingPiece, IBoatPropulsion, IEn
 				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
 				if (Global.developer > 2)
 				{
-					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - SV_ToggleReverse "));
+					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - SV_ToggleReverse"));
 				}
 				TimeWarning val2 = TimeWarning.New("SV_ToggleReverse", 0);
 				try
@@ -28062,7 +29347,7 @@ public class SmallEngine : DecayEntity, IBoatBuildingPiece, IBoatPropulsion, IEn
 				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
 				if (Global.developer > 2)
 				{
-					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - TurnOff "));
+					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - TurnOff"));
 				}
 				TimeWarning val2 = TimeWarning.New("TurnOff", 0);
 				try
@@ -28117,7 +29402,7 @@ public class SmallEngine : DecayEntity, IBoatBuildingPiece, IBoatPropulsion, IEn
 				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
 				if (Global.developer > 2)
 				{
-					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - TurnOn "));
+					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - TurnOn"));
 				}
 				TimeWarning val2 = TimeWarning.New("TurnOn", 0);
 				try
@@ -28233,9 +29518,9 @@ public class SmallEngine : DecayEntity, IBoatBuildingPiece, IBoatPropulsion, IEn
 		SetFlag(Flags.Reserved2, fuelSystem.HasFuel());
 	}
 
-	[RPC_Server]
 	[RPC_Server.CallsPerSecond(5uL)]
 	[RPC_Server.IsVisible(3f)]
+	[RPC_Server]
 	public void TurnOn(RPCMessage msg)
 	{
 		if (Interface.CallHook("OnEngineStart", (object)this, (object)msg.player) == null && fuelSystem.HasFuel() && PlayerBoat.IsPlayerAuthedOnChildEntity(this, msg.player, authedIfNoPrivOrLock: true))
@@ -28249,9 +29534,9 @@ public class SmallEngine : DecayEntity, IBoatBuildingPiece, IBoatPropulsion, IEn
 		SetFlag(Flags.On, b: true);
 	}
 
-	[RPC_Server]
-	[RPC_Server.IsVisible(3f)]
 	[RPC_Server.CallsPerSecond(5uL)]
+	[RPC_Server.IsVisible(3f)]
+	[RPC_Server]
 	public void TurnOff(RPCMessage msg)
 	{
 		if (Interface.CallHook("OnEngineStop", (object)this, (object)msg.player) == null && PlayerBoat.IsPlayerAuthedOnChildEntity(this, msg.player, authedIfNoPrivOrLock: true))
@@ -28266,8 +29551,8 @@ public class SmallEngine : DecayEntity, IBoatBuildingPiece, IBoatPropulsion, IEn
 	}
 
 	[RPC_Server]
-	[RPC_Server.CallsPerSecond(5uL)]
 	[RPC_Server.IsVisible(3f)]
+	[RPC_Server.CallsPerSecond(5uL)]
 	public void SV_ToggleReverse(RPCMessage msg)
 	{
 		if (Interface.CallHook("OnEngineReverse", (object)this, (object)msg.player) == null && PlayerBoat.IsPlayerAuthedOnChildEntity(this, msg.player, authedIfNoPrivOrLock: true) && PlayerBoat.IsChildOfInteractablePlayerBoat(this))
@@ -28402,7 +29687,7 @@ public class SmartAlarm : AppIOEntity, ISubscribable
 				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
 				if (Global.developer > 2)
 				{
-					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - SetNotificationTextImpl "));
+					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - SetNotificationTextImpl"));
 				}
 				TimeWarning val2 = TimeWarning.New("SetNotificationTextImpl", 0);
 				try
@@ -28457,7 +29742,7 @@ public class SmartAlarm : AppIOEntity, ISubscribable
 				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
 				if (Global.developer > 2)
 				{
-					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - StartSetupNotification "));
+					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - StartSetupNotification"));
 				}
 				TimeWarning val2 = TimeWarning.New("StartSetupNotification", 0);
 				try
@@ -28590,9 +29875,9 @@ public class SmartAlarm : AppIOEntity, ISubscribable
 		}
 	}
 
+	[RPC_Server.IsVisible(3f)]
 	[RPC_Server.CallsPerSecond(5uL)]
 	[RPC_Server]
-	[RPC_Server.IsVisible(3f)]
 	private void StartSetupNotification(RPCMessage rpc)
 	{
 		if (rpc.player.CanInteract())
@@ -28606,8 +29891,8 @@ public class SmartAlarm : AppIOEntity, ISubscribable
 	}
 
 	[RPC_Server.CallsPerSecond(5uL)]
-	[RPC_Server]
 	[RPC_Server.IsVisible(3f)]
+	[RPC_Server]
 	private void SetNotificationTextImpl(RPCMessage rpc)
 	{
 		if (!rpc.player.CanInteract())
@@ -28669,7 +29954,7 @@ public class SmartSwitch : AppIOEntity
 				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
 				if (Global.developer > 2)
 				{
-					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - ToggleSwitch "));
+					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - ToggleSwitch"));
 				}
 				TimeWarning val2 = TimeWarning.New("ToggleSwitch", 0);
 				try
@@ -28799,9 +30084,9 @@ public class SmartSwitch : AppIOEntity
 		}
 	}
 
-	[RPC_Server]
-	[RPC_Server.IsVisible(3f)]
 	[RPC_Server.CallsPerSecond(3uL)]
+	[RPC_Server.IsVisible(3f)]
+	[RPC_Server]
 	public void ToggleSwitch(RPCMessage msg)
 	{
 		if (PlayerCanToggle(msg.player))
@@ -29284,7 +30569,7 @@ public class Snowmobile : GroundVehicle, VehicleChassisVisuals<Snowmobile>.IClie
 				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
 				if (Global.developer > 2)
 				{
-					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - RPC_OpenFuel "));
+					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - RPC_OpenFuel"));
 				}
 				TimeWarning val2 = TimeWarning.New("RPC_OpenFuel", 0);
 				try
@@ -29320,7 +30605,7 @@ public class Snowmobile : GroundVehicle, VehicleChassisVisuals<Snowmobile>.IClie
 				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
 				if (Global.developer > 2)
 				{
-					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - RPC_OpenItemStorage "));
+					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - RPC_OpenItemStorage"));
 				}
 				TimeWarning val2 = TimeWarning.New("RPC_OpenItemStorage", 0);
 				try
@@ -29851,7 +31136,7 @@ public class SpinnerWheel : Signage
 				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
 				if (Global.developer > 2)
 				{
-					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - RPC_AnyoneSpin "));
+					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - RPC_AnyoneSpin"));
 				}
 				TimeWarning val2 = TimeWarning.New("RPC_AnyoneSpin", 0);
 				try
@@ -29902,7 +31187,7 @@ public class SpinnerWheel : Signage
 				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
 				if (Global.developer > 2)
 				{
-					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - RPC_Spin "));
+					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - RPC_Spin"));
 				}
 				TimeWarning val2 = TimeWarning.New("RPC_Spin", 0);
 				try
@@ -30133,7 +31418,7 @@ public class SpinUpWeapon : BaseProjectile, ITurretNotify
 				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
 				if (Global.developer > 2)
 				{
-					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - Server_SetSpinButton "));
+					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - Server_SetSpinButton"));
 				}
 				TimeWarning val2 = TimeWarning.New("Server_SetSpinButton", 0);
 				try
@@ -30454,7 +31739,7 @@ public class SpookySpeaker : IOEntity
 				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
 				if (Global.developer > 2)
 				{
-					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - SetWantsOn "));
+					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - SetWantsOn"));
 				}
 				TimeWarning val2 = TimeWarning.New("SetWantsOn", 0);
 				try
@@ -30538,8 +31823,8 @@ public class SpookySpeaker : IOEntity
 		UpdateInvokes();
 	}
 
-	[RPC_Server]
 	[RPC_Server.IsVisible(3f)]
+	[RPC_Server]
 	public void SetWantsOn(RPCMessage msg)
 	{
 		bool targetState = msg.read.Bit();
@@ -30746,7 +32031,7 @@ public class SprayCan : HeldEntity
 				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
 				if (Global.developer > 2)
 				{
-					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - BeginFreehandSpray "));
+					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - BeginFreehandSpray"));
 				}
 				TimeWarning val2 = TimeWarning.New("BeginFreehandSpray", 0);
 				try
@@ -30809,7 +32094,7 @@ public class SprayCan : HeldEntity
 				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
 				if (Global.developer > 2)
 				{
-					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - ChangeItemSkin "));
+					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - ChangeItemSkin"));
 				}
 				TimeWarning val2 = TimeWarning.New("ChangeItemSkin", 0);
 				try
@@ -30864,7 +32149,7 @@ public class SprayCan : HeldEntity
 				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
 				if (Global.developer > 2)
 				{
-					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - ChangeWallpaper "));
+					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - ChangeWallpaper"));
 				}
 				TimeWarning val2 = TimeWarning.New("ChangeWallpaper", 0);
 				try
@@ -30923,7 +32208,7 @@ public class SprayCan : HeldEntity
 				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
 				if (Global.developer > 2)
 				{
-					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - CreateSpray "));
+					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - CreateSpray"));
 				}
 				TimeWarning val2 = TimeWarning.New("CreateSpray", 0);
 				try
@@ -30989,7 +32274,7 @@ public class SprayCan : HeldEntity
 				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
 				if (Global.developer > 2)
 				{
-					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - Server_SetBlockColourId "));
+					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - Server_SetBlockColourId"));
 				}
 				TimeWarning val2 = TimeWarning.New("Server_SetBlockColourId", 0);
 				try
@@ -31047,7 +32332,6 @@ public class SprayCan : HeldEntity
 		return base.OnRpcMessage(player, rpc, msg);
 	}
 
-	[RPC_Server]
 	[RPC_Server.IsActiveItem]
 	[RPC_Server.InputValidation(new Type[]
 	{
@@ -31056,6 +32340,7 @@ public class SprayCan : HeldEntity
 		typeof(int),
 		typeof(int)
 	})]
+	[RPC_Server]
 	private void BeginFreehandSpray(RPCMessage msg)
 	{
 		//IL_001e: Unknown result type (might be due to invalid IL or missing references)
@@ -31273,7 +32558,7 @@ public class SprayCan : HeldEntity
 		//IL_0013: Unknown result type (might be due to invalid IL or missing references)
 		//IL_0018: Unknown result type (might be due to invalid IL or missing references)
 		//IL_002f: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0e3e: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0e4a: Unknown result type (might be due to invalid IL or missing references)
 		//IL_0322: Unknown result type (might be due to invalid IL or missing references)
 		//IL_0327: Unknown result type (might be due to invalid IL or missing references)
 		//IL_032f: Unknown result type (might be due to invalid IL or missing references)
@@ -31291,29 +32576,29 @@ public class SprayCan : HeldEntity
 		//IL_06b3: Unknown result type (might be due to invalid IL or missing references)
 		//IL_06e1: Unknown result type (might be due to invalid IL or missing references)
 		//IL_06ee: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0ac5: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0add: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0b7f: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0b8a: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0b91: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0ad1: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0ae9: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0b8b: Unknown result type (might be due to invalid IL or missing references)
 		//IL_0b96: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0b9b: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0ba0: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0bae: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0bb3: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0bca: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0bcf: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0be0: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0ca6: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0c76: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0c7b: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0ce2: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0ce7: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0cec: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0d5f: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0d64: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0d69: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0d6e: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0b9d: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0ba2: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0ba7: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0bac: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0bba: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0bbf: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0bd6: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0bdb: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0bec: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0cb2: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0c82: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0c87: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0cee: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0cf3: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0cf8: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0d6b: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0d70: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0d75: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0d7a: Unknown result type (might be due to invalid IL or missing references)
 		NetworkableId uid = msg.read.EntityID();
 		int targetSkin = msg.read.Int32();
 		BaseNetworkable baseNetworkable = BaseNetworkable.serverEntities.Find(uid);
@@ -31511,6 +32796,7 @@ public class SprayCan : HeldEntity
 					if (baseEntity2 is PlanterBox planterBox2)
 					{
 						planterBox2.soilSaturation = soilSaturation;
+						Sprinkler.SplashableGrid.RegisterEntity(planterBox2);
 					}
 					baseEntity2.Spawn();
 					if (baseEntity2 is IOEntity iOEntity4)
@@ -31741,9 +33027,9 @@ public class SprayCan : HeldEntity
 		}
 	}
 
-	[RPC_Server.CallsPerSecond(2uL)]
 	[RPC_Server.MaxDistance(5f)]
 	[RPC_Server.IsActiveItem]
+	[RPC_Server.CallsPerSecond(2uL)]
 	[RPC_Server]
 	private void ChangeWallpaper(RPCMessage msg)
 	{
@@ -31794,6 +33080,8 @@ public class SprayCan : HeldEntity
 		return false;
 	}
 
+	[RPC_Server]
+	[RPC_Server.IsActiveItem]
 	[RPC_Server.InputValidation(new Type[]
 	{
 		typeof(Vector3),
@@ -31801,8 +33089,6 @@ public class SprayCan : HeldEntity
 		typeof(Vector3),
 		typeof(int)
 	})]
-	[RPC_Server.IsActiveItem]
-	[RPC_Server]
 	private void CreateSpray(RPCMessage msg)
 	{
 		//IL_0046: Unknown result type (might be due to invalid IL or missing references)
@@ -32091,7 +33377,7 @@ public class SprayCanSpray : DecayEntity, ISplashable
 				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
 				if (Global.developer > 2)
 				{
-					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - Server_RequestWaterClear "));
+					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - Server_RequestWaterClear"));
 				}
 				TimeWarning val2 = TimeWarning.New("Server_RequestWaterClear", 0);
 				try
@@ -32318,7 +33604,7 @@ public class SprayCanSpray_Freehand : SprayCanSpray
 				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
 				if (Global.developer > 2)
 				{
-					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - Server_AddPointMidSpray "));
+					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - Server_AddPointMidSpray"));
 				}
 				TimeWarning val2 = TimeWarning.New("Server_AddPointMidSpray", 0);
 				try
@@ -32375,7 +33661,7 @@ public class SprayCanSpray_Freehand : SprayCanSpray
 				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
 				if (Global.developer > 2)
 				{
-					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - Server_FinishEditing "));
+					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - Server_FinishEditing"));
 				}
 				TimeWarning val2 = TimeWarning.New("Server_FinishEditing", 0);
 				try
@@ -32501,12 +33787,12 @@ public class SprayCanSpray_Freehand : SprayCanSpray
 		width = lineWidth;
 	}
 
+	[RPC_Server]
 	[RPC_Server.InputValidation(new Type[]
 	{
 		typeof(Vector3),
 		typeof(Vector3)
 	})]
-	[RPC_Server]
 	private void Server_AddPointMidSpray(RPCMessage msg)
 	{
 		//IL_003a: Unknown result type (might be due to invalid IL or missing references)
@@ -32926,7 +34212,7 @@ public class StashContainer : StorageContainer
 				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
 				if (Global.developer > 2)
 				{
-					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - RPC_HideStash "));
+					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - RPC_HideStash"));
 				}
 				TimeWarning val2 = TimeWarning.New("RPC_HideStash", 0);
 				try
@@ -33141,6 +34427,7 @@ public static class StashContainerFlags
 
 
 using System;
+using System.IO;
 using ConVar;
 using Network;
 using UnityEngine;
@@ -33166,30 +34453,54 @@ public class StaticInstrument : BaseMountable
 				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
 				if (Global.developer > 2)
 				{
-					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - Server_PlayNote "));
+					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - Server_PlayNote"));
 				}
 				TimeWarning val2 = TimeWarning.New("Server_PlayNote", 0);
 				try
 				{
-					TimeWarning val3 = TimeWarning.New("Call", 0);
+					TimeWarning val3 = TimeWarning.New("Conditions", 0);
 					try
 					{
-						RPCMessage rPCMessage = default(RPCMessage);
-						rPCMessage.connection = msg.connection;
-						rPCMessage.player = player;
-						rPCMessage.read = msg.read;
-						RPCMessage msg2 = rPCMessage;
-						Server_PlayNote(msg2);
+						if (!RPC_Server.FromMounted.Test(1625188589u, "Server_PlayNote", this, player))
+						{
+							return true;
+						}
+						long position = ((Stream)(object)msg.read).Position;
+						msg.read.Read<int>();
+						msg.read.Read<int>();
+						msg.read.Read<int>();
+						if (!RPC_Server.InputValidation.Test(msg.read.Read<float>()))
+						{
+							return true;
+						}
+						((Stream)(object)msg.read).Position = position;
 					}
 					finally
 					{
 						((IDisposable)val3)?.Dispose();
 					}
-				}
-				catch (Exception ex)
-				{
-					Debug.LogException(ex);
-					player.Kick("RPC Error in Server_PlayNote");
+					try
+					{
+						val3 = TimeWarning.New("Call", 0);
+						try
+						{
+							RPCMessage rPCMessage = default(RPCMessage);
+							rPCMessage.connection = msg.connection;
+							rPCMessage.player = player;
+							rPCMessage.read = msg.read;
+							RPCMessage msg2 = rPCMessage;
+							Server_PlayNote(msg2);
+						}
+						finally
+						{
+							((IDisposable)val3)?.Dispose();
+						}
+					}
+					catch (Exception ex)
+					{
+						Debug.LogException(ex);
+						player.Kick("RPC Error in Server_PlayNote");
+					}
 				}
 				finally
 				{
@@ -33202,30 +34513,45 @@ public class StaticInstrument : BaseMountable
 				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
 				if (Global.developer > 2)
 				{
-					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - Server_StopNote "));
+					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - Server_StopNote"));
 				}
 				TimeWarning val2 = TimeWarning.New("Server_StopNote", 0);
 				try
 				{
-					TimeWarning val3 = TimeWarning.New("Call", 0);
+					TimeWarning val3 = TimeWarning.New("Conditions", 0);
 					try
 					{
-						RPCMessage rPCMessage = default(RPCMessage);
-						rPCMessage.connection = msg.connection;
-						rPCMessage.player = player;
-						rPCMessage.read = msg.read;
-						RPCMessage msg3 = rPCMessage;
-						Server_StopNote(msg3);
+						if (!RPC_Server.FromMounted.Test(705843933u, "Server_StopNote", this, player))
+						{
+							return true;
+						}
 					}
 					finally
 					{
 						((IDisposable)val3)?.Dispose();
 					}
-				}
-				catch (Exception ex2)
-				{
-					Debug.LogException(ex2);
-					player.Kick("RPC Error in Server_StopNote");
+					try
+					{
+						val3 = TimeWarning.New("Call", 0);
+						try
+						{
+							RPCMessage rPCMessage = default(RPCMessage);
+							rPCMessage.connection = msg.connection;
+							rPCMessage.player = player;
+							rPCMessage.read = msg.read;
+							RPCMessage msg3 = rPCMessage;
+							Server_StopNote(msg3);
+						}
+						finally
+						{
+							((IDisposable)val3)?.Dispose();
+						}
+					}
+					catch (Exception ex2)
+					{
+						Debug.LogException(ex2);
+						player.Kick("RPC Error in Server_StopNote");
+					}
 				}
 				finally
 				{
@@ -33242,20 +34568,26 @@ public class StaticInstrument : BaseMountable
 	}
 
 	[RPC_Server]
+	[RPC_Server.FromMounted]
+	[RPC_Server.InputValidation(new Type[]
+	{
+		typeof(int),
+		typeof(int),
+		typeof(int),
+		typeof(float)
+	})]
 	private void Server_PlayNote(RPCMessage msg)
 	{
 		int arg = msg.read.Int32();
 		int arg2 = msg.read.Int32();
 		int arg3 = msg.read.Int32();
-		float num = msg.read.Float();
-		if (!FloatEx.IsNaNOrInfinity(num))
-		{
-			KeyController.ProcessServerPlayedNote(GetMounted());
-			ClientRPC(RpcTarget.NetworkGroup("Client_PlayNote"), arg, arg2, arg3, num);
-		}
+		float arg4 = msg.read.Float();
+		KeyController.ProcessServerPlayedNote(GetMounted());
+		ClientRPC(RpcTarget.NetworkGroup("Client_PlayNote"), arg, arg2, arg3, arg4);
 	}
 
 	[RPC_Server]
+	[RPC_Server.FromMounted]
 	private void Server_StopNote(RPCMessage msg)
 	{
 		int arg = msg.read.Int32();
@@ -33294,7 +34626,7 @@ public class SteamInventory : EntityComponent<BasePlayer>
 				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
 				if (Global.developer > 2)
 				{
-					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - UpdateSteamInventory "));
+					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - UpdateSteamInventory"));
 				}
 				TimeWarning val2 = TimeWarning.New("UpdateSteamInventory", 0);
 				try
@@ -33302,7 +34634,7 @@ public class SteamInventory : EntityComponent<BasePlayer>
 					TimeWarning val3 = TimeWarning.New("Conditions", 0);
 					try
 					{
-						if (!BaseEntity.RPC_Server.FromOwner.Test(643458331u, "UpdateSteamInventory", GetBaseEntity(), player, includeMounted: false))
+						if (!BaseEntity.RPC_Server.FromOwner.Test(643458331u, "UpdateSteamInventory", GetBaseEntity(), player))
 						{
 							return true;
 						}
@@ -33370,7 +34702,7 @@ public class SteamInventory : EntityComponent<BasePlayer>
 	}
 
 	[BaseEntity.RPC_Server]
-	[BaseEntity.RPC_Server.FromOwner(false)]
+	[BaseEntity.RPC_Server.FromOwner]
 	private async Task UpdateSteamInventory(BaseEntity.RPCMessage msg)
 	{
 		byte[] array = msg.read.BytesWithSize(10485760u, false);
@@ -33398,965 +34730,6 @@ public class SteamInventory : EntityComponent<BasePlayer>
 			Interface.CallHook("OnSteamInventoryUpdated", (object)this);
 			((IDisposable)val).Dispose();
 		}
-	}
-}
-
-
-using System;
-using System.IO;
-using System.Runtime.CompilerServices;
-using ConVar;
-using Facepunch;
-using Network;
-using ProtoBuf;
-using Rust;
-using UnityEngine;
-using UnityEngine.Assertions;
-
-public class SteeringWheel : BaseMountable, IBoatBuildingPiece
-{
-	public static Phrase TipPhrase = new Phrase("boat_steeringwheel_tip", "Interact with the steering wheel to code lock your boat.");
-
-	public static Phrase MountedTipPhrase = new Phrase("boat_steeringwheel_tip_mounted", "Look at the center of the wheel for options when mounted.");
-
-	[Header("Steering Wheel")]
-	public GameObjectRef PrivPrefab;
-
-	public GameObjectRef KeyEnterDialog;
-
-	public float TurnLerpSpeed = 1f;
-
-	public Transform Wheel;
-
-	public PlayerBoatPrivilege Privilege;
-
-	public SoundDefinition wheelTurnLoopDef;
-
-	public SoundDefinition wheelTurnStartDef;
-
-	public SoundDefinition wheelTurnStopDef;
-
-	public float wheelTurnLoopFadeTime = 0.1f;
-
-	public float stopDelay;
-
-	public GameObjectRef finishBuildingEffect;
-
-	public SoundDefinition wheelCenterDef;
-
-	[Header("Effects")]
-	public Transform EffectLocation;
-
-	public GameObjectRef effectUnlocked;
-
-	public GameObjectRef effectLocked;
-
-	public GameObjectRef effectDenied;
-
-	public GameObjectRef effectCodeChanged;
-
-	public GameObjectRef effectShock;
-
-	[NonSerialized]
-	public PlayerBoat ParentBoat;
-
-	private Action _mountedPlayerClipCheck;
-
-	private float __sync_ServerSteeringRotation;
-
-	public PlayerBoatLock BoatLock { get; private set; }
-
-	[Sync(Pack = false, Autosave = true)]
-	public float ServerSteeringRotation
-	{
-		[CompilerGenerated]
-		get
-		{
-			return __sync_ServerSteeringRotation;
-		}
-		[CompilerGenerated]
-		set
-		{
-			if (!IsSyncVarEqual(__sync_ServerSteeringRotation, value))
-			{
-				__sync_ServerSteeringRotation = value;
-				byte nameID = __GetWeaverID("ServerSteeringRotation");
-				SV_SyncVarSend(nameID);
-			}
-		}
-	}
-
-	public override bool OnRpcMessage(BasePlayer player, uint rpc, Message msg)
-	{
-		TimeWarning val = TimeWarning.New("SteeringWheel.OnRpcMessage", 0);
-		try
-		{
-			if (rpc == 3277541392u && (Object)(object)player != (Object)null)
-			{
-				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
-				if (Global.developer > 2)
-				{
-					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - ReceiveClientRotation "));
-				}
-				TimeWarning val2 = TimeWarning.New("ReceiveClientRotation", 0);
-				try
-				{
-					TimeWarning val3 = TimeWarning.New("Conditions", 0);
-					try
-					{
-						if (!RPC_Server.CallsPerSecond.Test(3277541392u, "ReceiveClientRotation", this, player, 15uL))
-						{
-							return true;
-						}
-						long position = ((Stream)(object)msg.read).Position;
-						msg.read.Read<float>();
-						((Stream)(object)msg.read).Position = position;
-						if (!RPC_Server.IsVisible.Test(3277541392u, "ReceiveClientRotation", this, player, 3f))
-						{
-							return true;
-						}
-					}
-					finally
-					{
-						((IDisposable)val3)?.Dispose();
-					}
-					try
-					{
-						val3 = TimeWarning.New("Call", 0);
-						try
-						{
-							RPCMessage rPCMessage = default(RPCMessage);
-							rPCMessage.connection = msg.connection;
-							rPCMessage.player = player;
-							rPCMessage.read = msg.read;
-							RPCMessage msg2 = rPCMessage;
-							ReceiveClientRotation(msg2);
-						}
-						finally
-						{
-							((IDisposable)val3)?.Dispose();
-						}
-					}
-					catch (Exception ex)
-					{
-						Debug.LogException(ex);
-						player.Kick("RPC Error in ReceiveClientRotation");
-					}
-				}
-				finally
-				{
-					((IDisposable)val2)?.Dispose();
-				}
-				return true;
-			}
-			if (rpc == 1618039250 && (Object)(object)player != (Object)null)
-			{
-				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
-				if (Global.developer > 2)
-				{
-					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - RequestDeployAndEditBoat "));
-				}
-				TimeWarning val2 = TimeWarning.New("RequestDeployAndEditBoat", 0);
-				try
-				{
-					TimeWarning val3 = TimeWarning.New("Conditions", 0);
-					try
-					{
-						if (!RPC_Server.CallsPerSecond.Test(1618039250u, "RequestDeployAndEditBoat", this, player, 3uL))
-						{
-							return true;
-						}
-						if (!RPC_Server.IsVisible.Test(1618039250u, "RequestDeployAndEditBoat", this, player, 3f))
-						{
-							return true;
-						}
-					}
-					finally
-					{
-						((IDisposable)val3)?.Dispose();
-					}
-					try
-					{
-						val3 = TimeWarning.New("Call", 0);
-						try
-						{
-							RPCMessage rPCMessage = default(RPCMessage);
-							rPCMessage.connection = msg.connection;
-							rPCMessage.player = player;
-							rPCMessage.read = msg.read;
-							RPCMessage msg3 = rPCMessage;
-							RequestDeployAndEditBoat(msg3);
-						}
-						finally
-						{
-							((IDisposable)val3)?.Dispose();
-						}
-					}
-					catch (Exception ex2)
-					{
-						Debug.LogException(ex2);
-						player.Kick("RPC Error in RequestDeployAndEditBoat");
-					}
-				}
-				finally
-				{
-					((IDisposable)val2)?.Dispose();
-				}
-				return true;
-			}
-			if (rpc == 3915953376u && (Object)(object)player != (Object)null)
-			{
-				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
-				if (Global.developer > 2)
-				{
-					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - RequestEditBoat "));
-				}
-				TimeWarning val2 = TimeWarning.New("RequestEditBoat", 0);
-				try
-				{
-					TimeWarning val3 = TimeWarning.New("Conditions", 0);
-					try
-					{
-						if (!RPC_Server.CallsPerSecond.Test(3915953376u, "RequestEditBoat", this, player, 3uL))
-						{
-							return true;
-						}
-						if (!RPC_Server.IsVisible.Test(3915953376u, "RequestEditBoat", this, player, 3f))
-						{
-							return true;
-						}
-					}
-					finally
-					{
-						((IDisposable)val3)?.Dispose();
-					}
-					try
-					{
-						val3 = TimeWarning.New("Call", 0);
-						try
-						{
-							RPCMessage rPCMessage = default(RPCMessage);
-							rPCMessage.connection = msg.connection;
-							rPCMessage.player = player;
-							rPCMessage.read = msg.read;
-							RPCMessage msg4 = rPCMessage;
-							RequestEditBoat(msg4);
-						}
-						finally
-						{
-							((IDisposable)val3)?.Dispose();
-						}
-					}
-					catch (Exception ex3)
-					{
-						Debug.LogException(ex3);
-						player.Kick("RPC Error in RequestEditBoat");
-					}
-				}
-				finally
-				{
-					((IDisposable)val2)?.Dispose();
-				}
-				return true;
-			}
-			if (rpc == 3194773350u && (Object)(object)player != (Object)null)
-			{
-				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
-				if (Global.developer > 2)
-				{
-					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - RequestFinishBuilding "));
-				}
-				TimeWarning val2 = TimeWarning.New("RequestFinishBuilding", 0);
-				try
-				{
-					TimeWarning val3 = TimeWarning.New("Conditions", 0);
-					try
-					{
-						if (!RPC_Server.CallsPerSecond.Test(3194773350u, "RequestFinishBuilding", this, player, 3uL))
-						{
-							return true;
-						}
-						if (!RPC_Server.IsVisible.Test(3194773350u, "RequestFinishBuilding", this, player, 3f))
-						{
-							return true;
-						}
-					}
-					finally
-					{
-						((IDisposable)val3)?.Dispose();
-					}
-					try
-					{
-						val3 = TimeWarning.New("Call", 0);
-						try
-						{
-							RPCMessage rPCMessage = default(RPCMessage);
-							rPCMessage.connection = msg.connection;
-							rPCMessage.player = player;
-							rPCMessage.read = msg.read;
-							RPCMessage msg5 = rPCMessage;
-							RequestFinishBuilding(msg5);
-						}
-						finally
-						{
-							((IDisposable)val3)?.Dispose();
-						}
-					}
-					catch (Exception ex4)
-					{
-						Debug.LogException(ex4);
-						player.Kick("RPC Error in RequestFinishBuilding");
-					}
-				}
-				finally
-				{
-					((IDisposable)val2)?.Dispose();
-				}
-				return true;
-			}
-			if (rpc == 3963850389u && (Object)(object)player != (Object)null)
-			{
-				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
-				if (Global.developer > 2)
-				{
-					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - RequestFinishBuildingFromWheel "));
-				}
-				TimeWarning val2 = TimeWarning.New("RequestFinishBuildingFromWheel", 0);
-				try
-				{
-					TimeWarning val3 = TimeWarning.New("Conditions", 0);
-					try
-					{
-						if (!RPC_Server.CallsPerSecond.Test(3963850389u, "RequestFinishBuildingFromWheel", this, player, 3uL))
-						{
-							return true;
-						}
-						if (!RPC_Server.IsVisible.Test(3963850389u, "RequestFinishBuildingFromWheel", this, player, 3f))
-						{
-							return true;
-						}
-					}
-					finally
-					{
-						((IDisposable)val3)?.Dispose();
-					}
-					try
-					{
-						val3 = TimeWarning.New("Call", 0);
-						try
-						{
-							RPCMessage rPCMessage = default(RPCMessage);
-							rPCMessage.connection = msg.connection;
-							rPCMessage.player = player;
-							rPCMessage.read = msg.read;
-							RPCMessage msg6 = rPCMessage;
-							RequestFinishBuildingFromWheel(msg6);
-						}
-						finally
-						{
-							((IDisposable)val3)?.Dispose();
-						}
-					}
-					catch (Exception ex5)
-					{
-						Debug.LogException(ex5);
-						player.Kick("RPC Error in RequestFinishBuildingFromWheel");
-					}
-				}
-				finally
-				{
-					((IDisposable)val2)?.Dispose();
-				}
-				return true;
-			}
-			if (rpc == 3710764312u && (Object)(object)player != (Object)null)
-			{
-				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
-				if (Global.developer > 2)
-				{
-					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - RPC_RequestAddLock "));
-				}
-				TimeWarning val2 = TimeWarning.New("RPC_RequestAddLock", 0);
-				try
-				{
-					TimeWarning val3 = TimeWarning.New("Conditions", 0);
-					try
-					{
-						if (!RPC_Server.IsVisible.Test(3710764312u, "RPC_RequestAddLock", this, player, 3f))
-						{
-							return true;
-						}
-						if (!RPC_Server.MaxDistance.Test(3710764312u, "RPC_RequestAddLock", this, player, 3f))
-						{
-							return true;
-						}
-					}
-					finally
-					{
-						((IDisposable)val3)?.Dispose();
-					}
-					try
-					{
-						val3 = TimeWarning.New("Call", 0);
-						try
-						{
-							RPCMessage rPCMessage = default(RPCMessage);
-							rPCMessage.connection = msg.connection;
-							rPCMessage.player = player;
-							rPCMessage.read = msg.read;
-							RPCMessage msg7 = rPCMessage;
-							RPC_RequestAddLock(msg7);
-						}
-						finally
-						{
-							((IDisposable)val3)?.Dispose();
-						}
-					}
-					catch (Exception ex6)
-					{
-						Debug.LogException(ex6);
-						player.Kick("RPC Error in RPC_RequestAddLock");
-					}
-				}
-				finally
-				{
-					((IDisposable)val2)?.Dispose();
-				}
-				return true;
-			}
-			if (rpc == 2818660542u && (Object)(object)player != (Object)null)
-			{
-				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
-				if (Global.developer > 2)
-				{
-					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - RPC_TryMountWithKeycode "));
-				}
-				TimeWarning val2 = TimeWarning.New("RPC_TryMountWithKeycode", 0);
-				try
-				{
-					TimeWarning val3 = TimeWarning.New("Conditions", 0);
-					try
-					{
-						if (!RPC_Server.MaxDistance.Test(2818660542u, "RPC_TryMountWithKeycode", this, player, 3f))
-						{
-							return true;
-						}
-					}
-					finally
-					{
-						((IDisposable)val3)?.Dispose();
-					}
-					try
-					{
-						val3 = TimeWarning.New("Call", 0);
-						try
-						{
-							RPCMessage rPCMessage = default(RPCMessage);
-							rPCMessage.connection = msg.connection;
-							rPCMessage.player = player;
-							rPCMessage.read = msg.read;
-							RPCMessage msg8 = rPCMessage;
-							RPC_TryMountWithKeycode(msg8);
-						}
-						finally
-						{
-							((IDisposable)val3)?.Dispose();
-						}
-					}
-					catch (Exception ex7)
-					{
-						Debug.LogException(ex7);
-						player.Kick("RPC Error in RPC_TryMountWithKeycode");
-					}
-				}
-				finally
-				{
-					((IDisposable)val2)?.Dispose();
-				}
-				return true;
-			}
-		}
-		finally
-		{
-			((IDisposable)val)?.Dispose();
-		}
-		return base.OnRpcMessage(player, rpc, msg);
-	}
-
-	public PlayerBoat GetParentBoat()
-	{
-		return PlayerBoat.GetParentPlayerBoat(this);
-	}
-
-	public override bool DirectlyMountable()
-	{
-		return true;
-	}
-
-	private BoatBuildingStation GetCurrentBoatBuildingStation(BasePlayer player)
-	{
-		TriggerBoatBuildingArea triggerBoatBuildingArea = player.FindTrigger<TriggerBoatBuildingArea>();
-		if ((Object)(object)triggerBoatBuildingArea == (Object)null)
-		{
-			return null;
-		}
-		return ((Component)triggerBoatBuildingArea).GetComponentInParent<BoatBuildingStation>();
-	}
-
-	public override void Load(LoadInfo info)
-	{
-		base.Load(info);
-		BoatLock.Load(info);
-	}
-
-	protected override void OnChildAdded(BaseEntity child)
-	{
-		base.OnChildAdded(child);
-		if (child is PlayerBoatPrivilege privilege)
-		{
-			Privilege = privilege;
-		}
-	}
-
-	public override void InitShared()
-	{
-		base.InitShared();
-		if (BoatLock == null)
-		{
-			BoatLock = new PlayerBoatLock(this, base.isServer);
-		}
-	}
-
-	public bool IsFlipped()
-	{
-		//IL_0000: Unknown result type (might be due to invalid IL or missing references)
-		//IL_000b: Unknown result type (might be due to invalid IL or missing references)
-		return Vector3.Dot(Vector3.up, ((Component)this).transform.up) <= 0.175f;
-	}
-
-	public bool IsAuthed(BasePlayer player)
-	{
-		if ((Object)(object)Privilege == (Object)null)
-		{
-			return false;
-		}
-		return Privilege.IsAuthed(player);
-	}
-
-	public override void ServerInit()
-	{
-		base.ServerInit();
-		SetFlag(Flags.Locked, BoatLock != null && BoatLock.HasALock);
-		ServerSteeringRotation = 0f;
-		CreatePrivilege();
-	}
-
-	public override void OnDeployed(BaseEntity parent, BasePlayer deployedBy, Item fromItem)
-	{
-		//IL_0016: Unknown result type (might be due to invalid IL or missing references)
-		base.OnDeployed(parent, deployedBy, fromItem);
-		AuthPlayer(deployedBy);
-		BoatBuildingStation stationOverlappingPosition = BoatBuildingStation.GetStationOverlappingPosition(((Component)this).transform.position, isServer: true);
-		if ((Object)(object)stationOverlappingPosition != (Object)null)
-		{
-			stationOverlappingPosition.OnSteeringWheelPlaced(this);
-		}
-		ClientRPC(RpcTarget.Player("CLIENT_OnDeployed", deployedBy));
-	}
-
-	internal override void DoServerDestroy()
-	{
-		//IL_0014: Unknown result type (might be due to invalid IL or missing references)
-		if ((Object)(object)ParentBoat == (Object)null)
-		{
-			BoatBuildingStation stationOverlappingPosition = BoatBuildingStation.GetStationOverlappingPosition(((Component)this).transform.position, isServer: true);
-			if ((Object)(object)stationOverlappingPosition != (Object)null)
-			{
-				stationOverlappingPosition.OnSteeringWheelRemoved(this);
-			}
-		}
-		base.DoServerDestroy();
-	}
-
-	private void CreatePrivilege()
-	{
-		//IL_0025: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0030: Unknown result type (might be due to invalid IL or missing references)
-		if (!Application.isLoadingSave)
-		{
-			Privilege = null;
-			BaseEntity baseEntity = GameManager.server.CreateEntity(PrivPrefab.resourcePath, ((Component)this).transform.position, ((Component)this).transform.rotation);
-			if ((Object)(object)baseEntity != (Object)null)
-			{
-				baseEntity.SetParent(this, worldPositionStays: true);
-				baseEntity.Spawn();
-			}
-			Privilege = baseEntity as PlayerBoatPrivilege;
-		}
-	}
-
-	public override void Save(SaveInfo info)
-	{
-		base.Save(info);
-		info.msg.steeringWheel = Pool.Get<SteeringWheel>();
-		BoatLock.Save(info);
-	}
-
-	public override void PostServerLoad()
-	{
-		base.PostServerLoad();
-		if (base.isServer)
-		{
-			BoatLock.PostServerLoad();
-			SetFlag(Flags.Locked, BoatLock.HasALock);
-		}
-	}
-
-	[RPC_Server.IsVisible(3f)]
-	[RPC_Server]
-	[RPC_Server.MaxDistance(3f)]
-	public void RPC_RequestAddLock(RPCMessage msg)
-	{
-		if (!BoatLock.HasALock)
-		{
-			BasePlayer player = msg.player;
-			if (!((Object)(object)player == (Object)null))
-			{
-				string code = msg.read.String(256, false);
-				BoatLock.TryAddALock(code, player);
-				SetFlag(Flags.Locked, BoatLock.HasALock);
-			}
-		}
-	}
-
-	[RPC_Server.MaxDistance(3f)]
-	[RPC_Server]
-	public void RPC_TryMountWithKeycode(RPCMessage msg)
-	{
-		BasePlayer player = msg.player;
-		if (!((Object)(object)player == (Object)null))
-		{
-			string codeEntered = msg.read.String(256, false);
-			if (BoatLock.TryOpenWithCode(player, codeEntered))
-			{
-				AuthPlayer(player);
-				WantsMount(player);
-			}
-		}
-	}
-
-	private void AuthPlayer(BasePlayer player)
-	{
-		if (!((Object)(object)Privilege == (Object)null) && !Privilege.IsAuthed(player))
-		{
-			Privilege.AddPlayer(player);
-			Privilege.SendNetworkUpdate();
-		}
-	}
-
-	public override void AttemptMount(BasePlayer player, bool doMountChecks = true)
-	{
-		if ((!BoatLock.HasALock || BoatLock.HasLockPermission(player)) && !IsFlipped() && (!((Object)(object)ParentBoat != (Object)null) || !ParentBoat.IsDying))
-		{
-			base.AttemptMount(player, doMountChecks);
-		}
-	}
-
-	public override void OnPlayerMounted()
-	{
-		base.OnPlayerMounted();
-		if (Object.op_Implicit((Object)(object)ParentBoat))
-		{
-			ParentBoat.SetFlag(Flags.Reserved17, b: true);
-		}
-		if (_mountedPlayerClipCheck == null)
-		{
-			_mountedPlayerClipCheck = CheckSeatClipping;
-		}
-		((FacepunchBehaviour)this).InvokeRepeatingFixedTime(_mountedPlayerClipCheck);
-	}
-
-	public override void OnPlayerDismounted(BasePlayer player)
-	{
-		base.OnPlayerDismounted(player);
-		if (Object.op_Implicit((Object)(object)ParentBoat))
-		{
-			ParentBoat.SetFlag(Flags.Reserved17, b: false);
-		}
-		if (_mountedPlayerClipCheck == null)
-		{
-			_mountedPlayerClipCheck = CheckSeatClipping;
-		}
-		((FacepunchBehaviour)this).CancelInvokeFixedTime(_mountedPlayerClipCheck);
-	}
-
-	private void CheckSeatClipping()
-	{
-		if (_mountedPlayerClipCheck == null)
-		{
-			_mountedPlayerClipCheck = CheckSeatClipping;
-		}
-		if (!AnyMounted())
-		{
-			((FacepunchBehaviour)this).CancelInvokeFixedTime(_mountedPlayerClipCheck);
-		}
-		else if (IsSeatClipping(this))
-		{
-			DismountAllPlayers();
-			((FacepunchBehaviour)this).CancelInvokeFixedTime(_mountedPlayerClipCheck);
-		}
-	}
-
-	[RPC_Server]
-	[RPC_Server.CallsPerSecond(3uL)]
-	[RPC_Server.IsVisible(3f)]
-	public void RequestFinishBuilding(RPCMessage msg)
-	{
-		//IL_0029: Unknown result type (might be due to invalid IL or missing references)
-		BasePlayer player = msg.player;
-		if (!((Object)(object)player == (Object)null))
-		{
-			BoatBuildingStation currentBoatBuildingStation = GetCurrentBoatBuildingStation(player);
-			if (!((Object)(object)currentBoatBuildingStation == (Object)null))
-			{
-				BoatBuildingStation.LogBuildingEvent(((Component)this).transform.position, player, null, "SteeringWheel rquesting FinishBuilding");
-				currentBoatBuildingStation.FinishBuilding(msg.player);
-			}
-		}
-	}
-
-	[RPC_Server.IsVisible(3f)]
-	[RPC_Server]
-	[RPC_Server.CallsPerSecond(3uL)]
-	public void RequestFinishBuildingFromWheel(RPCMessage msg)
-	{
-		//IL_0017: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00bf: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00c5: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00c8: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00ce: Unknown result type (might be due to invalid IL or missing references)
-		BasePlayer player = msg.player;
-		if ((Object)(object)player == (Object)null)
-		{
-			return;
-		}
-		BoatBuildingStation.LogBuildingEvent(((Component)this).transform.position, msg.player, null, "Finish boat requested via steering wheel.");
-		BoatBuildingStation currentBoatBuildingStation = GetCurrentBoatBuildingStation(player);
-		if (!((Object)(object)currentBoatBuildingStation != (Object)null) || !currentBoatBuildingStation.FinishBuilding(msg.player) || currentBoatBuildingStation.IsStatic)
-		{
-			return;
-		}
-		currentBoatBuildingStation.KilledDuringWheelFinish = true;
-		currentBoatBuildingStation.Kill();
-		if (!((Object)(object)ParentBoat == (Object)null))
-		{
-			Item item = ItemManager.Create(ParentBoat.BoatBuildingStationItem, 1, 0uL);
-			item.SetItemOwnership(player, ItemOwnershipPhrases.PickedUp);
-			player.GiveItem(item, GiveItemReason.PickedUp);
-			if (finishBuildingEffect.isValid)
-			{
-				Effect.server.Run(finishBuildingEffect.resourcePath, this, 0u, default(Vector3), default(Vector3), null, broadcast: false, null, 0, Effect.Type.Generic);
-			}
-		}
-	}
-
-	[RPC_Server.CallsPerSecond(3uL)]
-	[RPC_Server]
-	[RPC_Server.IsVisible(3f)]
-	public void RequestEditBoat(RPCMessage msg)
-	{
-		//IL_0029: Unknown result type (might be due to invalid IL or missing references)
-		BasePlayer player = msg.player;
-		if ((Object)(object)player == (Object)null)
-		{
-			return;
-		}
-		BoatBuildingStation currentBoatBuildingStation = GetCurrentBoatBuildingStation(player);
-		if (!((Object)(object)currentBoatBuildingStation == (Object)null))
-		{
-			BoatBuildingStation.LogBuildingEvent(((Component)this).transform.position, player, null, "Edit boat requested from steering wheel.");
-			if (currentBoatBuildingStation.CanEnterEditMode(player, sendErrorToasts: true))
-			{
-				currentBoatBuildingStation.EnterEditMode();
-			}
-		}
-	}
-
-	[RPC_Server.CallsPerSecond(3uL)]
-	[RPC_Server.IsVisible(3f)]
-	[RPC_Server]
-	public void RequestDeployAndEditBoat(RPCMessage msg)
-	{
-		//IL_0028: Unknown result type (might be due to invalid IL or missing references)
-		BasePlayer player = msg.player;
-		if (!((Object)(object)player == (Object)null))
-		{
-			PlayerBoat parentBoat = GetParentBoat();
-			if (!((Object)(object)parentBoat == (Object)null))
-			{
-				BoatBuildingStation.LogBuildingEvent(((Component)this).transform.position, player, parentBoat, "Deploy and Edit requested via steering wheel.");
-				parentBoat.DeployAndEdit(msg.player);
-			}
-		}
-	}
-
-	public override void Hurt(HitInfo info)
-	{
-		PlayerBoat parentPlayerBoat = PlayerBoat.GetParentPlayerBoat(this);
-		if ((Object)(object)parentPlayerBoat != (Object)null && !parentPlayerBoat.IsDestructibleWreck)
-		{
-			parentPlayerBoat.OnBoatDeployableHurt(this, info);
-		}
-		else
-		{
-			base.Hurt(info);
-		}
-	}
-
-	[RPC_Server]
-	[RPC_Server.InputValidation(new Type[] { typeof(float) })]
-	[RPC_Server.CallsPerSecond(15uL)]
-	[RPC_Server.IsVisible(3f)]
-	public void ReceiveClientRotation(RPCMessage msg)
-	{
-		if (!((Object)(object)msg.player == (Object)null) && !((Object)(object)GetMounted() != (Object)(object)msg.player) && !((Object)(object)ParentBoat == (Object)null))
-		{
-			float num2 = (ServerSteeringRotation = msg.read.Float());
-			ParentBoat.steering = Mathx.RemapValClamped(num2, -170f, 170f, 1f, -1f);
-		}
-	}
-
-	public void ResetSteering()
-	{
-		ServerSteeringRotation = 0f;
-		ParentBoat.steering = 0f;
-	}
-
-	public override void PlayerServerInput(InputState inputState, BasePlayer player)
-	{
-		base.PlayerServerInput(inputState, player);
-		if ((Object)(object)ParentBoat != (Object)null)
-		{
-			ParentBoat.ResetTimeSinceUsed();
-		}
-	}
-
-	void IBoatBuildingPiece.OnAddedToBoat(PlayerBoat boat)
-	{
-		ParentBoat = boat;
-	}
-
-	protected override bool ShouldDisplayPickupOption(BasePlayer player)
-	{
-		if (base.ShouldDisplayPickupOption(player))
-		{
-			return !PlayerBoat.IsChildOfInteractablePlayerBoat(this);
-		}
-		return false;
-	}
-
-	protected override bool WriteSyncVar(byte id, NetWrite writer)
-	{
-		//IL_0017: Unknown result type (might be due to invalid IL or missing references)
-		//IL_001c: Unknown result type (might be due to invalid IL or missing references)
-		if (id == 0)
-		{
-			if (Global.developer > 2)
-			{
-				NetworkableId iD = net.ID;
-				Debug.Log((object)("SyncVar Writing: ServerSteeringRotation for " + ((object)(NetworkableId)(ref iD)/*cast due to .constrained prefix*/).ToString()));
-			}
-			SyncVarNetWrite(writer, __sync_ServerSteeringRotation);
-			return true;
-		}
-		return base.WriteSyncVar(id, writer);
-	}
-
-	protected override bool OnSyncVar(byte id, NetRead reader, bool fromAutoSave = false)
-	{
-		if (id == 0)
-		{
-			try
-			{
-				_ = __sync_ServerSteeringRotation;
-				float _sync_ServerSteeringRotation = reader.Float();
-				__sync_ServerSteeringRotation = _sync_ServerSteeringRotation;
-			}
-			catch (Exception ex)
-			{
-				Debug.LogException(ex);
-			}
-			return true;
-		}
-		return base.OnSyncVar(id, reader, fromAutoSave);
-	}
-
-	private byte __GetWeaverID(string propertyName)
-	{
-		if (propertyName == "ServerSteeringRotation")
-		{
-			return 0;
-		}
-		return byte.MaxValue;
-	}
-
-	protected override void WriteAutoSaveSyncVars(NetWrite writer)
-	{
-		base.WriteAutoSaveSyncVars(writer);
-		WriteSyncVar(0, writer);
-	}
-
-	protected override void ReadAutoSaveSyncVars(NetRead reader)
-	{
-		base.ReadAutoSaveSyncVars(reader);
-		OnSyncVar(0, reader, fromAutoSave: true);
-	}
-
-	protected override bool AutoSaveSyncVars(SaveInfo save)
-	{
-		NetWrite val = ((BaseNetwork)Net.sv).StartWrite();
-		WriteAutoSaveSyncVars(val);
-		var (src, num) = val.GetBuffer();
-		if (_autosaveBuffer == null)
-		{
-			_autosaveBuffer = BaseEntity._autosaveBufferPool.Rent(num);
-		}
-		if (_autosaveBuffer.Length < num)
-		{
-			BaseEntity._autosaveBufferPool.Return(_autosaveBuffer);
-			_autosaveBuffer = BaseEntity._autosaveBufferPool.Rent(num);
-		}
-		Buffer.BlockCopy(src, 0, _autosaveBuffer, 0, num);
-		save.msg.baseEntity.syncVars = _autosaveBuffer;
-		Pool.Free<NetWrite>(ref val);
-		return true;
-	}
-
-	protected override bool AutoLoadSyncVars(LoadInfo load)
-	{
-		if (load.msg.baseEntity != null && load.msg.baseEntity.syncVars != null)
-		{
-			NetRead val = Pool.Get<NetRead>();
-			val.Init(load.msg.baseEntity.syncVars.AsSpan());
-			ReadAutoSaveSyncVars(val);
-			Pool.Free<NetRead>(ref val);
-		}
-		return true;
-	}
-
-	protected override void ResetSyncVars()
-	{
-		base.ResetSyncVars();
-		__sync_ServerSteeringRotation = 0f;
-	}
-
-	protected override bool ShouldInvalidateCache(byte id)
-	{
-		if (id == 0)
-		{
-			return true;
-		}
-		return base.ShouldInvalidateCache(id);
 	}
 }
 

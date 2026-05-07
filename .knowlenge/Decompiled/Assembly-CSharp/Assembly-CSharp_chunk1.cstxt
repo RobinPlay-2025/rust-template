@@ -2,8 +2,8 @@ using System;
 using System.Runtime.CompilerServices;
 using Microsoft.CodeAnalysis;
 
-[CompilerGenerated]
 [Embedded]
+[CompilerGenerated]
 internal sealed class IsUnmanagedAttribute : Attribute
 {
 }
@@ -178,12 +178,23 @@ public sealed class AssertTrueForDuration : CustomYieldInstruction
 
 	public bool Failed { get; private set; }
 
+	public Exception Exception { get; private set; }
+
 	public override bool keepWaiting
 	{
 		get
 		{
-			if (!condition())
+			try
 			{
+				if (!condition())
+				{
+					Failed = true;
+					return false;
+				}
+			}
+			catch (Exception exception)
+			{
+				Exception = exception;
 				Failed = true;
 				return false;
 			}
@@ -239,16 +250,40 @@ public class WaitUntilWithTimeout : CustomYieldInstruction
 
 	private readonly Func<bool> condition;
 
-	public string Message { get; private set; }
+	private readonly string message;
+
+	private readonly Func<string> messageBuilder;
+
+	public string Message
+	{
+		get
+		{
+			if (messageBuilder == null)
+			{
+				return message;
+			}
+			return messageBuilder();
+		}
+	}
 
 	public bool TimedOut { get; private set; }
+
+	public Exception Exception { get; private set; }
 
 	public override bool keepWaiting
 	{
 		get
 		{
-			if (condition())
+			try
 			{
+				if (condition())
+				{
+					return false;
+				}
+			}
+			catch (Exception exception)
+			{
+				Exception = exception;
 				return false;
 			}
 			if (Time.time >= timeoutTime)
@@ -264,7 +299,74 @@ public class WaitUntilWithTimeout : CustomYieldInstruction
 	{
 		this.condition = condition;
 		timeoutTime = Time.time + timeoutSeconds;
-		Message = message;
+		this.message = message;
+	}
+
+	public WaitUntilWithTimeout(Func<bool> condition, float timeoutSeconds, Func<string> messageBuilder)
+	{
+		this.condition = condition;
+		timeoutTime = Time.time + timeoutSeconds;
+		this.messageBuilder = messageBuilder;
+	}
+}
+
+
+using Unity.Collections;
+using Unity.Jobs;
+using UnityEngine;
+using UtilityJobs;
+
+public class ScopedOcean
+{
+	private NativeArray<int> originalTopologyCopy;
+
+	public bool IsScoped { get; set; }
+
+	public void SetFlatOcean()
+	{
+		IsScoped = true;
+		SetupFlatOcean();
+	}
+
+	public void Restore()
+	{
+		if (IsScoped)
+		{
+			RevertOcean();
+		}
+	}
+
+	private void SetupFlatOcean()
+	{
+		//IL_0006: Unknown result type (might be due to invalid IL or missing references)
+		//IL_000c: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0011: Unknown result type (might be due to invalid IL or missing references)
+		//IL_002f: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0034: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0082: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0087: Unknown result type (might be due to invalid IL or missing references)
+		originalTopologyCopy = new NativeArray<int>(TerrainMeta.TopologyMap.src, (Allocator)4);
+		TerrainMeta.TopologyMap.Push();
+		FillJob<int> fillJob = default(FillJob<int>);
+		fillJob.Values = TerrainMeta.TopologyMap.dst;
+		fillJob.Value = 128;
+		FillJob<int> fillJob2 = fillJob;
+		IJobExtensions.RunByRef<FillJob<int>>(ref fillJob2);
+		TerrainMeta.TopologyMap.Pop();
+		TerrainMeta.Texturing.Setup();
+		ref TerrainTexturing.ShoreData mapByRef = ref TerrainMeta.Texturing.GetMapByRef(isDeepSea: false);
+		mapByRef.DefaultVector = new Vector4(1f, 1f, 1f, 1f);
+		mapByRef.FillWithDefault();
+	}
+
+	private void RevertOcean()
+	{
+		//IL_0015: Unknown result type (might be due to invalid IL or missing references)
+		TerrainMeta.TopologyMap.Push();
+		TerrainMeta.TopologyMap.dst.CopyFrom(originalTopologyCopy);
+		TerrainMeta.TopologyMap.Pop();
+		TerrainMeta.Texturing.Setup();
+		NativeArrayEx.SafeDispose<int>(ref originalTopologyCopy);
 	}
 }
 
@@ -330,6 +432,8 @@ public class TestParameterSourceAttribute : Attribute
 {
 	public string SourceName { get; private set; }
 
+	public bool FilterForCI { get; set; }
+
 	public TestParameterSourceAttribute(string sourceName)
 	{
 		SourceName = sourceName;
@@ -379,19 +483,38 @@ public class TestTimeoutAttribute : Attribute
 }
 
 
-public static class TestConfig
+using System;
+
+[AttributeUsage(AttributeTargets.Class | AttributeTargets.Method)]
+public class TestAllowsLoggedErrorsAttribute : Attribute
 {
-	public const string TESTLIST_PATH = "assets/automatedtests/testList/testlist.json";
+}
 
-	public const string PENDINGTESTS_PATH = "testresults/pendingtests.json";
 
-	public const string COPYPASTES_PATH = "Assets/AutomatedTests/CopyPastes";
+using System;
 
-	public const string TESTSCENE_PATH = "Assets/Scenes/Test/AutomatedTests.unity";
+[AttributeUsage(AttributeTargets.Class | AttributeTargets.Method)]
+public class TestExcludedFromCIAttribute : Attribute
+{
+}
 
-	public const string RESULTS_FOLDER = "testresults";
 
-	public const float DEFAULT_TEST_TIMEOUT_SECONDS = 30f;
+using UnityEngine;
+
+public class ServerProjectileTestSpawner : MonoBehaviour
+{
+}
+
+
+using UnityEngine;
+
+public abstract class TestScenarioPrefab : MonoBehaviour
+{
+}
+
+
+public class TestScenario_RocketSplashDamage : TestScenarioPrefab
+{
 }
 
 
@@ -946,8 +1069,8 @@ public class UI_CopyPaste : UI_Window
 	[SerializeField]
 	private RectTransform fileLinesParent;
 
-	[SerializeField]
 	[Space]
+	[SerializeField]
 	private GameObject gridModeButtonGo;
 
 	[SerializeField]
@@ -1056,6 +1179,9 @@ public class UI_CopyPasteOptionsPanel : MonoBehaviour
 
 	[SerializeField]
 	private RustButton foundationsOnlyToggle;
+
+	[SerializeField]
+	private RustButton autoAuthToggle;
 }
 
 
@@ -1103,8 +1229,8 @@ public abstract class UI_DevListBase : UI_Window
 	[SerializeField]
 	protected FlexVirtualScroll virtualScrollFlex;
 
-	[SerializeField]
 	[Space]
+	[SerializeField]
 	protected RustButton favouritesButton;
 
 	[SerializeField]
@@ -1250,8 +1376,8 @@ public class UI_ServerAdminUGCEntryAudio : UI_ServerAdminUGCEntry
 	[SerializeField]
 	private AudioSource audioSpeaker;
 
-	[SerializeField]
 	[Space]
+	[SerializeField]
 	private RustText playbackText;
 
 	[SerializeField]
@@ -1391,8 +1517,8 @@ public class UI_ServerAdmin : UI_Window
 {
 	public static UI_ServerAdmin Instance;
 
-	[SerializeField]
 	[Header("Player List")]
+	[SerializeField]
 	private GameObjectRef playerEntryPrefab;
 
 	[SerializeField]
@@ -1419,15 +1545,15 @@ public class UI_ServerAdmin : UI_Window
 	[SerializeField]
 	private RustInput playerListSearchInput;
 
-	[SerializeField]
 	[Header("Server Info")]
+	[SerializeField]
 	private GameObjectRef serverInfoEntryPrefab;
 
 	[SerializeField]
 	private RectTransform serverInfoParent;
 
-	[SerializeField]
 	[Header("Convars")]
+	[SerializeField]
 	private GameObjectRef convarInfoEntryPrefab;
 
 	[SerializeField]
@@ -1436,8 +1562,8 @@ public class UI_ServerAdmin : UI_Window
 	[SerializeField]
 	private RectTransform convarInfoParent;
 
-	[SerializeField]
 	[Header("UGC")]
+	[SerializeField]
 	private FlexVirtualScroll ugcVirtualScroll;
 
 	[SerializeField]
@@ -1497,8 +1623,8 @@ public class UI_ServerAdminPlayerEntry : MonoBehaviour
 	[SerializeField]
 	private RustText pingText;
 
-	[Space]
 	[SerializeField]
+	[Space]
 	private Color evenColor;
 
 	[SerializeField]
@@ -1779,8 +1905,8 @@ public class UI_DeveloperTools : UI_Window
 	[SerializeField]
 	private RectTransform tabContentParent;
 
-	[SerializeField]
 	[Space]
+	[SerializeField]
 	private Image blurImage;
 
 	[SerializeField]
@@ -1839,8 +1965,8 @@ using UnityEngine;
 
 public class UI_SystemInfo : UI_Window
 {
-	[SerializeField]
 	[Space]
+	[SerializeField]
 	private RustText systemText;
 
 	[SerializeField]
@@ -3981,8 +4107,8 @@ public class NexusFerrySounds : MonoBehaviour, IClientComponent
 	[SerializeField]
 	private Transform engineTransform;
 
-	[SerializeField]
 	[Header("Water")]
+	[SerializeField]
 	private SoundDefinition waterIdleDef;
 
 	[SerializeField]
@@ -4014,8 +4140,8 @@ public class NexusFerrySounds : MonoBehaviour, IClientComponent
 	[SerializeField]
 	private Vector3 sideSoundLineBow;
 
-	[Header("Dock")]
 	[SerializeField]
+	[Header("Dock")]
 	private SoundDefinition dockArrivalSoundDef;
 
 	[SerializeField]
@@ -4540,9 +4666,9 @@ public class PatternFirework : MortarFirework, IUGCBrowserEntity
 		ShellFuseLength = FuseLength.Medium;
 	}
 
+	[RPC_Server]
 	[RPC_Server.IsVisible(3f)]
 	[RPC_Server.CallsPerSecond(5uL)]
-	[RPC_Server]
 	private void StartOpenDesigner(RPCMessage rpc)
 	{
 		if (PlayerCanModify(rpc.player))
@@ -4551,10 +4677,10 @@ public class PatternFirework : MortarFirework, IUGCBrowserEntity
 		}
 	}
 
-	[RPC_Server.IsVisible(3f)]
 	[RPC_Server.CallsPerSecond(5uL)]
-	[RPC_Server.InputValidation(new Type[] { typeof(Design) })]
 	[RPC_Server]
+	[RPC_Server.InputValidation(new Type[] { typeof(Design) })]
+	[RPC_Server.IsVisible(3f)]
 	private void ServerSetFireworkDesign(RPCMessage rpc)
 	{
 		//IL_00d1: Unknown result type (might be due to invalid IL or missing references)
@@ -4595,9 +4721,9 @@ public class PatternFirework : MortarFirework, IUGCBrowserEntity
 		SendNetworkUpdateImmediate();
 	}
 
-	[RPC_Server.CallsPerSecond(5uL)]
-	[RPC_Server.IsVisible(3f)]
 	[RPC_Server]
+	[RPC_Server.IsVisible(3f)]
+	[RPC_Server.CallsPerSecond(5uL)]
 	private void SetShellFuseLength(RPCMessage rpc)
 	{
 		if (PlayerCanModify(rpc.player))
@@ -4685,7 +4811,7 @@ public class PatternFirework : MortarFirework, IUGCBrowserEntity
 				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
 				if (Global.developer > 2)
 				{
-					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - ServerSetFireworkDesign "));
+					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - ServerSetFireworkDesign"));
 				}
 				TimeWarning val2 = TimeWarning.New("ServerSetFireworkDesign", 0);
 				try
@@ -4757,7 +4883,7 @@ public class PatternFirework : MortarFirework, IUGCBrowserEntity
 				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
 				if (Global.developer > 2)
 				{
-					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - SetShellFuseLength "));
+					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - SetShellFuseLength"));
 				}
 				TimeWarning val2 = TimeWarning.New("SetShellFuseLength", 0);
 				try
@@ -4812,7 +4938,7 @@ public class PatternFirework : MortarFirework, IUGCBrowserEntity
 				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
 				if (Global.developer > 2)
 				{
-					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - StartOpenDesigner "));
+					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - StartOpenDesigner"));
 				}
 				TimeWarning val2 = TimeWarning.New("StartOpenDesigner", 0);
 				try
@@ -4893,8 +5019,8 @@ public class PatternFireworkShell : FireworkShell
 
 	public float Scale = 5f;
 
-	[Header("Random Design")]
 	[MinMax(0f, 1f)]
+	[Header("Random Design")]
 	public MinMax RandomSaturation = new MinMax(0f, 0.5f);
 
 	[MinMax(0f, 1f)]
@@ -5062,8 +5188,8 @@ public class FogMachine : ContainerIOEntity, IAlwaysOn
 		}
 	}
 
-	[RPC_Server]
 	[RPC_Server.IsVisible(3f)]
+	[RPC_Server]
 	public void SetFogOff(RPCMessage msg)
 	{
 		if (IsOn() && msg.player.CanBuild())
@@ -5073,8 +5199,8 @@ public class FogMachine : ContainerIOEntity, IAlwaysOn
 		}
 	}
 
-	[RPC_Server.IsVisible(3f)]
 	[RPC_Server]
+	[RPC_Server.IsVisible(3f)]
 	public void SetMotionDetection(RPCMessage msg)
 	{
 		bool flag = msg.read.Bit();
@@ -5330,7 +5456,7 @@ public class FogMachine : ContainerIOEntity, IAlwaysOn
 				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
 				if (Global.developer > 2)
 				{
-					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - SetFogOff "));
+					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - SetFogOff"));
 				}
 				TimeWarning val2 = TimeWarning.New("SetFogOff", 0);
 				try
@@ -5381,7 +5507,7 @@ public class FogMachine : ContainerIOEntity, IAlwaysOn
 				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
 				if (Global.developer > 2)
 				{
-					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - SetFogOn "));
+					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - SetFogOn"));
 				}
 				TimeWarning val2 = TimeWarning.New("SetFogOn", 0);
 				try
@@ -5432,7 +5558,7 @@ public class FogMachine : ContainerIOEntity, IAlwaysOn
 				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
 				if (Global.developer > 2)
 				{
-					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - SetMotionDetection "));
+					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - SetMotionDetection"));
 				}
 				TimeWarning val2 = TimeWarning.New("SetMotionDetection", 0);
 				try
@@ -5538,8 +5664,8 @@ public class StrobeLight : IOEntity
 		return speedSlow;
 	}
 
-	[RPC_Server]
 	[RPC_Server.IsVisible(3f)]
+	[RPC_Server]
 	public void SetStrobe(RPCMessage msg)
 	{
 		bool strobe = msg.read.Bit();
@@ -5555,8 +5681,8 @@ public class StrobeLight : IOEntity
 		}
 	}
 
-	[RPC_Server.IsVisible(3f)]
 	[RPC_Server]
+	[RPC_Server.IsVisible(3f)]
 	public void SetStrobeSpeed(RPCMessage msg)
 	{
 		int num = msg.read.Int32();
@@ -5637,7 +5763,7 @@ public class StrobeLight : IOEntity
 				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
 				if (Global.developer > 2)
 				{
-					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - SetStrobe "));
+					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - SetStrobe"));
 				}
 				TimeWarning val2 = TimeWarning.New("SetStrobe", 0);
 				try
@@ -5688,7 +5814,7 @@ public class StrobeLight : IOEntity
 				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
 				if (Global.developer > 2)
 				{
-					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - SetStrobeSpeed "));
+					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - SetStrobeSpeed"));
 				}
 				TimeWarning val2 = TimeWarning.New("SetStrobeSpeed", 0);
 				try
@@ -5770,8 +5896,8 @@ public class CoalingTower : IOEntity, INotifyEntityTrigger
 		TrainHasThrottle
 	}
 
-	[SerializeField]
 	[Header("Coaling Tower")]
+	[SerializeField]
 	private BoxCollider unloadingBounds;
 
 	[SerializeField]
@@ -5830,8 +5956,8 @@ public class CoalingTower : IOEntity, INotifyEntityTrigger
 	[SerializeField]
 	private TokenisedPhrase trainHasThrottle;
 
-	[SerializeField]
 	[Header("Coaling Tower Audio")]
+	[SerializeField]
 	private GameObject buttonSoundPos;
 
 	[SerializeField]
@@ -6452,8 +6578,8 @@ public class CoalingTower : IOEntity, INotifyEntityTrigger
 		}
 	}
 
-	[RPC_Server.MaxDistance(3f)]
 	[RPC_Server]
+	[RPC_Server.MaxDistance(3f)]
 	private void RPC_Next(RPCMessage msg)
 	{
 		if (TryShuntTrain(next: true, out var attemptStatus))
@@ -6490,7 +6616,7 @@ public class CoalingTower : IOEntity, INotifyEntityTrigger
 				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
 				if (Global.developer > 2)
 				{
-					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - RPC_Next "));
+					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - RPC_Next"));
 				}
 				TimeWarning val2 = TimeWarning.New("RPC_Next", 0);
 				try
@@ -6541,7 +6667,7 @@ public class CoalingTower : IOEntity, INotifyEntityTrigger
 				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
 				if (Global.developer > 2)
 				{
-					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - RPC_Prev "));
+					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - RPC_Prev"));
 				}
 				TimeWarning val2 = TimeWarning.New("RPC_Prev", 0);
 				try
@@ -6592,7 +6718,7 @@ public class CoalingTower : IOEntity, INotifyEntityTrigger
 				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
 				if (Global.developer > 2)
 				{
-					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - RPC_Unload "));
+					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - RPC_Unload"));
 				}
 				TimeWarning val2 = TimeWarning.New("RPC_Unload", 0);
 				try
@@ -8693,8 +8819,8 @@ using UnityEngine;
 
 public class RHIBVisuals : FacepunchBehaviour, INotifyLOD, IClientComponent
 {
-	[SerializeField]
 	[Header("RHIB")]
+	[SerializeField]
 	private RHIB _owner;
 
 	[Header("References")]
