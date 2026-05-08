@@ -1,4 +1,135 @@
 using System;
+using System.Linq;
+using System.Threading.Tasks;
+using ConVar;
+using Network;
+using Oxide.Core;
+using UnityEngine;
+using UnityEngine.Assertions;
+
+public class SteamInventory : EntityComponent<BasePlayer>
+{
+	public IPlayerItem[] Items;
+
+	public override bool OnRpcMessage(BasePlayer player, uint rpc, Message msg)
+	{
+		TimeWarning val = TimeWarning.New("SteamInventory.OnRpcMessage", 0);
+		try
+		{
+			if (rpc == 643458331 && (Object)(object)player != (Object)null)
+			{
+				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
+				if (Global.developer > 2)
+				{
+					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - UpdateSteamInventory"));
+				}
+				TimeWarning val2 = TimeWarning.New("UpdateSteamInventory", 0);
+				try
+				{
+					TimeWarning val3 = TimeWarning.New("Conditions", 0);
+					try
+					{
+						if (!BaseEntity.RPC_Server.FromOwner.Test(643458331u, "UpdateSteamInventory", GetBaseEntity(), player))
+						{
+							return true;
+						}
+					}
+					finally
+					{
+						((IDisposable)val3)?.Dispose();
+					}
+					try
+					{
+						val3 = TimeWarning.New("Call", 0);
+						try
+						{
+							BaseEntity.RPCMessage rPCMessage = default(BaseEntity.RPCMessage);
+							rPCMessage.connection = msg.connection;
+							rPCMessage.player = player;
+							rPCMessage.read = msg.read;
+							BaseEntity.RPCMessage msg2 = rPCMessage;
+							UpdateSteamInventory(msg2);
+						}
+						finally
+						{
+							((IDisposable)val3)?.Dispose();
+						}
+					}
+					catch (Exception ex)
+					{
+						Debug.LogException(ex);
+						player.Kick("RPC Error in UpdateSteamInventory");
+					}
+				}
+				finally
+				{
+					((IDisposable)val2)?.Dispose();
+				}
+				return true;
+			}
+		}
+		finally
+		{
+			((IDisposable)val)?.Dispose();
+		}
+		return base.OnRpcMessage(player, rpc, msg);
+	}
+
+	public bool HasItem(int itemid)
+	{
+		if (!base.baseEntity.DefaultSkinAccess)
+		{
+			return base.baseEntity.AllSkinsUnlocked;
+		}
+		if (Items == null)
+		{
+			return false;
+		}
+		IPlayerItem[] items = Items;
+		for (int i = 0; i < items.Length; i++)
+		{
+			if (items[i].DefinitionId == itemid)
+			{
+				return true;
+			}
+		}
+		return false;
+	}
+
+	[BaseEntity.RPC_Server.FromOwner]
+	[BaseEntity.RPC_Server]
+	private async Task UpdateSteamInventory(BaseEntity.RPCMessage msg)
+	{
+		byte[] array = msg.read.BytesWithSize(10485760u, false);
+		if (array == null)
+		{
+			Debug.LogWarning((object)"UpdateSteamInventory: Data is null");
+			return;
+		}
+		IPlayerInventory val = await PlatformService.Instance.DeserializeInventory(array);
+		if (val == null)
+		{
+			Debug.LogWarning((object)"UpdateSteamInventory: result is null");
+		}
+		else if ((Object)(object)base.baseEntity == (Object)null)
+		{
+			Debug.LogWarning((object)"UpdateSteamInventory: player is null");
+		}
+		else if (!val.BelongsTo((ulong)base.baseEntity.userID))
+		{
+			Debug.LogWarning((object)$"UpdateSteamPlayer: inventory belongs to someone else (userID={base.baseEntity.userID.Get()})");
+		}
+		else if (Object.op_Implicit((Object)(object)((Component)this).gameObject))
+		{
+			Items = val.Items.ToArray();
+			Interface.CallHook("OnSteamInventoryUpdated", (object)this);
+			((IDisposable)val).Dispose();
+		}
+	}
+}
+
+
+using System;
 using System.IO;
 using System.Runtime.CompilerServices;
 using ConVar;
@@ -611,9 +742,9 @@ public class SteeringWheel : BaseMountable, IBoatBuildingPiece
 		}
 	}
 
+	[RPC_Server.IsVisible(3f)]
 	[RPC_Server.MaxDistance(3f)]
 	[RPC_Server]
-	[RPC_Server.IsVisible(3f)]
 	public void RPC_RequestAddLock(RPCMessage msg)
 	{
 		if (!BoatLock.HasALock)
@@ -628,8 +759,8 @@ public class SteeringWheel : BaseMountable, IBoatBuildingPiece
 		}
 	}
 
-	[RPC_Server.MaxDistance(3f)]
 	[RPC_Server]
+	[RPC_Server.MaxDistance(3f)]
 	public void RPC_TryMountWithKeycode(RPCMessage msg)
 	{
 		BasePlayer player = msg.player;
@@ -707,8 +838,8 @@ public class SteeringWheel : BaseMountable, IBoatBuildingPiece
 	}
 
 	[RPC_Server.CallsPerSecond(3uL)]
-	[RPC_Server]
 	[RPC_Server.IsVisible(3f)]
+	[RPC_Server]
 	public void RequestFinishBuilding(RPCMessage msg)
 	{
 		//IL_0029: Unknown result type (might be due to invalid IL or missing references)
@@ -724,9 +855,9 @@ public class SteeringWheel : BaseMountable, IBoatBuildingPiece
 		}
 	}
 
-	[RPC_Server]
-	[RPC_Server.IsVisible(3f)]
 	[RPC_Server.CallsPerSecond(3uL)]
+	[RPC_Server.IsVisible(3f)]
+	[RPC_Server]
 	public void RequestFinishBuildingFromWheel(RPCMessage msg)
 	{
 		//IL_0017: Unknown result type (might be due to invalid IL or missing references)
@@ -760,8 +891,8 @@ public class SteeringWheel : BaseMountable, IBoatBuildingPiece
 	}
 
 	[RPC_Server.IsVisible(3f)]
-	[RPC_Server.CallsPerSecond(3uL)]
 	[RPC_Server]
+	[RPC_Server.CallsPerSecond(3uL)]
 	public void RequestEditBoat(RPCMessage msg)
 	{
 		//IL_0029: Unknown result type (might be due to invalid IL or missing references)
@@ -781,9 +912,9 @@ public class SteeringWheel : BaseMountable, IBoatBuildingPiece
 		}
 	}
 
-	[RPC_Server.CallsPerSecond(3uL)]
 	[RPC_Server.IsVisible(3f)]
 	[RPC_Server]
+	[RPC_Server.CallsPerSecond(3uL)]
 	public void RequestDeployAndEditBoat(RPCMessage msg)
 	{
 		//IL_0028: Unknown result type (might be due to invalid IL or missing references)
@@ -813,9 +944,9 @@ public class SteeringWheel : BaseMountable, IBoatBuildingPiece
 	}
 
 	[RPC_Server]
+	[RPC_Server.IsVisible(3f)]
 	[RPC_Server.CallsPerSecond(15uL)]
 	[RPC_Server.InputValidation(new Type[] { typeof(float) })]
-	[RPC_Server.IsVisible(3f)]
 	public void ReceiveClientRotation(RPCMessage msg)
 	{
 		if (!((Object)(object)msg.player == (Object)null) && !((Object)(object)GetMounted() != (Object)(object)msg.player) && !((Object)(object)ParentBoat == (Object)null))
@@ -1356,8 +1487,8 @@ public class StorageContainer : DecayEntity, IItemContainerEntity, IIdealSlotEnt
 		}
 	}
 
-	[RPC_Server.IsVisible(3f)]
 	[RPC_Server]
+	[RPC_Server.IsVisible(3f)]
 	private void RPC_OpenLoot(RPCMessage rpc)
 	{
 		if (isLootable)
@@ -2178,8 +2309,8 @@ public class StringLights : IOEntity
 		}
 	}
 
-	[RPC_Server]
 	[RPC_Server.CallsPerSecond(3uL)]
+	[RPC_Server]
 	public void SERVER_AddPoint(RPCMessage msg)
 	{
 		//IL_001c: Unknown result type (might be due to invalid IL or missing references)
@@ -3328,8 +3459,8 @@ public class Telephone : ContainerIOEntity, ICassettePlayer
 		Controller.ClearCurrentUser(msg);
 	}
 
-	[RPC_Server]
 	[RPC_Server.MaxDistance(3f)]
+	[RPC_Server]
 	public void SetCurrentUser(RPCMessage msg)
 	{
 		Controller.SetCurrentUser(msg);
@@ -3384,48 +3515,48 @@ public class Telephone : ContainerIOEntity, ICassettePlayer
 		return false;
 	}
 
-	[RPC_Server.CallsPerSecond(5uL)]
-	[RPC_Server.MaxDistance(3f)]
 	[RPC_Server]
+	[RPC_Server.MaxDistance(3f)]
+	[RPC_Server.CallsPerSecond(5uL)]
 	public void UpdatePhoneName(RPCMessage msg)
 	{
 		Controller.UpdatePhoneName(msg);
 	}
 
-	[RPC_Server]
-	[RPC_Server.MaxDistance(3f)]
 	[RPC_Server.CallsPerSecond(5uL)]
+	[RPC_Server.MaxDistance(3f)]
+	[RPC_Server]
 	public void Server_RequestPhoneDirectory(RPCMessage msg)
 	{
 		Controller.Server_RequestPhoneDirectory(msg);
 	}
 
 	[RPC_Server.CallsPerSecond(5uL)]
-	[RPC_Server.MaxDistance(3f)]
 	[RPC_Server]
+	[RPC_Server.MaxDistance(3f)]
 	public void Server_AddSavedNumber(RPCMessage msg)
 	{
 		Controller.Server_AddSavedNumber(msg);
 	}
 
 	[RPC_Server.CallsPerSecond(5uL)]
-	[RPC_Server.MaxDistance(3f)]
 	[RPC_Server]
+	[RPC_Server.MaxDistance(3f)]
 	public void Server_RemoveSavedNumber(RPCMessage msg)
 	{
 		Controller.Server_RemoveSavedNumber(msg);
 	}
 
-	[RPC_Server.CallsPerSecond(5uL)]
 	[RPC_Server]
+	[RPC_Server.CallsPerSecond(5uL)]
 	public void ServerSendVoicemail(RPCMessage msg)
 	{
 		Controller.ServerSendVoicemail(msg);
 	}
 
 	[RPC_Server.IsVisible(3f)]
-	[RPC_Server.CallsPerSecond(5uL)]
 	[RPC_Server]
+	[RPC_Server.CallsPerSecond(5uL)]
 	public void ServerPlayVoicemail(RPCMessage msg)
 	{
 		Controller.ServerPlayVoicemail(msg);
@@ -3439,8 +3570,8 @@ public class Telephone : ContainerIOEntity, ICassettePlayer
 		Controller.ServerStopVoicemail(msg);
 	}
 
-	[RPC_Server.IsVisible(3f)]
 	[RPC_Server]
+	[RPC_Server.IsVisible(3f)]
 	[RPC_Server.CallsPerSecond(5uL)]
 	public void ServerDeleteVoicemail(RPCMessage msg)
 	{
@@ -4283,8 +4414,8 @@ public class ThrownWeapon : AttackEntity
 		}
 	}
 
-	[RPC_Server]
 	[RPC_Server.IsActiveItem]
+	[RPC_Server]
 	private void DoDrop(RPCMessage msg)
 	{
 		//IL_0043: Unknown result type (might be due to invalid IL or missing references)
@@ -4537,8 +4668,8 @@ public class TimerSwitch : IOEntity
 		}
 	}
 
-	[RPC_Server.IsVisible(3f)]
 	[RPC_Server]
+	[RPC_Server.IsVisible(3f)]
 	public void SVSwitch(RPCMessage msg)
 	{
 		SwitchPressed();
@@ -4972,8 +5103,8 @@ public class TinCanAlarm : StorageContainer, IDetector
 		}
 	}
 
-	[RPC_Server.MaxDistance(3f)]
 	[RPC_Server]
+	[RPC_Server.MaxDistance(3f)]
 	public void SERVER_StartArming(RPCMessage msg)
 	{
 		BasePlayer player = msg.player;
@@ -5792,8 +5923,8 @@ public class TorchWeapon : BaseMelee
 		}
 	}
 
-	[RPC_Server.IsActiveItem]
 	[RPC_Server]
+	[RPC_Server.IsActiveItem]
 	private void Extinguish(RPCMessage msg)
 	{
 		if (msg.player.CanInteract())
@@ -11729,8 +11860,8 @@ public class TreeManager : BaseEntity
 		RustLog.Log(RustLog.EntryType.Network, 1, ((Component)player).gameObject, "Took {0}ms to send {1} global trees to {2}", stopwatch.Elapsed.TotalMilliseconds, values.Count, player);
 	}
 
-	[RPC_Server.CallsPerSecond(0uL)]
 	[RPC_Server]
+	[RPC_Server.CallsPerSecond(0uL)]
 	private void SERVER_RequestTrees(RPCMessage msg)
 	{
 		if (EnableTreeStreaming)
@@ -13422,8 +13553,8 @@ public class VehicleModuleCamper : VehicleModuleSeating
 		info.msg.camperModule.storageID = activeStorage.uid;
 	}
 
-	[RPC_Server]
 	[RPC_Server.MaxDistance(3f)]
+	[RPC_Server]
 	public void RPC_OpenLocker(RPCMessage msg)
 	{
 		BasePlayer player = msg.player;
@@ -13441,8 +13572,8 @@ public class VehicleModuleCamper : VehicleModuleSeating
 		}
 	}
 
-	[RPC_Server]
 	[RPC_Server.MaxDistance(3f)]
+	[RPC_Server]
 	public void RPC_OpenStorage(RPCMessage msg)
 	{
 		BasePlayer player = msg.player;
@@ -13905,8 +14036,8 @@ public class VehicleModuleSeating : BaseVehicleModule, IPrefabPreProcess
 		}
 	}
 
-	[RPC_Server]
 	[RPC_Server.MaxDistance(3f)]
+	[RPC_Server]
 	public void RPC_DestroyLock(RPCMessage msg)
 	{
 		BasePlayer player = msg.player;
@@ -14295,8 +14426,8 @@ public class VehicleModuleStorage : VehicleModuleSeating
 		return StorageCantBeMovedError;
 	}
 
-	[RPC_Server]
 	[RPC_Server.MaxDistance(3f)]
+	[RPC_Server]
 	public void RPC_TryOpenWithKeycode(RPCMessage msg)
 	{
 		if (!base.IsOnACar)
@@ -14769,8 +14900,8 @@ public class VehiclePrivilege : SimplePrivilege
 		return baseVehicle.IsDriver(player);
 	}
 
-	[RPC_Server]
 	[RPC_Server.MaxDistance(3f)]
+	[RPC_Server]
 	private void AddSelfAuthorize(RPCMessage rpc)
 	{
 		if (rpc.player.CanInteract() && CanModifyAuth(rpc.player) && Interface.CallHook("OnCupboardAuthorize", (object)this, (object)rpc.player) == null)
@@ -16222,9 +16353,9 @@ public class VendingMachine : ContainerIOEntity, IUGCBrowserEntity, IFoodSpoilMo
 		ClientRPC(RpcTarget.NetworkGroup("CLIENT_CancelVendingSounds"));
 	}
 
-	[RPC_Server]
-	[RPC_Server.IsVisible(3f)]
 	[RPC_Server.CallsPerSecond(5uL)]
+	[RPC_Server.IsVisible(3f)]
+	[RPC_Server]
 	public void BuyItem(RPCMessage rpc)
 	{
 		//IL_00a7: Unknown result type (might be due to invalid IL or missing references)
@@ -16748,8 +16879,8 @@ public class VendingMachine : ContainerIOEntity, IUGCBrowserEntity, IFoodSpoilMo
 		SendSellOrders(player);
 	}
 
-	[RPC_Server]
 	[RPC_Server.IsVisible(3f)]
+	[RPC_Server]
 	public void RPC_MoveSellOrder(RPCMessage msg)
 	{
 		BasePlayer player = msg.player;
@@ -18655,8 +18786,8 @@ public class WallpaperPlanner : Planner
 
 	[RPC_Server.CallsPerSecond(3uL)]
 	[RPC_Server.FromOwner]
-	[RPC_Server.IsActiveItem]
 	[RPC_Server]
+	[RPC_Server.IsActiveItem]
 	private void SERVER_ChangeWallpaperToolSkin(RPCMessage msg)
 	{
 		int num = msg.read.Int32();
@@ -18930,8 +19061,8 @@ public class WantedPoster : DecayEntity, ISignage, IUGCBrowserEntity, ILOD, ISer
 	}
 
 	[RPC_Server.CallsPerSecond(5uL)]
-	[RPC_Server.IsVisible(3f)]
 	[RPC_Server]
+	[RPC_Server.IsVisible(3f)]
 	private void UpdatePoster(RPCMessage msg)
 	{
 		//IL_008c: Unknown result type (might be due to invalid IL or missing references)
@@ -18970,8 +19101,8 @@ public class WantedPoster : DecayEntity, ISignage, IUGCBrowserEntity, ILOD, ISer
 		SendNetworkUpdate();
 	}
 
-	[RPC_Server]
 	[RPC_Server.IsVisible(3f)]
+	[RPC_Server]
 	[RPC_Server.CallsPerSecond(5uL)]
 	private void ClearPlayer(RPCMessage msg)
 	{
@@ -19596,8 +19727,8 @@ public class WaterWell : LiquidContainer
 		SetFlag(Flags.Reserved3, b: false);
 	}
 
-	[RPC_Server]
 	[RPC_Server.MaxDistance(3f)]
+	[RPC_Server]
 	public void RPC_Pump(RPCMessage msg)
 	{
 		BasePlayer player = msg.player;
@@ -20672,8 +20803,8 @@ public class WeaponRack : StorageContainer
 	}
 
 	[RPC_Server]
-	[RPC_Server.MaxDistance(2f)]
 	[RPC_Server.IsVisible(3f)]
+	[RPC_Server.MaxDistance(2f)]
 	private void ReqUnloadWeapon(RPCMessage msg)
 	{
 		int num = msg.read.Int32();
@@ -20748,9 +20879,9 @@ public class WeaponRack : StorageContainer
 		}
 	}
 
+	[RPC_Server]
 	[RPC_Server.MaxDistance(2f)]
 	[RPC_Server.IsVisible(3f)]
-	[RPC_Server]
 	private void ReqMountBackSlot(RPCMessage msg)
 	{
 		if (base.inventory.itemList.Count != base.inventory.capacity)
@@ -21960,8 +22091,8 @@ public class WipeLaptopEntity : BaseEntity
 	{
 	}
 
-	[RPC_Server]
 	[RPC_Server.IsVisible(5f)]
+	[RPC_Server]
 	public void DefuseLaptop(RPCMessage msg)
 	{
 		if (msg.read.Int32() == 3 && IsArmed())
@@ -22403,11 +22534,11 @@ public class WireTool : HeldEntity
 		}
 	}
 
-	[RPC_Server.FromOwner]
+	[RPC_Server.InputValidation(new Type[] { typeof(WireConnectionMessage) })]
 	[RPC_Server]
 	[RPC_Server.IsActiveItem]
+	[RPC_Server.FromOwner]
 	[RPC_Server.CallsPerSecond(5uL)]
-	[RPC_Server.InputValidation(new Type[] { typeof(WireConnectionMessage) })]
 	public void RPC_MakeConnection(RPCMessage rpc)
 	{
 		//IL_003a: Unknown result type (might be due to invalid IL or missing references)
@@ -22684,8 +22815,8 @@ public class WireTool : HeldEntity
 		}
 	}
 
-	[RPC_Server.IsActiveItem]
 	[RPC_Server]
+	[RPC_Server.IsActiveItem]
 	[RPC_Server.FromOwner]
 	[RPC_Server.CallsPerSecond(5uL)]
 	public void RPC_RequestChangeColor(RPCMessage msg)
@@ -24133,8 +24264,8 @@ public class Workbench : StorageContainer
 		return num;
 	}
 
-	[RPC_Server.IsVisible(3f)]
 	[RPC_Server]
+	[RPC_Server.IsVisible(3f)]
 	public void RPC_SendTechTreeMultiplier(RPCMessage msg)
 	{
 		ClientRPC(RpcTarget.Player("RPC_TechTreeMultiplier", msg.player), GetTechTreeCostMultiplier());
@@ -25453,8 +25584,8 @@ public class ZiplineLaunchPoint : BaseEntity
 	}
 
 	[RPC_Server.CallsPerSecond(2uL)]
-	[RPC_Server.IsVisible(3f)]
 	[RPC_Server]
+	[RPC_Server.IsVisible(3f)]
 	public void MountPlayer(RPCMessage msg)
 	{
 		//IL_0032: Unknown result type (might be due to invalid IL or missing references)
