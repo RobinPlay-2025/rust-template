@@ -1,5 +1,349 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
+using ConVar;
+using Facepunch;
+using Facepunch.Sqlite;
+using Ionic.Crc;
+using ProtoBuf;
+using UnityEngine.Assertions;
+
+public class FileStorage : IDisposable
+{
+	private class CacheData
+	{
+		public byte[] data;
+
+		public NetworkableId entityID;
+
+		public uint numID;
+	}
+
+	public enum Type
+	{
+		png,
+		jpg,
+		ogg,
+		sculpt
+	}
+
+	private class FileDatabase : Database
+	{
+		public IEnumerable<AssociatedFile> QueryAll(NetworkableId entityID)
+		{
+			//IL_000e: Unknown result type (might be due to invalid IL or missing references)
+			IntPtr intPtr = ((Database)this).Prepare("SELECT filetype, crc, part, data FROM data WHERE entid = ?");
+			Database.Bind<long>(intPtr, 1, (long)entityID.Value);
+			return ((Database)this).ExecuteAndReadQueryResults<AssociatedFile>(intPtr, (Func<IntPtr, AssociatedFile>)ReadAssociatedFileRow);
+		}
+
+		private static AssociatedFile ReadAssociatedFileRow(IntPtr stmHandle)
+		{
+			AssociatedFile obj = Pool.Get<AssociatedFile>();
+			obj.type = Database.GetColumnValue<int>(stmHandle, 0);
+			obj.crc = (uint)Database.GetColumnValue<int>(stmHandle, 1);
+			obj.numID = (uint)Database.GetColumnValue<int>(stmHandle, 2);
+			obj.data = Database.GetColumnValue<byte[]>(stmHandle, 3);
+			return obj;
+		}
+	}
+
+	private FileDatabase db;
+
+	private CRC32 crc = new CRC32();
+
+	private MruDictionary<uint, CacheData> _cache = new MruDictionary<uint, CacheData>(1000, (Action<uint, CacheData>)null);
+
+	public static FileStorage server = new FileStorage("sv.files." + 284, server: true);
+
+	private string filePath = string.Empty;
+
+	protected FileStorage(string name, bool server)
+	{
+		//IL_0001: Unknown result type (might be due to invalid IL or missing references)
+		//IL_000b: Expected O, but got Unknown
+		if (server)
+		{
+			string text = (filePath = Server.filesStorageFolder + "/" + name + ".db");
+			db = new FileDatabase();
+			((Database)db).Open(text, true);
+			if (!((Database)db).TableExists("data"))
+			{
+				((Database)db).Execute("CREATE TABLE data ( crc INTEGER PRIMARY KEY, data BLOB, updated INTEGER, entid INTEGER, filetype INTEGER, part INTEGER )");
+				((Database)db).Execute("CREATE INDEX IF NOT EXISTS entindex ON data ( entid )");
+			}
+		}
+	}
+
+	~FileStorage()
+	{
+		Dispose();
+	}
+
+	public void Dispose()
+	{
+		if (db != null)
+		{
+			((Database)db).Close();
+			db = null;
+		}
+	}
+
+	private uint GetCRC(byte[] data, Type type)
+	{
+		TimeWarning val = TimeWarning.New("FileStorage.GetCRC", 0);
+		try
+		{
+			crc.Reset();
+			crc.SlurpBlock(data, 0, data.Length);
+			crc.UpdateCRC((byte)type);
+			return (uint)crc.Crc32Result;
+		}
+		finally
+		{
+			((IDisposable)val)?.Dispose();
+		}
+	}
+
+	public uint Store(byte[] data, Type type, NetworkableId entityID, uint numID = 0u)
+	{
+		//IL_0058: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0059: Unknown result type (might be due to invalid IL or missing references)
+		//IL_002a: Unknown result type (might be due to invalid IL or missing references)
+		TimeWarning val = TimeWarning.New("FileStorage.Store", 0);
+		try
+		{
+			uint cRC = GetCRC(data, type);
+			if (db != null)
+			{
+				((Database)db).Execute<int, byte[], long, int, int>("INSERT OR REPLACE INTO data ( crc, data, entid, filetype, part ) VALUES ( ?, ?, ?, ?, ? )", (int)cRC, data, (long)entityID.Value, (int)type, (int)numID);
+			}
+			_cache.Remove(cRC);
+			_cache.Add(cRC, new CacheData
+			{
+				data = data,
+				entityID = entityID,
+				numID = numID
+			});
+			return cRC;
+		}
+		finally
+		{
+			((IDisposable)val)?.Dispose();
+		}
+	}
+
+	public byte[] Get(uint crc, Type type, NetworkableId entityID, uint numID = 0u)
+	{
+		//IL_0051: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0086: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0087: Unknown result type (might be due to invalid IL or missing references)
+		TimeWarning val = TimeWarning.New("FileStorage.Get", 0);
+		try
+		{
+			CacheData cacheData = default(CacheData);
+			if (_cache.TryGetValue(crc, ref cacheData))
+			{
+				Assert.IsTrue(cacheData.data != null, "FileStorage cache contains a null texture");
+				return cacheData.data;
+			}
+			if (db == null)
+			{
+				return null;
+			}
+			byte[] array = ((Database)db).Query<byte[], int, int, long, int>("SELECT data FROM data WHERE crc = ? AND filetype = ? AND entid = ? AND part = ? LIMIT 1", (int)crc, (int)type, (long)entityID.Value, (int)numID);
+			if (array == null)
+			{
+				return null;
+			}
+			_cache.Remove(crc);
+			_cache.Add(crc, new CacheData
+			{
+				data = array,
+				entityID = entityID,
+				numID = 0u
+			});
+			return array;
+		}
+		finally
+		{
+			((IDisposable)val)?.Dispose();
+		}
+	}
+
+	public void Remove(uint crc, Type type, NetworkableId entityID)
+	{
+		//IL_0021: Unknown result type (might be due to invalid IL or missing references)
+		TimeWarning val = TimeWarning.New("FileStorage.Remove", 0);
+		try
+		{
+			if (db != null)
+			{
+				((Database)db).Execute<int, int, long>("DELETE FROM data WHERE crc = ? AND filetype = ? AND entid = ?", (int)crc, (int)type, (long)entityID.Value);
+			}
+			_cache.Remove(crc);
+		}
+		finally
+		{
+			((IDisposable)val)?.Dispose();
+		}
+	}
+
+	public void RemoveExact(uint crc, Type type, NetworkableId entityID, uint numid)
+	{
+		//IL_0021: Unknown result type (might be due to invalid IL or missing references)
+		TimeWarning val = TimeWarning.New("FileStorage.RemoveExact", 0);
+		try
+		{
+			if (db != null)
+			{
+				((Database)db).Execute<int, int, long, int>("DELETE FROM data WHERE crc = ? AND filetype = ? AND entid = ? AND part = ?", (int)crc, (int)type, (long)entityID.Value, (int)numid);
+			}
+			_cache.Remove(crc);
+		}
+		finally
+		{
+			((IDisposable)val)?.Dispose();
+		}
+	}
+
+	public void RemoveEntityNum(NetworkableId entityid, uint numid)
+	{
+		//IL_0007: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0008: Unknown result type (might be due to invalid IL or missing references)
+		TimeWarning val = TimeWarning.New("FileStorage.RemoveEntityNum", 0);
+		try
+		{
+			if (db != null)
+			{
+				((Database)db).Execute<long, int>("DELETE FROM data WHERE entid = ? AND part = ?", (long)entityid.Value, (int)numid);
+			}
+			uint[] array = (from x in (IEnumerable<KeyValuePair<uint, CacheData>>)_cache
+				where x.Value.entityID == entityid && x.Value.numID == numid
+				select x.Key).ToArray();
+			foreach (uint num in array)
+			{
+				_cache.Remove(num);
+			}
+		}
+		finally
+		{
+			((IDisposable)val)?.Dispose();
+		}
+	}
+
+	public void RemoveAllByEntity(NetworkableId entityid)
+	{
+		//IL_0007: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0008: Unknown result type (might be due to invalid IL or missing references)
+		TimeWarning val = TimeWarning.New("FileStorage.RemoveAllByEntity", 0);
+		try
+		{
+			if (db != null)
+			{
+				((Database)db).Execute<long>("DELETE FROM data WHERE entid = ?", (long)entityid.Value);
+			}
+			uint[] array = (from x in (IEnumerable<KeyValuePair<uint, CacheData>>)_cache
+				where x.Value.entityID == entityid
+				select x.Key).ToArray();
+			foreach (uint num in array)
+			{
+				_cache.Remove(num);
+			}
+		}
+		finally
+		{
+			((IDisposable)val)?.Dispose();
+		}
+	}
+
+	public void ReassignEntityId(NetworkableId oldId, NetworkableId newId)
+	{
+		//IL_001f: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0025: Unknown result type (might be due to invalid IL or missing references)
+		TimeWarning val = TimeWarning.New("FileStorage.ReassignEntityId", 0);
+		try
+		{
+			if (db != null)
+			{
+				((Database)db).Execute<long, long>("UPDATE data SET entid = ? WHERE entid = ?", (long)newId.Value, (long)oldId.Value);
+			}
+		}
+		finally
+		{
+			((IDisposable)val)?.Dispose();
+		}
+	}
+
+	public IEnumerable<AssociatedFile> QueryAllByEntity(NetworkableId entityID)
+	{
+		//IL_0006: Unknown result type (might be due to invalid IL or missing references)
+		return db.QueryAll(entityID);
+	}
+
+	public bool IsEntityInFileStorage(NetworkableId id)
+	{
+		//IL_0007: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0008: Unknown result type (might be due to invalid IL or missing references)
+		//IL_002b: Unknown result type (might be due to invalid IL or missing references)
+		if (((IEnumerable<KeyValuePair<uint, CacheData>>)_cache).Count((KeyValuePair<uint, CacheData> x) => x.Value.entityID == id) > 0)
+		{
+			return true;
+		}
+		return QueryAllByEntity(id).Count() > 0;
+	}
+}
+
+
+private class CacheData
+{
+	public byte[] data;
+
+	public NetworkableId entityID;
+
+	public uint numID;
+}
+
+
+public enum Type
+{
+	png,
+	jpg,
+	ogg,
+	sculpt
+}
+
+
+using System;
+using System.Collections.Generic;
+using Facepunch;
+using Facepunch.Sqlite;
+using ProtoBuf;
+
+private class FileDatabase : Database
+{
+	public IEnumerable<AssociatedFile> QueryAll(NetworkableId entityID)
+	{
+		//IL_000e: Unknown result type (might be due to invalid IL or missing references)
+		IntPtr intPtr = ((Database)this).Prepare("SELECT filetype, crc, part, data FROM data WHERE entid = ?");
+		Database.Bind<long>(intPtr, 1, (long)entityID.Value);
+		return ((Database)this).ExecuteAndReadQueryResults<AssociatedFile>(intPtr, (Func<IntPtr, AssociatedFile>)ReadAssociatedFileRow);
+	}
+
+	private static AssociatedFile ReadAssociatedFileRow(IntPtr stmHandle)
+	{
+		AssociatedFile obj = Pool.Get<AssociatedFile>();
+		obj.type = Database.GetColumnValue<int>(stmHandle, 0);
+		obj.crc = (uint)Database.GetColumnValue<int>(stmHandle, 1);
+		obj.numID = (uint)Database.GetColumnValue<int>(stmHandle, 2);
+		obj.data = Database.GetColumnValue<byte[]>(stmHandle, 3);
+		return obj;
+	}
+}
+
+
+using System;
+using System.Collections.Generic;
 using System.Text;
 using Development.Attributes;
 using UnityEngine;
@@ -4628,8 +4972,8 @@ public class UIChat : PriorityListComponent<UIChat>
 
 	public UI_FriendsList friendsList;
 
-	[Header("Disable Settings")]
 	[Tooltip("Disable the text input field rather than hiding it.")]
+	[Header("Disable Settings")]
 	public bool useDisable;
 
 	public RustInput rustInput;
@@ -6491,8 +6835,8 @@ public class CardGameUI : UIDialog
 		void UpdateInGameUI_NoPlayer(CardGameUI ui);
 	}
 
-	[Header("Card Game")]
 	[SerializeField]
+	[Header("Card Game")]
 	private InfoTextUI primaryInfo;
 
 	[SerializeField]
@@ -13117,8 +13461,8 @@ public class VehicleEditingPanel : LootPanel
 	[SerializeField]
 	private Phrase phraseEmptyStorage;
 
-	[SerializeField]
 	[Header("Create Chassis")]
+	[SerializeField]
 	private CreateChassisEntry[] chassisOptions;
 }
 
@@ -13428,8 +13772,8 @@ public class LifeInfographic : SingletonComponent<LifeInfographic>, IPrefabPrePr
 
 	public bool ShowDebugData;
 
-	[ReadOnly]
 	[Tooltip("Automatically filled in by prefab preprocess")]
+	[ReadOnly]
 	public EntityNameToItemDefinition[] EntityNameToItemDefinitions;
 
 	bool IPrefabPreProcess.CanRunDuringBundling => true;
@@ -15210,15 +15554,15 @@ public class UI_SkinViewerControls : MonoBehaviour
 	[SerializeField]
 	private float responseCurve = 1.5f;
 
-	[SerializeField]
 	[Header("Drag")]
+	[SerializeField]
 	private float inertiaDecay = 5f;
 
 	[SerializeField]
 	private float rotationSpeed = 300f;
 
-	[Header("Pan")]
 	[SerializeField]
+	[Header("Pan")]
 	private Vector2 panLimitX = new Vector2(-1f, 1f);
 
 	[SerializeField]
@@ -15234,8 +15578,8 @@ public class UI_SkinViewerControls : MonoBehaviour
 	[SerializeField]
 	private Vector2 minMaxFov = new Vector2(20f, 8f);
 
-	[SerializeField]
 	[Header("Idle")]
+	[SerializeField]
 	private float idleSwaySpeed = 1f;
 
 	[SerializeField]
@@ -17419,8 +17763,8 @@ using UnityEngine.UI;
 
 public class StatusPanel : MonoBehaviour
 {
-	[SerializeField]
 	[Header("On Status")]
+	[SerializeField]
 	private RustText onStatusText;
 
 	[SerializeField]
@@ -18024,9 +18368,9 @@ public class Tooltip : BaseMonoBehaviour, IClientComponent, ILocalize
 	[Tooltip("Delay timing before the tooltip appears. Short is 0.15 seconds, Long is 0.5 seconds.")]
 	public DelayType delayBeforeAppearing;
 
-	[Header("Advanced Settings - Position")]
 	[Tooltip("What position relative to the object that the tooltip should be spawned on.")]
 	[Space(10f)]
+	[Header("Advanced Settings - Position")]
 	public TooltipContainer.PositionMode positionMode;
 
 	[Tooltip("Spawn the tooltip relative to the mouse position rather than the objects.")]
@@ -21348,8 +21692,8 @@ public class ParticleSystemContainer : MonoBehaviour, IPrefabPreProcess
 	[HideInInspector]
 	private ParticleSystemGroup[] particleGroups;
 
-	[HideInInspector]
 	[SerializeField]
+	[HideInInspector]
 	private Light[] lights;
 
 	[HideInInspector]
@@ -32557,8 +32901,8 @@ public class RgbEffects : SingletonComponent<RgbEffects>
 	{
 	}
 
-	[ClientVar(Name = "pulse", Help = "(Generated) Pulses all RGB lighting devices to a given colour over the specified duration in seconds; uses the RGB controller pulse animation")]
 	[EditorBrowsable(EditorBrowsableState.Never)]
+	[ClientVar(Name = "pulse", Help = "(Generated) Pulses all RGB lighting devices to a given colour over the specified duration in seconds; uses the RGB controller pulse animation")]
 	public static void ConVar_Pulse(Arg args)
 	{
 	}
@@ -34710,8 +35054,8 @@ public class AmplifyOcclusionBase : MonoBehaviour
 
 	public Color Tint = Color.black;
 
-	[Range(0f, 32f)]
 	[Tooltip("Radius spread of the occlusion.")]
+	[Range(0f, 32f)]
 	public float Radius = 2f;
 
 	[NonSerialized]
@@ -34724,16 +35068,16 @@ public class AmplifyOcclusionBase : MonoBehaviour
 	[Range(0f, 2f)]
 	public float RadiusIntensity = 1f;
 
-	[Range(0f, 16f)]
 	[Tooltip("Power exponent attenuation of the occlusion.")]
+	[Range(0f, 16f)]
 	public float PowerExponent = 1.8f;
 
 	[Range(0f, 0.99f)]
 	[Tooltip("Controls the initial occlusion contribution offset.")]
 	public float Bias = 0.05f;
 
-	[Range(0f, 1f)]
 	[Tooltip("Controls the thickness occlusion contribution.")]
+	[Range(0f, 1f)]
 	public float Thickness = 1f;
 
 	[Tooltip("Compute the Occlusion and Blur at half of the resolution.")]
@@ -34749,22 +35093,22 @@ public class AmplifyOcclusionBase : MonoBehaviour
 	[Tooltip("Length distance to performe the transition.")]
 	public float FadeLength = 50f;
 
-	[Range(0f, 1f)]
 	[Tooltip("Final Intensity parameter.")]
+	[Range(0f, 1f)]
 	public float FadeToIntensity;
 
 	public Color FadeToTint = Color.black;
 
-	[Range(0f, 32f)]
 	[Tooltip("Final Radius parameter.")]
+	[Range(0f, 32f)]
 	public float FadeToRadius = 2f;
 
-	[Range(0f, 16f)]
 	[Tooltip("Final PowerExponent parameter.")]
+	[Range(0f, 16f)]
 	public float FadeToPowerExponent = 1.8f;
 
-	[Range(0f, 1f)]
 	[Tooltip("Final Thickness parameter.")]
+	[Range(0f, 1f)]
 	public float FadeToThickness = 1f;
 
 	[Header("Bilateral Blur")]
@@ -34840,8 +35184,8 @@ public enum SampleCountLevel
 
 using UnityEngine;
 
-[ExecuteInEditMode]
 [RequireComponent(typeof(Camera))]
+[ExecuteInEditMode]
 [AddComponentMenu("Image Effects/Amplify Occlusion")]
 public class AmplifyOcclusionEffect : AmplifyOcclusionBase
 {
@@ -36954,356 +37298,6 @@ public class FXAAPostEffectsBase : MonoBehaviour
 			GL.End();
 		}
 		GL.PopMatrix();
-	}
-}
-
-
-using System;
-using UnityEngine;
-
-[AddComponentMenu("KriptoFX/Explosion_Bloom")]
-[ExecuteInEditMode]
-[RequireComponent(typeof(Camera))]
-[ImageEffectAllowedInSceneView]
-public class Explosion_Bloom : MonoBehaviour
-{
-	[Serializable]
-	public struct Settings
-	{
-		[SerializeField]
-		[Tooltip("Filters out pixels under this level of brightness.")]
-		public float threshold;
-
-		[Tooltip("Makes transition between under/over-threshold gradual.")]
-		[Range(0f, 1f)]
-		[SerializeField]
-		public float softKnee;
-
-		[Tooltip("Changes extent of veiling effects in a screen resolution-independent fashion.")]
-		[SerializeField]
-		[Range(1f, 7f)]
-		public float radius;
-
-		[SerializeField]
-		[Tooltip("Blend factor of the result image.")]
-		public float intensity;
-
-		[SerializeField]
-		[Tooltip("Controls filter quality and buffer resolution.")]
-		public bool highQuality;
-
-		[SerializeField]
-		[Tooltip("Reduces flashing noise with an additional filter.")]
-		public bool antiFlicker;
-
-		public float thresholdGamma
-		{
-			get
-			{
-				return Mathf.Max(0f, threshold);
-			}
-			set
-			{
-				threshold = value;
-			}
-		}
-
-		public float thresholdLinear
-		{
-			get
-			{
-				return Mathf.GammaToLinearSpace(thresholdGamma);
-			}
-			set
-			{
-				threshold = Mathf.LinearToGammaSpace(value);
-			}
-		}
-
-		public static Settings defaultSettings
-		{
-			get
-			{
-				Settings result = default(Settings);
-				result.threshold = 2f;
-				result.softKnee = 0f;
-				result.radius = 7f;
-				result.intensity = 0.7f;
-				result.highQuality = true;
-				result.antiFlicker = true;
-				return result;
-			}
-		}
-	}
-
-	[SerializeField]
-	public Settings settings = Settings.defaultSettings;
-
-	[HideInInspector]
-	[SerializeField]
-	private Shader m_Shader;
-
-	private Material m_Material;
-
-	private const int kMaxIterations = 16;
-
-	private RenderTexture[] m_blurBuffer1 = (RenderTexture[])(object)new RenderTexture[16];
-
-	private RenderTexture[] m_blurBuffer2 = (RenderTexture[])(object)new RenderTexture[16];
-
-	private int m_Threshold;
-
-	private int m_Curve;
-
-	private int m_PrefilterOffs;
-
-	private int m_SampleScale;
-
-	private int m_Intensity;
-
-	private int m_BaseTex;
-
-	public Shader shader
-	{
-		get
-		{
-			if ((Object)(object)m_Shader == (Object)null)
-			{
-				m_Shader = Shader.Find("Hidden/KriptoFX/PostEffects/Explosion_Bloom");
-			}
-			return m_Shader;
-		}
-	}
-
-	public Material material
-	{
-		get
-		{
-			if ((Object)(object)m_Material == (Object)null)
-			{
-				m_Material = CheckShaderAndCreateMaterial(shader);
-			}
-			return m_Material;
-		}
-	}
-
-	public static bool supportsDX11
-	{
-		get
-		{
-			if (SystemInfo.graphicsShaderLevel >= 50)
-			{
-				return SystemInfo.supportsComputeShaders;
-			}
-			return false;
-		}
-	}
-
-	public static bool IsSupported(Shader s, bool needDepth, bool needHdr, MonoBehaviour effect)
-	{
-		if ((Object)(object)s == (Object)null || !s.isSupported)
-		{
-			Debug.LogWarningFormat("Missing shader for image effect {0}", new object[1] { effect });
-			return false;
-		}
-		if (!SystemInfo.supportsImageEffects)
-		{
-			Debug.LogWarningFormat("Image effects aren't supported on this device ({0})", new object[1] { effect });
-			return false;
-		}
-		if (needDepth && !SystemInfo.SupportsRenderTextureFormat((RenderTextureFormat)1))
-		{
-			Debug.LogWarningFormat("Depth textures aren't supported on this device ({0})", new object[1] { effect });
-			return false;
-		}
-		if (needHdr && !SystemInfo.SupportsRenderTextureFormat((RenderTextureFormat)2))
-		{
-			Debug.LogWarningFormat("Floating point textures aren't supported on this device ({0})", new object[1] { effect });
-			return false;
-		}
-		return true;
-	}
-
-	public static Material CheckShaderAndCreateMaterial(Shader s)
-	{
-		//IL_0014: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0019: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0022: Expected O, but got Unknown
-		if ((Object)(object)s == (Object)null || !s.isSupported)
-		{
-			return null;
-		}
-		return new Material(s)
-		{
-			hideFlags = (HideFlags)52
-		};
-	}
-
-	private void Awake()
-	{
-		m_Threshold = Shader.PropertyToID("_Threshold");
-		m_Curve = Shader.PropertyToID("_Curve");
-		m_PrefilterOffs = Shader.PropertyToID("_PrefilterOffs");
-		m_SampleScale = Shader.PropertyToID("_SampleScale");
-		m_Intensity = Shader.PropertyToID("_Intensity");
-		m_BaseTex = Shader.PropertyToID("_BaseTex");
-	}
-
-	private void OnEnable()
-	{
-		if (!IsSupported(shader, needDepth: true, needHdr: false, (MonoBehaviour)(object)this))
-		{
-			((Behaviour)this).enabled = false;
-		}
-	}
-
-	private void OnDisable()
-	{
-		if ((Object)(object)m_Material != (Object)null)
-		{
-			Object.DestroyImmediate((Object)(object)m_Material);
-		}
-		m_Material = null;
-	}
-
-	private void OnRenderImage(RenderTexture source, RenderTexture destination)
-	{
-		//IL_002f: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00bd: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00bf: Unknown result type (might be due to invalid IL or missing references)
-		//IL_014c: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0197: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0220: Unknown result type (might be due to invalid IL or missing references)
-		bool isMobilePlatform = Application.isMobilePlatform;
-		int num = ((Texture)source).width;
-		int num2 = ((Texture)source).height;
-		if (!settings.highQuality)
-		{
-			num /= 2;
-			num2 /= 2;
-		}
-		RenderTextureFormat val = (RenderTextureFormat)(isMobilePlatform ? 7 : 9);
-		float num3 = Mathf.Log((float)num2, 2f) + settings.radius - 8f;
-		int num4 = (int)num3;
-		int num5 = Mathf.Clamp(num4, 1, 16);
-		float thresholdLinear = settings.thresholdLinear;
-		material.SetFloat(m_Threshold, thresholdLinear);
-		float num6 = thresholdLinear * settings.softKnee + 1E-05f;
-		Vector3 val2 = default(Vector3);
-		((Vector3)(ref val2))..ctor(thresholdLinear - num6, num6 * 2f, 0.25f / num6);
-		material.SetVector(m_Curve, Vector4.op_Implicit(val2));
-		bool flag = !settings.highQuality && settings.antiFlicker;
-		material.SetFloat(m_PrefilterOffs, flag ? (-0.5f) : 0f);
-		material.SetFloat(m_SampleScale, 0.5f + num3 - (float)num4);
-		material.SetFloat(m_Intensity, Mathf.Max(0f, settings.intensity));
-		RenderTexture temporary = RenderTexture.GetTemporary(num, num2, 0, val);
-		Graphics.Blit((Texture)(object)source, temporary, material, settings.antiFlicker ? 1 : 0);
-		RenderTexture val3 = temporary;
-		for (int i = 0; i < num5; i++)
-		{
-			m_blurBuffer1[i] = RenderTexture.GetTemporary(((Texture)val3).width / 2, ((Texture)val3).height / 2, 0, val);
-			Graphics.Blit((Texture)(object)val3, m_blurBuffer1[i], material, (i == 0) ? (settings.antiFlicker ? 3 : 2) : 4);
-			val3 = m_blurBuffer1[i];
-		}
-		for (int num7 = num5 - 2; num7 >= 0; num7--)
-		{
-			RenderTexture val4 = m_blurBuffer1[num7];
-			material.SetTexture(m_BaseTex, (Texture)(object)val4);
-			m_blurBuffer2[num7] = RenderTexture.GetTemporary(((Texture)val4).width, ((Texture)val4).height, 0, val);
-			Graphics.Blit((Texture)(object)val3, m_blurBuffer2[num7], material, settings.highQuality ? 6 : 5);
-			val3 = m_blurBuffer2[num7];
-		}
-		int num8 = 7;
-		num8 += (settings.highQuality ? 1 : 0);
-		material.SetTexture(m_BaseTex, (Texture)(object)source);
-		Graphics.Blit((Texture)(object)val3, destination, material, num8);
-		for (int j = 0; j < 16; j++)
-		{
-			if ((Object)(object)m_blurBuffer1[j] != (Object)null)
-			{
-				RenderTexture.ReleaseTemporary(m_blurBuffer1[j]);
-			}
-			if ((Object)(object)m_blurBuffer2[j] != (Object)null)
-			{
-				RenderTexture.ReleaseTemporary(m_blurBuffer2[j]);
-			}
-			m_blurBuffer1[j] = null;
-			m_blurBuffer2[j] = null;
-		}
-		RenderTexture.ReleaseTemporary(temporary);
-	}
-}
-
-
-using System;
-using UnityEngine;
-
-[Serializable]
-public struct Settings
-{
-	[SerializeField]
-	[Tooltip("Filters out pixels under this level of brightness.")]
-	public float threshold;
-
-	[Tooltip("Makes transition between under/over-threshold gradual.")]
-	[Range(0f, 1f)]
-	[SerializeField]
-	public float softKnee;
-
-	[Tooltip("Changes extent of veiling effects in a screen resolution-independent fashion.")]
-	[SerializeField]
-	[Range(1f, 7f)]
-	public float radius;
-
-	[SerializeField]
-	[Tooltip("Blend factor of the result image.")]
-	public float intensity;
-
-	[SerializeField]
-	[Tooltip("Controls filter quality and buffer resolution.")]
-	public bool highQuality;
-
-	[SerializeField]
-	[Tooltip("Reduces flashing noise with an additional filter.")]
-	public bool antiFlicker;
-
-	public float thresholdGamma
-	{
-		get
-		{
-			return Mathf.Max(0f, threshold);
-		}
-		set
-		{
-			threshold = value;
-		}
-	}
-
-	public float thresholdLinear
-	{
-		get
-		{
-			return Mathf.GammaToLinearSpace(thresholdGamma);
-		}
-		set
-		{
-			threshold = Mathf.LinearToGammaSpace(value);
-		}
-	}
-
-	public static Settings defaultSettings
-	{
-		get
-		{
-			Settings result = default(Settings);
-			result.threshold = 2f;
-			result.softKnee = 0f;
-			result.radius = 7f;
-			result.intensity = 0.7f;
-			result.highQuality = true;
-			result.antiFlicker = true;
-			return result;
-		}
 	}
 }
 

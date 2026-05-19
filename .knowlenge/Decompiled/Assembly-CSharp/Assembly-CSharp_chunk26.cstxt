@@ -6,6 +6,236 @@ using UnityEngine;
 using UnityEngine.AI;
 
 [Serializable]
+public class State_MoveToCoverHiddenFromTarget : FSMStateBase
+{
+	public float searchRadius = 8f;
+
+	public float walkDurationBeforeSprint = 1f;
+
+	public LimitedTurnNavAgent.Speeds speed = LimitedTurnNavAgent.Speeds.Walk;
+
+	private static NavMeshPath _path;
+
+	private NpcShootingComponent _shooting;
+
+	private NpcZoneComponent _npcZoneComponent;
+
+	private double? remainingWalkBeforeSprintTime;
+
+	private Vector3? lastChosenHidingSpotNS;
+
+	private AIInformationZone _infoZone;
+
+	private AICoverPoint heldCover;
+
+	private static NavMeshPath Path
+	{
+		get
+		{
+			//IL_0009: Unknown result type (might be due to invalid IL or missing references)
+			//IL_000e: Unknown result type (might be due to invalid IL or missing references)
+			//IL_0014: Expected O, but got Unknown
+			object obj = _path;
+			if (obj == null)
+			{
+				NavMeshPath val = new NavMeshPath();
+				_path = val;
+				obj = (object)val;
+			}
+			return (NavMeshPath)obj;
+		}
+	}
+
+	private NpcShootingComponent Shooting => _shooting ?? (_shooting = ((Component)Owner).GetComponent<NpcShootingComponent>());
+
+	private NpcZoneComponent NpcZoneComponent => _npcZoneComponent ?? (_npcZoneComponent = ((Component)Owner).GetComponent<NpcZoneComponent>());
+
+	private AIInformationZone InfoZone => _infoZone ?? (_infoZone = AIInformationZone.GetForPoint(((Component)Owner).transform.position));
+
+	public override EFSMStateStatus OnStateEnter(FSMPayload payload)
+	{
+		//IL_0046: Unknown result type (might be due to invalid IL or missing references)
+		//IL_004b: Unknown result type (might be due to invalid IL or missing references)
+		//IL_004e: Unknown result type (might be due to invalid IL or missing references)
+		//IL_004f: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0054: Unknown result type (might be due to invalid IL or missing references)
+		//IL_005b: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0060: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0068: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0084: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0085: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00a4: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00a9: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00bd: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00bf: Unknown result type (might be due to invalid IL or missing references)
+		//IL_01da: Unknown result type (might be due to invalid IL or missing references)
+		//IL_01df: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00ef: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00f1: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0125: Unknown result type (might be due to invalid IL or missing references)
+		//IL_012d: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0198: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0170: Unknown result type (might be due to invalid IL or missing references)
+		//IL_017b: Unknown result type (might be due to invalid IL or missing references)
+		//IL_01f6: Unknown result type (might be due to invalid IL or missing references)
+		//IL_01fb: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0203: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0218: Unknown result type (might be due to invalid IL or missing references)
+		//IL_021a: Unknown result type (might be due to invalid IL or missing references)
+		//IL_021f: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0227: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0239: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0347: Unknown result type (might be due to invalid IL or missing references)
+		//IL_034c: Unknown result type (might be due to invalid IL or missing references)
+		//IL_024b: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0252: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0257: Unknown result type (might be due to invalid IL or missing references)
+		//IL_025c: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0261: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0380: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0277: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0395: Unknown result type (might be due to invalid IL or missing references)
+		//IL_039a: Unknown result type (might be due to invalid IL or missing references)
+		//IL_039f: Unknown result type (might be due to invalid IL or missing references)
+		//IL_03a7: Unknown result type (might be due to invalid IL or missing references)
+		//IL_028a: Unknown result type (might be due to invalid IL or missing references)
+		//IL_02bc: Unknown result type (might be due to invalid IL or missing references)
+		//IL_02ea: Unknown result type (might be due to invalid IL or missing references)
+		if ((Object)(object)payload.entity != (Object)null)
+		{
+			base.Senses.TrySetTarget(payload.entity);
+			base.Senses.ForgetAllNoises();
+		}
+		if (!base.Senses.FindTargetLKP(out var lkp, applyHeightOffset: true))
+		{
+			return EFSMStateStatus.Failure;
+		}
+		Matrix4x4 worldToNavMeshSpace = Owner.WorldToNavMeshSpace;
+		Vector3 val = ((Matrix4x4)(ref worldToNavMeshSpace)).MultiplyPoint(lkp);
+		Vector3 serverNavMeshPos = Owner.ServerNavMeshPos;
+		PooledList<Vector3> val2 = Pool.Get<PooledList<Vector3>>();
+		try
+		{
+			Eqs.SamplePositionsInMultiDonutShape(serverNavMeshPos, (List<Vector3>)(object)val2, searchRadius * 0.5f, searchRadius, 2);
+			float num = Vector3.Distance(val, serverNavMeshPos);
+			Eqs.PooledScoreList pooledScoreList = Pool.Get<Eqs.PooledScoreList>();
+			try
+			{
+				NavMeshAgent val3 = default(NavMeshAgent);
+				NavMeshHit val4 = default(NavMeshHit);
+				foreach (Vector3 item2 in (List<Vector3>)(object)val2)
+				{
+					float num2 = 0f;
+					if (num < 20f)
+					{
+						num2 += Mathx.RemapValClamped(Vector3.Distance(item2, val), 0f, searchRadius, 0f, 1f);
+					}
+					else if (num > 50f)
+					{
+						num2 += Mathx.RemapValClamped(Vector3.Distance(item2, val), 0f, searchRadius, 0f, 1f);
+					}
+					else if (lastChosenHidingSpotNS.HasValue)
+					{
+						num2 += Mathx.RemapValClamped(Vector3.Distance(item2, lastChosenHidingSpotNS.Value), 0f, searchRadius, 0f, 1f);
+					}
+					if (((Component)Owner).TryGetComponent<NavMeshAgent>(ref val3) && val3.FindClosestEdge(ref val4) && Vector3.Distance(((NavMeshHit)(ref val4)).position, Owner.ServerNavMeshPos) < 1.5f)
+					{
+						num2 += 2f;
+					}
+					((List<(Vector3, float)>)(object)pooledScoreList).Add((item2, num2));
+				}
+				pooledScoreList.SortByScoreDesc(Owner);
+				Matrix4x4 navMeshToWorldSpace = Owner.NavMeshToWorldSpace;
+				foreach (var item3 in (List<(Vector3, float)>)(object)pooledScoreList)
+				{
+					Vector3 item = item3.Item1;
+					if (!base.Agent.SamplePosition(item, out var sample, 3.5f))
+					{
+						continue;
+					}
+					Vector3 val5 = ((Matrix4x4)(ref navMeshToWorldSpace)).MultiplyPoint(sample);
+					if (NpcZoneComponent.IsPointInsideZone(val5) && !base.Agent.IsInWater(val5) && !base.Senses.CanBeSeenAtFrom(val5 + 1.1f * Vector3.up, lkp, "navigation") && base.Agent.CalculatePathCustom(sample, Path) && (int)Path.status == 0)
+					{
+						float pathLength = Path.GetPathLength();
+						if (!(pathLength < 0.5f) && !(pathLength > searchRadius * 3f) && base.Agent.SetDestination(sample))
+						{
+							base.Agent.SetSpeed(speed);
+							remainingWalkBeforeSprintTime = walkDurationBeforeSprint;
+							lastChosenHidingSpotNS = sample;
+							return base.OnStateEnter(payload);
+						}
+					}
+				}
+				if ((Object)(object)InfoZone == (Object)null)
+				{
+					return EFSMStateStatus.Failure;
+				}
+				AICoverPoint bestCoverPoint = InfoZone.GetBestCoverPoint(((Component)Owner).transform.position, lkp, 0f, searchRadius, Owner);
+				if ((Object)(object)bestCoverPoint != (Object)null && NpcZoneComponent.IsPointInsideZone(((Component)bestCoverPoint).transform.position))
+				{
+					Vector3 newDestination = ((Matrix4x4)(ref worldToNavMeshSpace)).MultiplyPoint(((Component)bestCoverPoint).transform.position);
+					if (base.Agent.SetDestination(newDestination))
+					{
+						heldCover = bestCoverPoint;
+						heldCover.SetUsedBy(Owner);
+						base.Agent.SetSpeed(speed);
+						remainingWalkBeforeSprintTime = walkDurationBeforeSprint;
+						return base.OnStateEnter(payload);
+					}
+				}
+				return EFSMStateStatus.Failure;
+			}
+			finally
+			{
+				((IDisposable)(object)pooledScoreList)?.Dispose();
+			}
+		}
+		finally
+		{
+			((IDisposable)val2)?.Dispose();
+		}
+	}
+
+	public override EFSMStateStatus OnStateUpdate(float deltaTime)
+	{
+		if (!base.Agent.IsFollowingPath)
+		{
+			return EFSMStateStatus.Success;
+		}
+		if (remainingWalkBeforeSprintTime.HasValue)
+		{
+			remainingWalkBeforeSprintTime -= deltaTime;
+			if (remainingWalkBeforeSprintTime <= 0.0)
+			{
+				base.Agent.SetSpeed(LimitedTurnNavAgent.Speeds.Sprint);
+				remainingWalkBeforeSprintTime = null;
+			}
+		}
+		return base.OnStateUpdate(deltaTime);
+	}
+
+	public override void OnStateExit()
+	{
+		if ((Object)(object)heldCover != (Object)null)
+		{
+			heldCover.ClearIfUsedBy(Owner);
+			heldCover = null;
+		}
+		remainingWalkBeforeSprintTime = null;
+		base.Agent.ResetPath();
+		base.OnStateExit();
+	}
+}
+
+
+using System;
+using System.Collections.Generic;
+using Facepunch;
+using Rust.Ai.Gen2;
+using UnityEngine;
+using UnityEngine.AI;
+
+[Serializable]
 public class State_MoveToPointWithLosOnTarget : FSMStateBase
 {
 	public float searchRadius = 8f;
@@ -834,9 +1064,9 @@ using Rust;
 using Rust.Ai.Gen2;
 using UnityEngine;
 
-[SoftRequireComponent(typeof(BlackboardComponent), typeof(NpcBarkManager))]
 [SoftRequireComponent(typeof(NpcZoneComponent), typeof(NPCEncounterTimer), typeof(NpcShootingComponent))]
 [SoftRequireComponent(typeof(LimitedTurnNavAgent), typeof(RootMotionPlayer), typeof(SenseComponent))]
+[SoftRequireComponent(typeof(BlackboardComponent), typeof(NpcBarkManager))]
 public class Scientist2FSM_Heavy : FSMComponent
 {
 	public State_PatrolIdle idle = new State_PatrolIdle();
@@ -984,8 +1214,8 @@ public class Scientist2FSM_Heavy : FSMComponent
 using Rust.Ai.Gen2;
 using UnityEngine;
 
-[SoftRequireComponent(typeof(BlackboardComponent), typeof(NpcBarkManager))]
 [SoftRequireComponent(typeof(LimitedTurnNavAgent), typeof(RootMotionPlayer), typeof(SenseComponent))]
+[SoftRequireComponent(typeof(BlackboardComponent), typeof(NpcBarkManager))]
 [SoftRequireComponent(typeof(NpcZoneComponent), typeof(NPCEncounterTimer), typeof(NpcShootingComponent))]
 public class Scientist2FSM_Shotgun : FSMComponent
 {
@@ -12495,19 +12725,19 @@ internal static class $BurstDirectCallInitializer
 	[RuntimeInitializeOnLoadMethod(/*Could not decode attribute arguments.*/)]
 	private static void Initialize()
 	{
-		BuoyancyBurstUtility.FillPointData_000050DC$BurstDirectCall.Initialize();
-		BuoyancyForceAccumulationBurst.Compute_000050DE$BurstDirectCall.Initialize();
-		EnvironmentVolumeMath.CalculateTransformationBoundsBurst_0000570D$BurstDirectCall.Initialize();
-		EnvironmentVolumeMath.MultiplyPoint3X4_0000570E$BurstDirectCall.Initialize();
-		EnvironmentVolumeMath.UpdateVolumeTransformationAndBoundsBurst_0000570F$BurstDirectCall.Initialize();
-		WaterVolumeBurst.TestBurst_00005BBA$BurstDirectCall.Initialize();
-		TerrainWaterFlowMapBurst.GetFlowDirections_00006501$BurstDirectCall.Initialize();
-		WaterSystemBurst.GetHeightArray_Burst_00006816$BurstDirectCall.Initialize();
-		WaterSystemBurst.ComputeOceanSimHeight_Burst_00006817$BurstDirectCall.Initialize();
-		WaterLevelBurst.GetBuoyancyWaterInfoBatched_00007ABB$BurstDirectCall.Initialize();
-		WaterLevelBurst.ConstructDeepWaterCommands_00007ABC$BurstDirectCall.Initialize();
-		Util.FindFreeSlot_00007EE7$BurstDirectCall.Initialize();
-		Util.FindFreeSlot_00007EE8$BurstDirectCall.Initialize();
+		BuoyancyBurstUtility.FillPointData_000050EE$BurstDirectCall.Initialize();
+		BuoyancyForceAccumulationBurst.Compute_000050F0$BurstDirectCall.Initialize();
+		EnvironmentVolumeMath.CalculateTransformationBoundsBurst_00005723$BurstDirectCall.Initialize();
+		EnvironmentVolumeMath.MultiplyPoint3X4_00005724$BurstDirectCall.Initialize();
+		EnvironmentVolumeMath.UpdateVolumeTransformationAndBoundsBurst_00005725$BurstDirectCall.Initialize();
+		WaterVolumeBurst.TestBurst_00005BD2$BurstDirectCall.Initialize();
+		TerrainWaterFlowMapBurst.GetFlowDirections_00006511$BurstDirectCall.Initialize();
+		WaterSystemBurst.GetHeightArray_Burst_00006826$BurstDirectCall.Initialize();
+		WaterSystemBurst.ComputeOceanSimHeight_Burst_00006827$BurstDirectCall.Initialize();
+		WaterLevelBurst.GetBuoyancyWaterInfoBatched_00007ACB$BurstDirectCall.Initialize();
+		WaterLevelBurst.ConstructDeepWaterCommands_00007ACC$BurstDirectCall.Initialize();
+		Util.FindFreeSlot_00007EF7$BurstDirectCall.Initialize();
+		Util.FindFreeSlot_00007EF8$BurstDirectCall.Initialize();
 	}
 }
 
