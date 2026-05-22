@@ -40,7 +40,9 @@ Write-Header "STARTING SYSTEM UPDATE (Framework: $Framework)"
 
 # 1. Fetching updates from GitHub
 Write-Host "--- Step 1: Downloading objects from GitHub ---" -ForegroundColor Cyan
-git fetch --progress origin main
+# CHANGE: отключаем автоматический gc/repack чтобы избежать интерактивного y/n запроса
+# про заблокированные .idx файлы на Windows (ошибка "Unlink of file failed")
+git -c gc.auto=0 fetch --progress origin main
 
 if ($LASTEXITCODE -ne 0) {
     Write-Host "!!! ERROR: Could not connect to GitHub !!!" -ForegroundColor Red
