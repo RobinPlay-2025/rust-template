@@ -1064,8 +1064,8 @@ using Rust;
 using Rust.Ai.Gen2;
 using UnityEngine;
 
-[SoftRequireComponent(typeof(NpcZoneComponent), typeof(NPCEncounterTimer), typeof(NpcShootingComponent))]
 [SoftRequireComponent(typeof(LimitedTurnNavAgent), typeof(RootMotionPlayer), typeof(SenseComponent))]
+[SoftRequireComponent(typeof(NpcZoneComponent), typeof(NPCEncounterTimer), typeof(NpcShootingComponent))]
 [SoftRequireComponent(typeof(BlackboardComponent), typeof(NpcBarkManager))]
 public class Scientist2FSM_Heavy : FSMComponent
 {
@@ -1214,9 +1214,9 @@ public class Scientist2FSM_Heavy : FSMComponent
 using Rust.Ai.Gen2;
 using UnityEngine;
 
+[SoftRequireComponent(typeof(NpcZoneComponent), typeof(NPCEncounterTimer), typeof(NpcShootingComponent))]
 [SoftRequireComponent(typeof(LimitedTurnNavAgent), typeof(RootMotionPlayer), typeof(SenseComponent))]
 [SoftRequireComponent(typeof(BlackboardComponent), typeof(NpcBarkManager))]
-[SoftRequireComponent(typeof(NpcZoneComponent), typeof(NPCEncounterTimer), typeof(NpcShootingComponent))]
 public class Scientist2FSM_Shotgun : FSMComponent
 {
 	public State_PatrolIdle idle = new State_PatrolIdle();
@@ -2285,7 +2285,7 @@ public class State_DragCorpse : FSMStateBase
 			if (component != null)
 			{
 				component.MovePosition(((Component)Owner).transform.position + ((Component)Owner).transform.forward * 1.6f + ((Component)Owner).transform.up * 0.6f);
-				component.velocity = Vector3.zero;
+				component.linearVelocity = Vector3.zero;
 				component.angularVelocity = Vector3.zero;
 			}
 		}
@@ -4472,11 +4472,6 @@ private enum Phase
 	Attack,
 	JumpBack,
 	PostJumpBack
-}
-
-
-public class AIArena2 : FacepunchBehaviour, IClientComponent
-{
 }
 
 
@@ -7181,23 +7176,14 @@ public readonly struct NpcNoiseEvent : IEquatable<NpcNoiseEvent>
 
 	public bool Equals(NpcNoiseEvent other)
 	{
-		//IL_0046: Unknown result type (might be due to invalid IL or missing references)
-		//IL_004b: Unknown result type (might be due to invalid IL or missing references)
-		//IL_004f: Unknown result type (might be due to invalid IL or missing references)
-		//IL_005c: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0061: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0065: Unknown result type (might be due to invalid IL or missing references)
+		//IL_004c: Unknown result type (might be due to invalid IL or missing references)
+		//IL_005f: Unknown result type (might be due to invalid IL or missing references)
 		if (Id == other.Id)
 		{
 			double eventTime = EventTime;
-			if (eventTime.Equals(other.EventTime) && (Object)(object)Initiator == (Object)(object)other.Initiator && Intensity == other.Intensity)
+			if (eventTime.Equals(other.EventTime) && (Object)(object)Initiator == (Object)(object)other.Initiator && Intensity == other.Intensity && ((Vector3)(ref NoisePosition)).Equals(other.NoisePosition))
 			{
-				Vector3 val = NoisePosition;
-				if (((Vector3)(ref val)).Equals(other.NoisePosition))
-				{
-					val = GuessedInitiatorPosition;
-					return ((Vector3)(ref val)).Equals(other.GuessedInitiatorPosition);
-				}
+				return ((Vector3)(ref GuessedInitiatorPosition)).Equals(other.GuessedInitiatorPosition);
 			}
 		}
 		return false;
@@ -7559,6 +7545,257 @@ public class NpcZone : MonoBehaviour, IServerComponent
 
 using System;
 using System.Collections.Generic;
+using Facepunch;
+using Rust.Ai.Gen2;
+using UnityEngine;
+using UnityEngine.Events;
+
+[SoftRequireComponent(typeof(SenseComponent))]
+public class NPCEncounterTimer : EntityComponent<BaseEntity>, IServerComponent
+{
+	public float giveUpDurationSeconds = 120f;
+
+	[NonSerialized]
+	public UnityEvent onShouldGiveUp = new UnityEvent();
+
+	private const float fireTimeMultiplier = 4f;
+
+	private const float mountedTimeMultiplier = 12f;
+
+	private float? encounterRemainingTimeSeconds;
+
+	private double? _lastTickTime;
+
+	private SenseComponent _senseComponent;
+
+	private double LastTickTime
+	{
+		get
+		{
+			double valueOrDefault = _lastTickTime.GetValueOrDefault();
+			if (!_lastTickTime.HasValue)
+			{
+				valueOrDefault = Time.timeAsDouble;
+				_lastTickTime = valueOrDefault;
+				return valueOrDefault;
+			}
+			return valueOrDefault;
+		}
+		set
+		{
+			_lastTickTime = value;
+		}
+	}
+
+	private SenseComponent Senses => _senseComponent ?? (_senseComponent = ((Component)base.baseEntity).GetComponent<SenseComponent>());
+
+	public void Tick()
+	{
+		float num = (float)(Time.timeAsDouble - LastTickTime);
+		LastTickTime = Time.timeAsDouble;
+		BaseEntity target;
+		bool flag = Senses.FindTarget(out target);
+		if (encounterRemainingTimeSeconds.HasValue && !flag)
+		{
+			encounterRemainingTimeSeconds = null;
+		}
+		else if (!encounterRemainingTimeSeconds.HasValue && flag)
+		{
+			StartTimer();
+		}
+		else
+		{
+			if (!encounterRemainingTimeSeconds.HasValue)
+			{
+				return;
+			}
+			if (base.baseEntity is BaseCombatEntity { SecondsSinceAttacked: <5f })
+			{
+				StartTimer();
+				PooledList<BaseEntity> val = Pool.Get<PooledList<BaseEntity>>();
+				try
+				{
+					Senses.GetInitialAllies((List<BaseEntity>)(object)val);
+					foreach (BaseEntity item in (List<BaseEntity>)(object)val)
+					{
+						((Component)item).GetComponent<NPCEncounterTimer>().StartTimer();
+					}
+				}
+				finally
+				{
+					((IDisposable)val)?.Dispose();
+				}
+			}
+			float num2 = 1f;
+			if (target.ToNonNpcPlayer(out var player) && player.isMounted)
+			{
+				num2 = 12f;
+			}
+			else if (Trans_TargetIsNearFire.Test(base.baseEntity, Senses))
+			{
+				num2 = 4f;
+			}
+			encounterRemainingTimeSeconds -= num * num2;
+			if (!(encounterRemainingTimeSeconds <= 0f))
+			{
+				return;
+			}
+			GiveUp();
+			PooledList<BaseEntity> val2 = Pool.Get<PooledList<BaseEntity>>();
+			try
+			{
+				Senses.GetInitialAllies((List<BaseEntity>)(object)val2);
+				foreach (BaseEntity item2 in (List<BaseEntity>)(object)val2)
+				{
+					((Component)item2).GetComponent<NPCEncounterTimer>().GiveUp();
+				}
+			}
+			finally
+			{
+				((IDisposable)val2)?.Dispose();
+			}
+		}
+	}
+
+	private void StartTimer()
+	{
+		encounterRemainingTimeSeconds = giveUpDurationSeconds;
+	}
+
+	private void GiveUp()
+	{
+		if (encounterRemainingTimeSeconds.HasValue)
+		{
+			encounterRemainingTimeSeconds = null;
+			onShouldGiveUp.Invoke();
+		}
+	}
+}
+
+
+using UnityEngine;
+
+[CreateAssetMenu(menuName = "Rust/AI/NPC team", fileName = "NPCTeam_new", order = 0)]
+public class NPCTeam : BaseScriptableObject
+{
+}
+
+
+public enum ENPCVoicelineCategory
+{
+	None,
+	Surprise,
+	Push,
+	Flank,
+	Hold,
+	Lost,
+	Search,
+	Reload,
+	Ok,
+	DistractedByHeavy,
+	SurprisedHeavy
+}
+
+
+public enum ENpcVoicelineImportance : byte
+{
+	Flavour = 0,
+	Important = 1,
+	Conversation = 3
+}
+
+
+using System;
+using Rust.Ai.Gen2;
+using UnityEngine;
+
+[Serializable]
+public struct NPCVoiceline
+{
+	public ENPCVoicelineCategory category;
+
+	public string text;
+
+	public AudioClip audioClip;
+
+	public ENpcVoicelineImportance importance;
+
+	public bool otherNpcShouldSpeakFirst;
+
+	public bool allowOkResponse;
+
+	public int index;
+
+	public float duration;
+}
+
+
+using System;
+using System.Collections.Generic;
+using ConVar;
+using Rust.Ai.Gen2;
+using UnityEngine;
+
+[CreateAssetMenu(menuName = "Rust/AI/NPC voiceline db", fileName = "NPCVoicelineDB", order = 0)]
+public class NPCVoicelinesDatabase : BaseScriptableObject
+{
+	public List<NPCVoiceline> voicelines = new List<NPCVoiceline>();
+
+	private Dictionary<ENPCVoicelineCategory, List<NPCVoiceline>> categoryToVoiceline;
+
+	public bool FindVoiceline(int index, out NPCVoiceline voiceline)
+	{
+		TimeWarning val = TimeWarning.New("NPCVoicelinesDatabase.FindVoiceline", 0);
+		try
+		{
+			if (index < 0 || index >= voicelines.Count)
+			{
+				voiceline = default(NPCVoiceline);
+				if (AI.logIssues)
+				{
+					Debug.LogWarning((object)$"NPCVoicelinesDatabase.FindAudioClip - index out of range: {index} / {voicelines.Count}");
+				}
+				return false;
+			}
+			voiceline = voicelines[index];
+			return true;
+		}
+		finally
+		{
+			((IDisposable)val)?.Dispose();
+		}
+	}
+
+	public bool GetVoicelinesByCategory(ENPCVoicelineCategory category, out List<NPCVoiceline> voicelinesInCategory)
+	{
+		TimeWarning val = TimeWarning.New("NPCVoicelinesDatabase.GetVoicelinesByCategory", 0);
+		try
+		{
+			if (categoryToVoiceline == null)
+			{
+				categoryToVoiceline = new Dictionary<ENPCVoicelineCategory, List<NPCVoiceline>>();
+				foreach (NPCVoiceline voiceline in voicelines)
+				{
+					if (!categoryToVoiceline.TryGetValue(voiceline.category, out var value))
+					{
+						value = new List<NPCVoiceline>();
+						categoryToVoiceline[voiceline.category] = value;
+					}
+					value.Add(voiceline);
+				}
+			}
+			return categoryToVoiceline.TryGetValue(category, out voicelinesInCategory);
+		}
+		finally
+		{
+			((IDisposable)val)?.Dispose();
+		}
+	}
+}
+
+
+using System;
+using System.Collections.Generic;
 using ConVar;
 using Facepunch;
 using ProtoBuf;
@@ -7592,8 +7829,8 @@ public class LimitedTurnNavAgent : EntityComponent<BaseEntity>
 	[SerializeField]
 	private SteeringMode steeringMode = SteeringMode.LimitedTurnRate;
 
-	[Header("Speed")]
 	[SerializeField]
+	[Header("Speed")]
 	private float sneakSpeed = 0.6f;
 
 	[SerializeField]
@@ -8778,257 +9015,6 @@ public class BaseNPC2 : BaseCombatEntity
 		if (base.isServer && !Application.isQuitting)
 		{
 			Query.Server.RemoveBrain(this);
-		}
-	}
-}
-
-
-using System;
-using System.Collections.Generic;
-using Facepunch;
-using Rust.Ai.Gen2;
-using UnityEngine;
-using UnityEngine.Events;
-
-[SoftRequireComponent(typeof(SenseComponent))]
-public class NPCEncounterTimer : EntityComponent<BaseEntity>, IServerComponent
-{
-	public float giveUpDurationSeconds = 120f;
-
-	[NonSerialized]
-	public UnityEvent onShouldGiveUp = new UnityEvent();
-
-	private const float fireTimeMultiplier = 4f;
-
-	private const float mountedTimeMultiplier = 12f;
-
-	private float? encounterRemainingTimeSeconds;
-
-	private double? _lastTickTime;
-
-	private SenseComponent _senseComponent;
-
-	private double LastTickTime
-	{
-		get
-		{
-			double valueOrDefault = _lastTickTime.GetValueOrDefault();
-			if (!_lastTickTime.HasValue)
-			{
-				valueOrDefault = Time.timeAsDouble;
-				_lastTickTime = valueOrDefault;
-				return valueOrDefault;
-			}
-			return valueOrDefault;
-		}
-		set
-		{
-			_lastTickTime = value;
-		}
-	}
-
-	private SenseComponent Senses => _senseComponent ?? (_senseComponent = ((Component)base.baseEntity).GetComponent<SenseComponent>());
-
-	public void Tick()
-	{
-		float num = (float)(Time.timeAsDouble - LastTickTime);
-		LastTickTime = Time.timeAsDouble;
-		BaseEntity target;
-		bool flag = Senses.FindTarget(out target);
-		if (encounterRemainingTimeSeconds.HasValue && !flag)
-		{
-			encounterRemainingTimeSeconds = null;
-		}
-		else if (!encounterRemainingTimeSeconds.HasValue && flag)
-		{
-			StartTimer();
-		}
-		else
-		{
-			if (!encounterRemainingTimeSeconds.HasValue)
-			{
-				return;
-			}
-			if (base.baseEntity is BaseCombatEntity { SecondsSinceAttacked: <5f })
-			{
-				StartTimer();
-				PooledList<BaseEntity> val = Pool.Get<PooledList<BaseEntity>>();
-				try
-				{
-					Senses.GetInitialAllies((List<BaseEntity>)(object)val);
-					foreach (BaseEntity item in (List<BaseEntity>)(object)val)
-					{
-						((Component)item).GetComponent<NPCEncounterTimer>().StartTimer();
-					}
-				}
-				finally
-				{
-					((IDisposable)val)?.Dispose();
-				}
-			}
-			float num2 = 1f;
-			if (target.ToNonNpcPlayer(out var player) && player.isMounted)
-			{
-				num2 = 12f;
-			}
-			else if (Trans_TargetIsNearFire.Test(base.baseEntity, Senses))
-			{
-				num2 = 4f;
-			}
-			encounterRemainingTimeSeconds -= num * num2;
-			if (!(encounterRemainingTimeSeconds <= 0f))
-			{
-				return;
-			}
-			GiveUp();
-			PooledList<BaseEntity> val2 = Pool.Get<PooledList<BaseEntity>>();
-			try
-			{
-				Senses.GetInitialAllies((List<BaseEntity>)(object)val2);
-				foreach (BaseEntity item2 in (List<BaseEntity>)(object)val2)
-				{
-					((Component)item2).GetComponent<NPCEncounterTimer>().GiveUp();
-				}
-			}
-			finally
-			{
-				((IDisposable)val2)?.Dispose();
-			}
-		}
-	}
-
-	private void StartTimer()
-	{
-		encounterRemainingTimeSeconds = giveUpDurationSeconds;
-	}
-
-	private void GiveUp()
-	{
-		if (encounterRemainingTimeSeconds.HasValue)
-		{
-			encounterRemainingTimeSeconds = null;
-			onShouldGiveUp.Invoke();
-		}
-	}
-}
-
-
-using UnityEngine;
-
-[CreateAssetMenu(menuName = "Rust/AI/NPC team", fileName = "NPCTeam_new", order = 0)]
-public class NPCTeam : BaseScriptableObject
-{
-}
-
-
-public enum ENPCVoicelineCategory
-{
-	None,
-	Surprise,
-	Push,
-	Flank,
-	Hold,
-	Lost,
-	Search,
-	Reload,
-	Ok,
-	DistractedByHeavy,
-	SurprisedHeavy
-}
-
-
-public enum ENpcVoicelineImportance : byte
-{
-	Flavour = 0,
-	Important = 1,
-	Conversation = 3
-}
-
-
-using System;
-using Rust.Ai.Gen2;
-using UnityEngine;
-
-[Serializable]
-public struct NPCVoiceline
-{
-	public ENPCVoicelineCategory category;
-
-	public string text;
-
-	public AudioClip audioClip;
-
-	public ENpcVoicelineImportance importance;
-
-	public bool otherNpcShouldSpeakFirst;
-
-	public bool allowOkResponse;
-
-	public int index;
-
-	public float duration;
-}
-
-
-using System;
-using System.Collections.Generic;
-using ConVar;
-using Rust.Ai.Gen2;
-using UnityEngine;
-
-[CreateAssetMenu(menuName = "Rust/AI/NPC voiceline db", fileName = "NPCVoicelineDB", order = 0)]
-public class NPCVoicelinesDatabase : BaseScriptableObject
-{
-	public List<NPCVoiceline> voicelines = new List<NPCVoiceline>();
-
-	private Dictionary<ENPCVoicelineCategory, List<NPCVoiceline>> categoryToVoiceline;
-
-	public bool FindVoiceline(int index, out NPCVoiceline voiceline)
-	{
-		TimeWarning val = TimeWarning.New("NPCVoicelinesDatabase.FindVoiceline", 0);
-		try
-		{
-			if (index < 0 || index >= voicelines.Count)
-			{
-				voiceline = default(NPCVoiceline);
-				if (AI.logIssues)
-				{
-					Debug.LogWarning((object)$"NPCVoicelinesDatabase.FindAudioClip - index out of range: {index} / {voicelines.Count}");
-				}
-				return false;
-			}
-			voiceline = voicelines[index];
-			return true;
-		}
-		finally
-		{
-			((IDisposable)val)?.Dispose();
-		}
-	}
-
-	public bool GetVoicelinesByCategory(ENPCVoicelineCategory category, out List<NPCVoiceline> voicelinesInCategory)
-	{
-		TimeWarning val = TimeWarning.New("NPCVoicelinesDatabase.GetVoicelinesByCategory", 0);
-		try
-		{
-			if (categoryToVoiceline == null)
-			{
-				categoryToVoiceline = new Dictionary<ENPCVoicelineCategory, List<NPCVoiceline>>();
-				foreach (NPCVoiceline voiceline in voicelines)
-				{
-					if (!categoryToVoiceline.TryGetValue(voiceline.category, out var value))
-					{
-						value = new List<NPCVoiceline>();
-						categoryToVoiceline[voiceline.category] = value;
-					}
-					value.Add(voiceline);
-				}
-			}
-			return categoryToVoiceline.TryGetValue(category, out voicelinesInCategory);
-		}
-		finally
-		{
-			((IDisposable)val)?.Dispose();
 		}
 	}
 }
@@ -12716,28 +12702,15 @@ internal class __JobReflectionRegistrationOutput__1221673671587648887
 }
 
 
-using GamePhysicsJobs;
+using Unity.Burst;
 using UnityEngine;
-using WaterLevelJobs;
 
 internal static class $BurstDirectCallInitializer
 {
 	[RuntimeInitializeOnLoadMethod(/*Could not decode attribute arguments.*/)]
 	private static void Initialize()
 	{
-		BuoyancyBurstUtility.FillPointData_000050EE$BurstDirectCall.Initialize();
-		BuoyancyForceAccumulationBurst.Compute_000050F0$BurstDirectCall.Initialize();
-		EnvironmentVolumeMath.CalculateTransformationBoundsBurst_00005723$BurstDirectCall.Initialize();
-		EnvironmentVolumeMath.MultiplyPoint3X4_00005724$BurstDirectCall.Initialize();
-		EnvironmentVolumeMath.UpdateVolumeTransformationAndBoundsBurst_00005725$BurstDirectCall.Initialize();
-		WaterVolumeBurst.TestBurst_00005BD2$BurstDirectCall.Initialize();
-		TerrainWaterFlowMapBurst.GetFlowDirections_00006511$BurstDirectCall.Initialize();
-		WaterSystemBurst.GetHeightArray_Burst_00006826$BurstDirectCall.Initialize();
-		WaterSystemBurst.ComputeOceanSimHeight_Burst_00006827$BurstDirectCall.Initialize();
-		WaterLevelBurst.GetBuoyancyWaterInfoBatched_00007ACB$BurstDirectCall.Initialize();
-		WaterLevelBurst.ConstructDeepWaterCommands_00007ACC$BurstDirectCall.Initialize();
-		Util.FindFreeSlot_00007EF7$BurstDirectCall.Initialize();
-		Util.FindFreeSlot_00007EF8$BurstDirectCall.Initialize();
+		BurstCompilerOptions options = BurstCompiler.Options;
 	}
 }
 

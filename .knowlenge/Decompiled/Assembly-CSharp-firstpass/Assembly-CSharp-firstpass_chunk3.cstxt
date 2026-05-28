@@ -9070,6 +9070,10 @@ public class Integration : BaseIntegration
 		{
 			return false;
 		}
+		if (message.StartsWith("AsyncResourceUpload failed."))
+		{
+			return false;
+		}
 		return true;
 	}
 }
@@ -9080,117 +9084,178 @@ using System.Collections.Generic;
 using System.Linq;
 using Facepunch;
 using UnityEngine;
+using UnityEngine.InputSystem;
+using UnityEngine.InputSystem.Controls;
 
 public static class KeyCombos
 {
-	public static bool TryParse(ref string name, out List<KeyCode> keys)
+	public struct ComboPart
 	{
-		//IL_00e2: Unknown result type (might be due to invalid IL or missing references)
+		public Key Key;
+
+		public int MouseButton;
+
+		public bool MouseWheelUp;
+
+		public bool MouseWheelDown;
+
+		public bool IsKeyboardKey => (int)Key > 0;
+
+		public bool IsMouseButton => MouseButton >= 0;
+
+		public bool IsFunctionKey
+		{
+			get
+			{
+				//IL_0001: Unknown result type (might be due to invalid IL or missing references)
+				//IL_0008: Invalid comparison between Unknown and I4
+				//IL_000b: Unknown result type (might be due to invalid IL or missing references)
+				//IL_0012: Invalid comparison between Unknown and I4
+				if ((int)Key >= 94)
+				{
+					return (int)Key <= 105;
+				}
+				return false;
+			}
+		}
+	}
+
+	public static bool TryParse(ref string name, out List<ComboPart> parts)
+	{
+		//IL_0099: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00dc: Unknown result type (might be due to invalid IL or missing references)
+		//IL_011c: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0165: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0167: Unknown result type (might be due to invalid IL or missing references)
+		//IL_017c: Unknown result type (might be due to invalid IL or missing references)
 		if (string.IsNullOrWhiteSpace(name) || name.Length < 5 || !name.StartsWith("[") || !name.EndsWith("]") || !name.Contains("+"))
 		{
-			keys = null;
+			parts = null;
 			return false;
 		}
 		string[] array = name.Substring(1, name.Length - 2).ToLowerInvariant().Split('+');
-		List<KeyCode> list = new List<KeyCode>(array.Length);
+		List<ComboPart> list = new List<ComboPart>(array.Length);
 		List<string> list2 = new List<string>(array.Length);
 		string[] array2 = array;
 		foreach (string text in array2)
 		{
-			string text2 = text;
-			if (text.Length == 1 && char.IsDigit(text[0]))
+			if (text == "mousewheelup")
 			{
-				text2 = "alpha" + text;
-			}
-			if (text2 == "mousewheelup" || text2 == "mousewheeldown")
-			{
-				list2.Add(text2);
+				list.Add(new ComboPart
+				{
+					Key = (Key)0,
+					MouseButton = -1,
+					MouseWheelUp = true
+				});
+				list2.Add(text);
 				continue;
 			}
-			if (!Enum.TryParse<KeyCode>(text2, ignoreCase: true, out KeyCode result))
+			if (text == "mousewheeldown")
 			{
-				keys = null;
+				list.Add(new ComboPart
+				{
+					Key = (Key)0,
+					MouseButton = -1,
+					MouseWheelDown = true
+				});
+				list2.Add(text);
+				continue;
+			}
+			if (TryParseMouseButton(text, out var index))
+			{
+				list.Add(new ComboPart
+				{
+					Key = (Key)0,
+					MouseButton = index
+				});
+				list2.Add("mouse" + index);
+				continue;
+			}
+			if (!TryParseKeyboardKey(text, out var key))
+			{
+				parts = null;
 				return false;
 			}
-			list.Add(result);
-			string text3 = ((object)(KeyCode)(ref result)/*cast due to .constrained prefix*/).ToString().ToLowerInvariant();
-			list2.Add(text3.StartsWith("alpha") ? text3.Replace("alpha", "") : text3);
+			list.Add(new ComboPart
+			{
+				Key = key,
+				MouseButton = -1
+			});
+			list2.Add(UnityButtons.FormatKeyName(key).ToLowerInvariant());
 		}
 		name = "[" + string.Join("+", list2) + "]";
-		keys = list;
+		parts = list;
 		return true;
 	}
 
-	public static void RegisterButton(string name, List<KeyCode> keys)
+	public static void RegisterButton(string name, List<ComboPart> parts)
 	{
-		if (string.IsNullOrWhiteSpace(name) || keys == null)
+		if (string.IsNullOrWhiteSpace(name) || parts == null)
 		{
 			return;
 		}
-		bool usesMouseWheelUp = name.Contains("mousewheelup");
-		bool usesMouseWheelDown = name.Contains("mousewheeldown");
-		if ((keys.Count <= 1 && !usesMouseWheelUp && !usesMouseWheelDown) || Input.HasButton(name))
+		bool flag = parts.Any((ComboPart p) => p.MouseWheelUp);
+		bool flag2 = parts.Any((ComboPart p) => p.MouseWheelDown);
+		if ((parts.Count <= 1 && !flag && !flag2) || Input.HasButton(name))
 		{
 			return;
 		}
-		Input.AddButton(name, (KeyCode)0, (Func<bool>)delegate
+		ComboPart[] localParts = parts.ToArray();
+		Input.AddButton(name, (Func<bool>)delegate
 		{
-			//IL_0013: Unknown result type (might be due to invalid IL or missing references)
-			//IL_0018: Unknown result type (might be due to invalid IL or missing references)
-			//IL_0019: Unknown result type (might be due to invalid IL or missing references)
-			//IL_0028: Unknown result type (might be due to invalid IL or missing references)
-			//IL_004b: Unknown result type (might be due to invalid IL or missing references)
-			foreach (KeyCode key in keys)
+			//IL_0035: Unknown result type (might be due to invalid IL or missing references)
+			//IL_005d: Unknown result type (might be due to invalid IL or missing references)
+			//IL_00af: Unknown result type (might be due to invalid IL or missing references)
+			Keyboard current = Keyboard.current;
+			Mouse current2 = Mouse.current;
+			ComboPart[] array = localParts;
+			for (int i = 0; i < array.Length; i++)
 			{
-				if (!Input.GetKey(key))
+				ComboPart comboPart = array[i];
+				if (comboPart.MouseWheelUp)
 				{
-					return false;
+					if (current2 == null || ((InputControl<Vector2>)(object)current2.scroll).ReadValue().y <= 0f)
+					{
+						return false;
+					}
 				}
-				if (!IsFunctionKey(key) && !KeyBinding.IsOpen && (NeedsKeyboard.AnyActive((KeyCode)0) || HudMenuInput.AnyActive()))
+				else if (comboPart.MouseWheelDown)
 				{
-					return false;
+					if (current2 == null || ((InputControl<Vector2>)(object)current2.scroll).ReadValue().y >= 0f)
+					{
+						return false;
+					}
 				}
-				if (IsMouseButton(key) && NeedsMouseButtons.AnyActive())
+				else if (comboPart.IsMouseButton)
 				{
-					return false;
+					ButtonControl mouseButton = GetMouseButton(current2, comboPart.MouseButton);
+					if (mouseButton == null || !mouseButton.isPressed)
+					{
+						return false;
+					}
+					if (NeedsMouseButtons.AnyActive())
+					{
+						return false;
+					}
 				}
-				if (usesMouseWheelUp && Input.GetAxis("Mouse ScrollWheel") <= 0f)
+				else
 				{
-					return false;
-				}
-				if (usesMouseWheelDown && Input.GetAxis("Mouse ScrollWheel") >= 0f)
-				{
-					return false;
+					if (!comboPart.IsKeyboardKey)
+					{
+						return false;
+					}
+					if (current == null || !((ButtonControl)current[comboPart.Key]).isPressed)
+					{
+						return false;
+					}
+					if (!comboPart.IsFunctionKey && !KeyBinding.IsOpen && (NeedsKeyboard.AnyActive((Key)0) || HudMenuInput.AnyActive()))
+					{
+						return false;
+					}
 				}
 			}
 			return true;
-		}, (Action)null, false);
-	}
-
-	private static bool IsFunctionKey(KeyCode keyCode)
-	{
-		//IL_0000: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0006: Invalid comparison between Unknown and I4
-		//IL_0008: Unknown result type (might be due to invalid IL or missing references)
-		//IL_000e: Invalid comparison between Unknown and I4
-		if ((int)keyCode >= 282)
-		{
-			return (int)keyCode <= 296;
-		}
-		return false;
-	}
-
-	private static bool IsMouseButton(KeyCode keyCode)
-	{
-		//IL_0000: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0006: Invalid comparison between Unknown and I4
-		//IL_0008: Unknown result type (might be due to invalid IL or missing references)
-		//IL_000e: Invalid comparison between Unknown and I4
-		if ((int)keyCode >= 323)
-		{
-			return (int)keyCode <= 329;
-		}
-		return false;
+		}, (Action)null, false, (ButtonControl)null);
 	}
 
 	public static string FormatHeldKeys(IReadOnlyList<string> heldKeys)
@@ -9201,73 +9266,257 @@ public static class KeyCombos
 		}
 		if (heldKeys.Count > 1)
 		{
-			IEnumerable<string> values = from k in heldKeys
-				select k.ToLowerInvariant() into k
-				select (!k.StartsWith("alpha")) ? k : k.Replace("alpha", "");
+			IEnumerable<string> values = heldKeys.Select((string k) => k.ToLowerInvariant());
 			return "[" + string.Join("+", values) + "]";
 		}
 		return heldKeys[0];
+	}
+
+	private static bool TryParseMouseButton(string token, out int index)
+	{
+		switch (token)
+		{
+		case "mouse0":
+			index = 0;
+			return true;
+		case "mouse1":
+			index = 1;
+			return true;
+		case "mouse2":
+			index = 2;
+			return true;
+		case "mouse3":
+			index = 3;
+			return true;
+		case "mouse4":
+			index = 4;
+			return true;
+		default:
+			index = -1;
+			return false;
+		}
+	}
+
+	private static bool TryParseKeyboardKey(string token, out Key key)
+	{
+		token = UnityButtons.FormatKeyName(token);
+		if (token.Length == 1 && char.IsDigit(token[0]))
+		{
+			token = "Digit" + token;
+		}
+		if (Enum.TryParse<Key>(token, ignoreCase: true, out key))
+		{
+			return (int)key != 0;
+		}
+		return false;
+	}
+
+	private static ButtonControl GetMouseButton(Mouse mouse, int index)
+	{
+		if (mouse == null)
+		{
+			return null;
+		}
+		return (ButtonControl)(index switch
+		{
+			0 => mouse.leftButton, 
+			1 => mouse.rightButton, 
+			2 => mouse.middleButton, 
+			3 => mouse.backButton, 
+			4 => mouse.forwardButton, 
+			_ => null, 
+		});
+	}
+}
+
+
+using System.Collections.Generic;
+
+public static class LegacyKeyAliases
+{
+	private static readonly Dictionary<string, string> Aliases = new Dictionary<string, string>
+	{
+		{ "return", "enter" },
+		{ "leftcontrol", "leftctrl" },
+		{ "rightcontrol", "rightctrl" },
+		{ "print", "printscreen" },
+		{ "menu", "contextmenu" },
+		{ "alpha0", "digit0" },
+		{ "alpha1", "digit1" },
+		{ "alpha2", "digit2" },
+		{ "alpha3", "digit3" },
+		{ "alpha4", "digit4" },
+		{ "alpha5", "digit5" },
+		{ "alpha6", "digit6" },
+		{ "alpha7", "digit7" },
+		{ "alpha8", "digit8" },
+		{ "alpha9", "digit9" },
+		{ "keypad0", "numpad0" },
+		{ "keypad1", "numpad1" },
+		{ "keypad2", "numpad2" },
+		{ "keypad3", "numpad3" },
+		{ "keypad4", "numpad4" },
+		{ "keypad5", "numpad5" },
+		{ "keypad6", "numpad6" },
+		{ "keypad7", "numpad7" },
+		{ "keypad8", "numpad8" },
+		{ "keypad9", "numpad9" },
+		{ "keypaddivide", "numpaddivide" },
+		{ "keypadmultiply", "numpadmultiply" },
+		{ "keypadminus", "numpadminus" },
+		{ "keypadplus", "numpadplus" },
+		{ "keypadperiod", "numpadperiod" },
+		{ "keypadenter", "numpadenter" },
+		{ "keypadequals", "numpadequals" }
+	};
+
+	private static bool updatedSinceLastCheck;
+
+	public static string Normalize(string token)
+	{
+		if (string.IsNullOrEmpty(token))
+		{
+			return token;
+		}
+		if (Aliases.TryGetValue(token.ToLowerInvariant(), out var value))
+		{
+			updatedSinceLastCheck = true;
+			return value;
+		}
+		return token;
+	}
+
+	public static bool HasUpdatedOldBinds()
+	{
+		bool result = updatedSinceLastCheck;
+		updatedSinceLastCheck = false;
+		return result;
+	}
+}
+
+
+using UnityEngine;
+using UnityEngine.InputSystem;
+
+public static class MouseDelta
+{
+	public const float LegacyScale = 0.05f;
+
+	public static Vector2 Read()
+	{
+		//IL_0015: Unknown result type (might be due to invalid IL or missing references)
+		//IL_001f: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0009: Unknown result type (might be due to invalid IL or missing references)
+		Mouse current = Mouse.current;
+		if (current == null)
+		{
+			return Vector2.zero;
+		}
+		return ((InputControl<Vector2>)(object)((Pointer)current).delta).ReadValue() * 0.05f;
+	}
+}
+
+
+using UnityEngine;
+using UnityEngine.InputSystem;
+
+public static class MouseScroll
+{
+	public const float WheelDelta = 10f;
+
+	public static float ReadNotches()
+	{
+		//IL_0015: Unknown result type (might be due to invalid IL or missing references)
+		Mouse current = Mouse.current;
+		if (current == null)
+		{
+			return 0f;
+		}
+		return ((InputControl<Vector2>)(object)current.scroll).ReadValue().y * 10f;
 	}
 }
 
 
 using System;
+using System.Collections.Generic;
 using Facepunch;
 using UnityEngine;
+using UnityEngine.InputSystem;
+using UnityEngine.InputSystem.Controls;
 
 public static class UnityButtons
 {
-	private static bool isRegistered;
+	private static bool isRegistered = false;
+
+	private static readonly Dictionary<Key, Button> letterButtons = new Dictionary<Key, Button>();
 
 	public static void Register()
 	{
-		//IL_0038: Unknown result type (might be due to invalid IL or missing references)
-		//IL_003d: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0044: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0047: Unknown result type (might be due to invalid IL or missing references)
-		//IL_004d: Invalid comparison between Unknown and I4
+		//IL_0049: Unknown result type (might be due to invalid IL or missing references)
+		//IL_004e: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0055: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0058: Unknown result type (might be due to invalid IL or missing references)
+		//IL_005b: Invalid comparison between Unknown and I4
 		//IL_005e: Unknown result type (might be due to invalid IL or missing references)
 		//IL_005f: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00b2: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0065: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0068: Invalid comparison between Unknown and I4
+		//IL_006a: Unknown result type (might be due to invalid IL or missing references)
+		//IL_006d: Invalid comparison between Unknown and I4
+		//IL_0086: Unknown result type (might be due to invalid IL or missing references)
+		//IL_008d: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00ac: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00c6: Unknown result type (might be due to invalid IL or missing references)
 		if (isRegistered)
 		{
 			Debug.LogError((object)"UnityButtons.Register called twice!");
 			return;
 		}
+		InputSystem.onDeviceChange += OnDeviceChange;
 		isRegistered = true;
-		foreach (KeyCode value in Enum.GetValues(typeof(KeyCode)))
+		foreach (Key value in Enum.GetValues(typeof(Key)))
 		{
-			KeyCode val = value;
-			if ((int)val == 0 || (int)val >= 330)
+			if ((int)value == 0 || (int)value == 111)
 			{
 				continue;
 			}
-			string text = ((object)(KeyCode)(ref val)/*cast due to .constrained prefix*/).ToString();
-			KeyCode localKey = val;
-			bool isFKey = text.Length == 2 && text.StartsWith("F");
-			bool isMouseButton = text.StartsWith("mouse", StringComparison.CurrentCultureIgnoreCase);
-			if (text.StartsWith("Alpha"))
+			Key localKey = value;
+			bool isFKey = (int)value >= 94 && (int)value <= 123;
+			Keyboard current = Keyboard.current;
+			KeyControl val2 = ((current != null) ? current[value] : null);
+			string text = ResolveButtonName(value, val2);
+			Input.AddButton(text, (Func<bool>)delegate
 			{
-				text = text.Replace("Alpha", "");
+				//IL_000d: Unknown result type (might be due to invalid IL or missing references)
+				//IL_0030: Unknown result type (might be due to invalid IL or missing references)
+				Keyboard current2 = Keyboard.current;
+				if (current2 == null)
+				{
+					return false;
+				}
+				if (!((ButtonControl)current2[localKey]).isPressed)
+				{
+					return false;
+				}
+				return (isFKey || KeyBinding.IsOpen || (!NeedsKeyboard.AnyActive(localKey) && !HudMenuInput.AnyActive())) ? true : false;
+			}, (Action)null, false, (ButtonControl)(object)val2);
+			if (IsLetterKey(value))
+			{
+				Button button = Input.GetButton(text);
+				if (button != null)
+				{
+					letterButtons[value] = button;
+				}
 			}
-			Input.AddButton(text, val, (Func<bool>)delegate
-			{
-				//IL_0001: Unknown result type (might be due to invalid IL or missing references)
-				//IL_0027: Unknown result type (might be due to invalid IL or missing references)
-				if (!Input.GetKey(localKey))
-				{
-					return false;
-				}
-				if (!isMouseButton && !isFKey && !KeyBinding.IsOpen && (NeedsKeyboard.AnyActive(localKey) || HudMenuInput.AnyActive()))
-				{
-					return false;
-				}
-				return (!isMouseButton || !NeedsMouseButtons.AnyActive()) ? true : false;
-			}, (Action)null, false);
 		}
+		RegisterMouseButton("mouse0", (Mouse m) => m.leftButton);
+		RegisterMouseButton("mouse1", (Mouse m) => m.rightButton);
+		RegisterMouseButton("mouse2", (Mouse m) => m.middleButton);
+		RegisterMouseButton("mouse3", (Mouse m) => m.backButton);
+		RegisterMouseButton("mouse4", (Mouse m) => m.forwardButton);
 		float wheelValue = 0f;
 		float lastWheelValue = 0f;
-		Input.AddButton("MouseWheelUp", (KeyCode)0, (Func<bool>)delegate
+		Input.AddButton("MouseWheelUp", (Func<bool>)delegate
 		{
 			if (lastWheelValue > 0f)
 			{
@@ -9278,18 +9527,23 @@ public static class UnityButtons
 			return lastWheelValue > 0f;
 		}, (Action)delegate
 		{
+			//IL_002a: Unknown result type (might be due to invalid IL or missing references)
 			if (Cursor.visible)
 			{
 				wheelValue = 0f;
 			}
 			else
 			{
-				wheelValue = Mathf.Max(wheelValue, Input.GetAxis("Mouse ScrollWheel"));
+				Mouse current3 = Mouse.current;
+				if (current3 != null)
+				{
+					wheelValue = Mathf.Max(wheelValue, ((InputControl<Vector2>)(object)current3.scroll).ReadValue().y);
+				}
 			}
-		}, false);
+		}, false, (ButtonControl)null);
 		float wheelValue2 = 0f;
 		float lastWheelValue2 = 0f;
-		Input.AddButton("MouseWheelDown", (KeyCode)0, (Func<bool>)delegate
+		Input.AddButton("MouseWheelDown", (Func<bool>)delegate
 		{
 			if (lastWheelValue2 > 0f)
 			{
@@ -9300,15 +9554,121 @@ public static class UnityButtons
 			return lastWheelValue2 > 0f;
 		}, (Action)delegate
 		{
+			//IL_002a: Unknown result type (might be due to invalid IL or missing references)
 			if (Cursor.visible)
 			{
 				wheelValue2 = 0f;
 			}
 			else
 			{
-				wheelValue2 = Mathf.Max(wheelValue2, Input.GetAxis("Mouse ScrollWheel") * -1f);
+				Mouse current4 = Mouse.current;
+				if (current4 != null)
+				{
+					wheelValue2 = Mathf.Max(wheelValue2, ((InputControl<Vector2>)(object)current4.scroll).ReadValue().y * -1f);
+				}
 			}
-		}, false);
+		}, false, (ButtonControl)null);
+	}
+
+	private static string ResolveButtonName(Key key, KeyControl control)
+	{
+		//IL_004e: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0003: Unknown result type (might be due to invalid IL or missing references)
+		if (control != null && IsLetterKey(key))
+		{
+			string displayName = ((InputControl)control).displayName;
+			if (!string.IsNullOrEmpty(displayName) && displayName.Length == 1)
+			{
+				char c = displayName[0];
+				if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z'))
+				{
+					return char.ToLowerInvariant(c).ToString();
+				}
+			}
+		}
+		return FormatKeyName(key);
+	}
+
+	private static bool IsLetterKey(Key key)
+	{
+		//IL_0000: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0003: Invalid comparison between Unknown and I4
+		//IL_0005: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0008: Invalid comparison between Unknown and I4
+		if ((int)key >= 15)
+		{
+			return (int)key <= 40;
+		}
+		return false;
+	}
+
+	public static string FormatKeyName(string token)
+	{
+		if (string.IsNullOrEmpty(token))
+		{
+			return token;
+		}
+		token = LegacyKeyAliases.Normalize(token);
+		if (token.StartsWith("Digit", StringComparison.OrdinalIgnoreCase))
+		{
+			return token.Substring("Digit".Length).ToLowerInvariant();
+		}
+		return token.ToLowerInvariant();
+	}
+
+	public static string FormatKeyName(Key key)
+	{
+		return FormatKeyName(((object)(Key)(ref key)/*cast due to .constrained prefix*/).ToString());
+	}
+
+	private static void RegisterMouseButton(string name, Func<Mouse, ButtonControl> selector)
+	{
+		ButtonControl val = ((Mouse.current != null) ? selector(Mouse.current) : null);
+		Input.AddButton(name, (Func<bool>)delegate
+		{
+			Mouse current = Mouse.current;
+			if (current == null)
+			{
+				return false;
+			}
+			ButtonControl val2 = selector(current);
+			if (val2 == null || !val2.isPressed)
+			{
+				return false;
+			}
+			return !NeedsMouseButtons.AnyActive();
+		}, (Action)null, false, val);
+	}
+
+	private static void OnDeviceChange(InputDevice device, InputDeviceChange change)
+	{
+		//IL_0009: Unknown result type (might be due to invalid IL or missing references)
+		//IL_000b: Invalid comparison between Unknown and I4
+		//IL_000d: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0010: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0012: Invalid comparison between Unknown and I4
+		if (device is Keyboard && ((int)change == 7 || (int)change == 0 || (int)change == 3))
+		{
+			RebuildLetterButtonNames();
+		}
+	}
+
+	private static void RebuildLetterButtonNames()
+	{
+		//IL_0022: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0036: Unknown result type (might be due to invalid IL or missing references)
+		Keyboard current = Keyboard.current;
+		if (current == null)
+		{
+			return;
+		}
+		foreach (KeyValuePair<Key, Button> letterButton in letterButtons)
+		{
+			KeyControl control = current[letterButton.Key];
+			Button value = letterButton.Value;
+			string text = ResolveButtonName(letterButton.Key, control);
+			value.Name = text.ToLowerInvariant();
+		}
 	}
 }
 
@@ -19478,27 +19838,6 @@ internal static class OnLeaveSessionRequestedCallbackInternalImplementation
 }
 
 
-public enum OnlineSessionPermissionLevel
-{
-	PublicAdvertised,
-	JoinViaPresence,
-	InviteOnly
-}
-
-
-public enum OnlineSessionState
-{
-	NoSession,
-	Creating,
-	Pending,
-	Starting,
-	InProgress,
-	Ending,
-	Ended,
-	Destroying
-}
-
-
 using Epic.OnlineServices.Sessions;
 
 public delegate void OnQueryInvitesCallback(ref QueryInvitesCallbackInfo data);
@@ -19958,6 +20297,27 @@ internal static class OnUpdateSessionCallbackInternalImplementation
 			callback(ref callbackInfo);
 		}
 	}
+}
+
+
+public enum OnlineSessionPermissionLevel
+{
+	PublicAdvertised,
+	JoinViaPresence,
+	InviteOnly
+}
+
+
+public enum OnlineSessionState
+{
+	NoSession,
+	Creating,
+	Pending,
+	Starting,
+	InProgress,
+	Ending,
+	Ended,
+	Destroying
 }
 
 
@@ -23024,6 +23384,196 @@ public sealed class SanctionsInterface : Handle
 }
 
 
+using Epic.OnlineServices.Reports;
+
+public delegate void OnSendPlayerBehaviorReportCompleteCallback(ref SendPlayerBehaviorReportCompleteCallbackInfo data);
+
+
+using System.Runtime.InteropServices;
+using Epic.OnlineServices.Reports;
+
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+internal delegate void OnSendPlayerBehaviorReportCompleteCallbackInternal(ref SendPlayerBehaviorReportCompleteCallbackInfoInternal data);
+
+
+using Epic.OnlineServices;
+using Epic.OnlineServices.Reports;
+
+internal static class OnSendPlayerBehaviorReportCompleteCallbackInternalImplementation
+{
+	private static OnSendPlayerBehaviorReportCompleteCallbackInternal s_Delegate;
+
+	public static OnSendPlayerBehaviorReportCompleteCallbackInternal Delegate
+	{
+		get
+		{
+			if (s_Delegate == null)
+			{
+				s_Delegate = EntryPoint;
+			}
+			return s_Delegate;
+		}
+	}
+
+	[MonoPInvokeCallback(typeof(OnSendPlayerBehaviorReportCompleteCallbackInternal))]
+	public static void EntryPoint(ref SendPlayerBehaviorReportCompleteCallbackInfoInternal data)
+	{
+		if (Helper.TryGetAndRemoveCallback<SendPlayerBehaviorReportCompleteCallbackInfoInternal, OnSendPlayerBehaviorReportCompleteCallback, SendPlayerBehaviorReportCompleteCallbackInfo>(ref data, out var callback, out var callbackInfo))
+		{
+			callback(ref callbackInfo);
+		}
+	}
+}
+
+
+public enum PlayerReportsCategory
+{
+	Invalid,
+	Cheating,
+	Exploiting,
+	OffensiveProfile,
+	VerbalAbuse,
+	Scamming,
+	Spamming,
+	Other
+}
+
+
+using System;
+using Epic.OnlineServices;
+using Epic.OnlineServices.Reports;
+
+public sealed class ReportsInterface : Handle
+{
+	public const int REPORTCONTEXT_MAX_LENGTH = 4096;
+
+	public const int REPORTMESSAGE_MAX_LENGTH = 512;
+
+	public const int SENDPLAYERBEHAVIORREPORT_API_LATEST = 2;
+
+	public ReportsInterface()
+	{
+	}
+
+	public ReportsInterface(IntPtr innerHandle)
+		: base(innerHandle)
+	{
+	}
+
+	public void SendPlayerBehaviorReport(ref SendPlayerBehaviorReportOptions options, object clientData, OnSendPlayerBehaviorReportCompleteCallback completionDelegate)
+	{
+		if (completionDelegate == null)
+		{
+			throw new ArgumentNullException("completionDelegate");
+		}
+		SendPlayerBehaviorReportOptionsInternal options2 = default(SendPlayerBehaviorReportOptionsInternal);
+		options2.Set(ref options);
+		IntPtr clientDataPointer = IntPtr.Zero;
+		Helper.AddCallback(out clientDataPointer, clientData, completionDelegate);
+		Bindings.EOS_Reports_SendPlayerBehaviorReport(base.InnerHandle, ref options2, clientDataPointer, OnSendPlayerBehaviorReportCompleteCallbackInternalImplementation.Delegate);
+		Helper.Dispose(ref options2);
+	}
+}
+
+
+using Epic.OnlineServices;
+
+public struct SendPlayerBehaviorReportCompleteCallbackInfo : ICallbackInfo
+{
+	public Result ResultCode { get; set; }
+
+	public object ClientData { get; set; }
+
+	public object GetClientData()
+	{
+		return ClientData;
+	}
+
+	public Result? GetResultCode()
+	{
+		return ResultCode;
+	}
+}
+
+
+using System;
+using Epic.OnlineServices;
+using Epic.OnlineServices.Reports;
+
+internal struct SendPlayerBehaviorReportCompleteCallbackInfoInternal : ICallbackInfoInternal, IGettable<SendPlayerBehaviorReportCompleteCallbackInfo>
+{
+	private Result m_ResultCode;
+
+	private IntPtr m_ClientData;
+
+	public IntPtr ClientDataPointer => m_ClientData;
+
+	public void Get(out SendPlayerBehaviorReportCompleteCallbackInfo other)
+	{
+		other = default(SendPlayerBehaviorReportCompleteCallbackInfo);
+		other.ResultCode = m_ResultCode;
+		Helper.Get(m_ClientData, out object to);
+		other.ClientData = to;
+	}
+}
+
+
+using Epic.OnlineServices;
+using Epic.OnlineServices.Reports;
+
+public struct SendPlayerBehaviorReportOptions
+{
+	public ProductUserId ReporterUserId { get; set; }
+
+	public ProductUserId ReportedUserId { get; set; }
+
+	public PlayerReportsCategory Category { get; set; }
+
+	public Utf8String Message { get; set; }
+
+	public Utf8String Context { get; set; }
+}
+
+
+using System;
+using Epic.OnlineServices;
+using Epic.OnlineServices.Reports;
+
+internal struct SendPlayerBehaviorReportOptionsInternal : ISettable<SendPlayerBehaviorReportOptions>, IDisposable
+{
+	private int m_ApiVersion;
+
+	private IntPtr m_ReporterUserId;
+
+	private IntPtr m_ReportedUserId;
+
+	private PlayerReportsCategory m_Category;
+
+	private IntPtr m_Message;
+
+	private IntPtr m_Context;
+
+	public void Set(ref SendPlayerBehaviorReportOptions other)
+	{
+		Dispose();
+		m_ApiVersion = 2;
+		Helper.Set((Handle)other.ReporterUserId, ref m_ReporterUserId);
+		Helper.Set((Handle)other.ReportedUserId, ref m_ReportedUserId);
+		m_Category = other.Category;
+		Helper.Set(other.Message, ref m_Message);
+		Helper.Set(other.Context, ref m_Context);
+	}
+
+	public void Dispose()
+	{
+		Helper.Dispose(ref m_ReporterUserId);
+		Helper.Dispose(ref m_ReportedUserId);
+		Helper.Dispose(ref m_Message);
+		Helper.Dispose(ref m_Context);
+	}
+}
+
+
 using Epic.OnlineServices;
 
 public struct AddNotifyDataReceivedOptions
@@ -25812,70 +26362,6 @@ internal struct QueryOutputDevicesInformationOptionsInternal : ISettable<QueryOu
 }
 
 
-using Epic.OnlineServices;
-
-public struct RegisterPlatformAudioUserOptions
-{
-	public Utf8String UserId { get; set; }
-}
-
-
-using System;
-using Epic.OnlineServices;
-using Epic.OnlineServices.RTCAudio;
-
-internal struct RegisterPlatformAudioUserOptionsInternal : ISettable<RegisterPlatformAudioUserOptions>, IDisposable
-{
-	private int m_ApiVersion;
-
-	private IntPtr m_UserId;
-
-	public void Set(ref RegisterPlatformAudioUserOptions other)
-	{
-		Dispose();
-		m_ApiVersion = 1;
-		Helper.Set(other.UserId, ref m_UserId);
-	}
-
-	public void Dispose()
-	{
-		Helper.Dispose(ref m_UserId);
-	}
-}
-
-
-using Epic.OnlineServices;
-
-public struct RegisterPlatformUserOptions
-{
-	public Utf8String PlatformUserId { get; set; }
-}
-
-
-using System;
-using Epic.OnlineServices;
-using Epic.OnlineServices.RTCAudio;
-
-internal struct RegisterPlatformUserOptionsInternal : ISettable<RegisterPlatformUserOptions>, IDisposable
-{
-	private int m_ApiVersion;
-
-	private IntPtr m_PlatformUserId;
-
-	public void Set(ref RegisterPlatformUserOptions other)
-	{
-		Dispose();
-		m_ApiVersion = 1;
-		Helper.Set(other.PlatformUserId, ref m_PlatformUserId);
-	}
-
-	public void Dispose()
-	{
-		Helper.Dispose(ref m_PlatformUserId);
-	}
-}
-
-
 public enum RTCAudioInputStatus
 {
 	Idle,
@@ -26405,6 +26891,70 @@ public enum RTCAudioStatus
 	Disabled,
 	AdminDisabled,
 	NotListeningDisabled
+}
+
+
+using Epic.OnlineServices;
+
+public struct RegisterPlatformAudioUserOptions
+{
+	public Utf8String UserId { get; set; }
+}
+
+
+using System;
+using Epic.OnlineServices;
+using Epic.OnlineServices.RTCAudio;
+
+internal struct RegisterPlatformAudioUserOptionsInternal : ISettable<RegisterPlatformAudioUserOptions>, IDisposable
+{
+	private int m_ApiVersion;
+
+	private IntPtr m_UserId;
+
+	public void Set(ref RegisterPlatformAudioUserOptions other)
+	{
+		Dispose();
+		m_ApiVersion = 1;
+		Helper.Set(other.UserId, ref m_UserId);
+	}
+
+	public void Dispose()
+	{
+		Helper.Dispose(ref m_UserId);
+	}
+}
+
+
+using Epic.OnlineServices;
+
+public struct RegisterPlatformUserOptions
+{
+	public Utf8String PlatformUserId { get; set; }
+}
+
+
+using System;
+using Epic.OnlineServices;
+using Epic.OnlineServices.RTCAudio;
+
+internal struct RegisterPlatformUserOptionsInternal : ISettable<RegisterPlatformUserOptions>, IDisposable
+{
+	private int m_ApiVersion;
+
+	private IntPtr m_PlatformUserId;
+
+	public void Set(ref RegisterPlatformUserOptions other)
+	{
+		Dispose();
+		m_ApiVersion = 1;
+		Helper.Set(other.PlatformUserId, ref m_PlatformUserId);
+	}
+
+	public void Dispose()
+	{
+		Helper.Dispose(ref m_PlatformUserId);
+	}
 }
 
 
@@ -28753,61 +29303,6 @@ internal struct ParticipantStatusChangedCallbackInfoInternal : ICallbackInfoInte
 }
 
 
-using Epic.OnlineServices;
-
-public struct RoomStatisticsUpdatedInfo : ICallbackInfo
-{
-	public object ClientData { get; set; }
-
-	public ProductUserId LocalUserId { get; set; }
-
-	public Utf8String RoomName { get; set; }
-
-	public Utf8String Statistic { get; set; }
-
-	public object GetClientData()
-	{
-		return ClientData;
-	}
-
-	public Result? GetResultCode()
-	{
-		return null;
-	}
-}
-
-
-using System;
-using Epic.OnlineServices;
-using Epic.OnlineServices.RTC;
-
-internal struct RoomStatisticsUpdatedInfoInternal : ICallbackInfoInternal, IGettable<RoomStatisticsUpdatedInfo>
-{
-	private IntPtr m_ClientData;
-
-	private IntPtr m_LocalUserId;
-
-	private IntPtr m_RoomName;
-
-	private IntPtr m_Statistic;
-
-	public IntPtr ClientDataPointer => m_ClientData;
-
-	public void Get(out RoomStatisticsUpdatedInfo other)
-	{
-		other = default(RoomStatisticsUpdatedInfo);
-		Helper.Get(m_ClientData, out object to);
-		other.ClientData = to;
-		Helper.Get(m_LocalUserId, out ProductUserId to2);
-		other.LocalUserId = to2;
-		Helper.Get(m_RoomName, out Utf8String to3);
-		other.RoomName = to3;
-		Helper.Get(m_Statistic, out Utf8String to4);
-		other.Statistic = to4;
-	}
-}
-
-
 using System;
 using Epic.OnlineServices;
 using Epic.OnlineServices.RTC;
@@ -29002,6 +29497,61 @@ public enum RTCParticipantStatus
 
 using Epic.OnlineServices;
 
+public struct RoomStatisticsUpdatedInfo : ICallbackInfo
+{
+	public object ClientData { get; set; }
+
+	public ProductUserId LocalUserId { get; set; }
+
+	public Utf8String RoomName { get; set; }
+
+	public Utf8String Statistic { get; set; }
+
+	public object GetClientData()
+	{
+		return ClientData;
+	}
+
+	public Result? GetResultCode()
+	{
+		return null;
+	}
+}
+
+
+using System;
+using Epic.OnlineServices;
+using Epic.OnlineServices.RTC;
+
+internal struct RoomStatisticsUpdatedInfoInternal : ICallbackInfoInternal, IGettable<RoomStatisticsUpdatedInfo>
+{
+	private IntPtr m_ClientData;
+
+	private IntPtr m_LocalUserId;
+
+	private IntPtr m_RoomName;
+
+	private IntPtr m_Statistic;
+
+	public IntPtr ClientDataPointer => m_ClientData;
+
+	public void Get(out RoomStatisticsUpdatedInfo other)
+	{
+		other = default(RoomStatisticsUpdatedInfo);
+		Helper.Get(m_ClientData, out object to);
+		other.ClientData = to;
+		Helper.Get(m_LocalUserId, out ProductUserId to2);
+		other.LocalUserId = to2;
+		Helper.Get(m_RoomName, out Utf8String to3);
+		other.RoomName = to3;
+		Helper.Get(m_Statistic, out Utf8String to4);
+		other.Statistic = to4;
+	}
+}
+
+
+using Epic.OnlineServices;
+
 public struct SetRoomSettingOptions
 {
 	public ProductUserId LocalUserId { get; set; }
@@ -29084,196 +29634,6 @@ internal struct SetSettingOptionsInternal : ISettable<SetSettingOptions>, IDispo
 	{
 		Helper.Dispose(ref m_SettingName);
 		Helper.Dispose(ref m_SettingValue);
-	}
-}
-
-
-using Epic.OnlineServices.Reports;
-
-public delegate void OnSendPlayerBehaviorReportCompleteCallback(ref SendPlayerBehaviorReportCompleteCallbackInfo data);
-
-
-using System.Runtime.InteropServices;
-using Epic.OnlineServices.Reports;
-
-[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-internal delegate void OnSendPlayerBehaviorReportCompleteCallbackInternal(ref SendPlayerBehaviorReportCompleteCallbackInfoInternal data);
-
-
-using Epic.OnlineServices;
-using Epic.OnlineServices.Reports;
-
-internal static class OnSendPlayerBehaviorReportCompleteCallbackInternalImplementation
-{
-	private static OnSendPlayerBehaviorReportCompleteCallbackInternal s_Delegate;
-
-	public static OnSendPlayerBehaviorReportCompleteCallbackInternal Delegate
-	{
-		get
-		{
-			if (s_Delegate == null)
-			{
-				s_Delegate = EntryPoint;
-			}
-			return s_Delegate;
-		}
-	}
-
-	[MonoPInvokeCallback(typeof(OnSendPlayerBehaviorReportCompleteCallbackInternal))]
-	public static void EntryPoint(ref SendPlayerBehaviorReportCompleteCallbackInfoInternal data)
-	{
-		if (Helper.TryGetAndRemoveCallback<SendPlayerBehaviorReportCompleteCallbackInfoInternal, OnSendPlayerBehaviorReportCompleteCallback, SendPlayerBehaviorReportCompleteCallbackInfo>(ref data, out var callback, out var callbackInfo))
-		{
-			callback(ref callbackInfo);
-		}
-	}
-}
-
-
-public enum PlayerReportsCategory
-{
-	Invalid,
-	Cheating,
-	Exploiting,
-	OffensiveProfile,
-	VerbalAbuse,
-	Scamming,
-	Spamming,
-	Other
-}
-
-
-using System;
-using Epic.OnlineServices;
-using Epic.OnlineServices.Reports;
-
-public sealed class ReportsInterface : Handle
-{
-	public const int REPORTCONTEXT_MAX_LENGTH = 4096;
-
-	public const int REPORTMESSAGE_MAX_LENGTH = 512;
-
-	public const int SENDPLAYERBEHAVIORREPORT_API_LATEST = 2;
-
-	public ReportsInterface()
-	{
-	}
-
-	public ReportsInterface(IntPtr innerHandle)
-		: base(innerHandle)
-	{
-	}
-
-	public void SendPlayerBehaviorReport(ref SendPlayerBehaviorReportOptions options, object clientData, OnSendPlayerBehaviorReportCompleteCallback completionDelegate)
-	{
-		if (completionDelegate == null)
-		{
-			throw new ArgumentNullException("completionDelegate");
-		}
-		SendPlayerBehaviorReportOptionsInternal options2 = default(SendPlayerBehaviorReportOptionsInternal);
-		options2.Set(ref options);
-		IntPtr clientDataPointer = IntPtr.Zero;
-		Helper.AddCallback(out clientDataPointer, clientData, completionDelegate);
-		Bindings.EOS_Reports_SendPlayerBehaviorReport(base.InnerHandle, ref options2, clientDataPointer, OnSendPlayerBehaviorReportCompleteCallbackInternalImplementation.Delegate);
-		Helper.Dispose(ref options2);
-	}
-}
-
-
-using Epic.OnlineServices;
-
-public struct SendPlayerBehaviorReportCompleteCallbackInfo : ICallbackInfo
-{
-	public Result ResultCode { get; set; }
-
-	public object ClientData { get; set; }
-
-	public object GetClientData()
-	{
-		return ClientData;
-	}
-
-	public Result? GetResultCode()
-	{
-		return ResultCode;
-	}
-}
-
-
-using System;
-using Epic.OnlineServices;
-using Epic.OnlineServices.Reports;
-
-internal struct SendPlayerBehaviorReportCompleteCallbackInfoInternal : ICallbackInfoInternal, IGettable<SendPlayerBehaviorReportCompleteCallbackInfo>
-{
-	private Result m_ResultCode;
-
-	private IntPtr m_ClientData;
-
-	public IntPtr ClientDataPointer => m_ClientData;
-
-	public void Get(out SendPlayerBehaviorReportCompleteCallbackInfo other)
-	{
-		other = default(SendPlayerBehaviorReportCompleteCallbackInfo);
-		other.ResultCode = m_ResultCode;
-		Helper.Get(m_ClientData, out object to);
-		other.ClientData = to;
-	}
-}
-
-
-using Epic.OnlineServices;
-using Epic.OnlineServices.Reports;
-
-public struct SendPlayerBehaviorReportOptions
-{
-	public ProductUserId ReporterUserId { get; set; }
-
-	public ProductUserId ReportedUserId { get; set; }
-
-	public PlayerReportsCategory Category { get; set; }
-
-	public Utf8String Message { get; set; }
-
-	public Utf8String Context { get; set; }
-}
-
-
-using System;
-using Epic.OnlineServices;
-using Epic.OnlineServices.Reports;
-
-internal struct SendPlayerBehaviorReportOptionsInternal : ISettable<SendPlayerBehaviorReportOptions>, IDisposable
-{
-	private int m_ApiVersion;
-
-	private IntPtr m_ReporterUserId;
-
-	private IntPtr m_ReportedUserId;
-
-	private PlayerReportsCategory m_Category;
-
-	private IntPtr m_Message;
-
-	private IntPtr m_Context;
-
-	public void Set(ref SendPlayerBehaviorReportOptions other)
-	{
-		Dispose();
-		m_ApiVersion = 2;
-		Helper.Set((Handle)other.ReporterUserId, ref m_ReporterUserId);
-		Helper.Set((Handle)other.ReportedUserId, ref m_ReportedUserId);
-		m_Category = other.Category;
-		Helper.Set(other.Message, ref m_Message);
-		Helper.Set(other.Context, ref m_Context);
-	}
-
-	public void Dispose()
-	{
-		Helper.Dispose(ref m_ReporterUserId);
-		Helper.Dispose(ref m_ReportedUserId);
-		Helper.Dispose(ref m_Message);
-		Helper.Dispose(ref m_Context);
 	}
 }
 
@@ -29650,457 +30010,5 @@ public struct SubmitSnapshotCallbackInfo : ICallbackInfo
 		return ResultCode;
 	}
 }
-
-
-using System;
-using Epic.OnlineServices;
-using Epic.OnlineServices.ProgressionSnapshot;
-
-internal struct SubmitSnapshotCallbackInfoInternal : ICallbackInfoInternal, IGettable<SubmitSnapshotCallbackInfo>
-{
-	private Result m_ResultCode;
-
-	private uint m_SnapshotId;
-
-	private IntPtr m_ClientData;
-
-	public IntPtr ClientDataPointer => m_ClientData;
-
-	public void Get(out SubmitSnapshotCallbackInfo other)
-	{
-		other = default(SubmitSnapshotCallbackInfo);
-		other.ResultCode = m_ResultCode;
-		other.SnapshotId = m_SnapshotId;
-		Helper.Get(m_ClientData, out object to);
-		other.ClientData = to;
-	}
-}
-
-
-public struct SubmitSnapshotOptions
-{
-	public uint SnapshotId { get; set; }
-}
-
-
-using System;
-using Epic.OnlineServices;
-using Epic.OnlineServices.ProgressionSnapshot;
-
-internal struct SubmitSnapshotOptionsInternal : ISettable<SubmitSnapshotOptions>, IDisposable
-{
-	private int m_ApiVersion;
-
-	private uint m_SnapshotId;
-
-	public void Set(ref SubmitSnapshotOptions other)
-	{
-		Dispose();
-		m_ApiVersion = 1;
-		m_SnapshotId = other.SnapshotId;
-	}
-
-	public void Dispose()
-	{
-	}
-}
-
-
-using System.Runtime.InteropServices;
-
-[StructLayout(LayoutKind.Sequential, Size = 1)]
-public struct AddNotifyJoinGameAcceptedOptions
-{
-}
-
-
-using System;
-using Epic.OnlineServices;
-using Epic.OnlineServices.Presence;
-
-internal struct AddNotifyJoinGameAcceptedOptionsInternal : ISettable<AddNotifyJoinGameAcceptedOptions>, IDisposable
-{
-	private int m_ApiVersion;
-
-	public void Set(ref AddNotifyJoinGameAcceptedOptions other)
-	{
-		Dispose();
-		m_ApiVersion = 2;
-	}
-
-	public void Dispose()
-	{
-	}
-}
-
-
-using System.Runtime.InteropServices;
-
-[StructLayout(LayoutKind.Sequential, Size = 1)]
-public struct AddNotifyOnPresenceChangedOptions
-{
-}
-
-
-using System;
-using Epic.OnlineServices;
-using Epic.OnlineServices.Presence;
-
-internal struct AddNotifyOnPresenceChangedOptionsInternal : ISettable<AddNotifyOnPresenceChangedOptions>, IDisposable
-{
-	private int m_ApiVersion;
-
-	public void Set(ref AddNotifyOnPresenceChangedOptions other)
-	{
-		Dispose();
-		m_ApiVersion = 1;
-	}
-
-	public void Dispose()
-	{
-	}
-}
-
-
-using Epic.OnlineServices;
-
-public struct CopyPresenceOptions
-{
-	public EpicAccountId LocalUserId { get; set; }
-
-	public EpicAccountId TargetUserId { get; set; }
-}
-
-
-using System;
-using Epic.OnlineServices;
-using Epic.OnlineServices.Presence;
-
-internal struct CopyPresenceOptionsInternal : ISettable<CopyPresenceOptions>, IDisposable
-{
-	private int m_ApiVersion;
-
-	private IntPtr m_LocalUserId;
-
-	private IntPtr m_TargetUserId;
-
-	public void Set(ref CopyPresenceOptions other)
-	{
-		Dispose();
-		m_ApiVersion = 3;
-		Helper.Set((Handle)other.LocalUserId, ref m_LocalUserId);
-		Helper.Set((Handle)other.TargetUserId, ref m_TargetUserId);
-	}
-
-	public void Dispose()
-	{
-		Helper.Dispose(ref m_LocalUserId);
-		Helper.Dispose(ref m_TargetUserId);
-	}
-}
-
-
-using Epic.OnlineServices;
-
-public struct CreatePresenceModificationOptions
-{
-	public EpicAccountId LocalUserId { get; set; }
-}
-
-
-using System;
-using Epic.OnlineServices;
-using Epic.OnlineServices.Presence;
-
-internal struct CreatePresenceModificationOptionsInternal : ISettable<CreatePresenceModificationOptions>, IDisposable
-{
-	private int m_ApiVersion;
-
-	private IntPtr m_LocalUserId;
-
-	public void Set(ref CreatePresenceModificationOptions other)
-	{
-		Dispose();
-		m_ApiVersion = 1;
-		Helper.Set((Handle)other.LocalUserId, ref m_LocalUserId);
-	}
-
-	public void Dispose()
-	{
-		Helper.Dispose(ref m_LocalUserId);
-	}
-}
-
-
-using Epic.OnlineServices;
-
-public struct DataRecord
-{
-	public Utf8String Key { get; set; }
-
-	public Utf8String Value { get; set; }
-}
-
-
-using System;
-using Epic.OnlineServices;
-using Epic.OnlineServices.Presence;
-
-internal struct DataRecordInternal : IGettable<DataRecord>, ISettable<DataRecord>, IDisposable
-{
-	private int m_ApiVersion;
-
-	private IntPtr m_Key;
-
-	private IntPtr m_Value;
-
-	public void Get(out DataRecord other)
-	{
-		other = default(DataRecord);
-		Helper.Get(m_Key, out Utf8String to);
-		other.Key = to;
-		Helper.Get(m_Value, out Utf8String to2);
-		other.Value = to2;
-	}
-
-	public void Set(ref DataRecord other)
-	{
-		Dispose();
-		m_ApiVersion = 1;
-		Helper.Set(other.Key, ref m_Key);
-		Helper.Set(other.Value, ref m_Value);
-	}
-
-	public void Dispose()
-	{
-		Helper.Dispose(ref m_Key);
-		Helper.Dispose(ref m_Value);
-	}
-}
-
-
-using Epic.OnlineServices;
-
-public struct GetJoinInfoOptions
-{
-	public EpicAccountId LocalUserId { get; set; }
-
-	public EpicAccountId TargetUserId { get; set; }
-}
-
-
-using System;
-using Epic.OnlineServices;
-using Epic.OnlineServices.Presence;
-
-internal struct GetJoinInfoOptionsInternal : ISettable<GetJoinInfoOptions>, IDisposable
-{
-	private int m_ApiVersion;
-
-	private IntPtr m_LocalUserId;
-
-	private IntPtr m_TargetUserId;
-
-	public void Set(ref GetJoinInfoOptions other)
-	{
-		Dispose();
-		m_ApiVersion = 1;
-		Helper.Set((Handle)other.LocalUserId, ref m_LocalUserId);
-		Helper.Set((Handle)other.TargetUserId, ref m_TargetUserId);
-	}
-
-	public void Dispose()
-	{
-		Helper.Dispose(ref m_LocalUserId);
-		Helper.Dispose(ref m_TargetUserId);
-	}
-}
-
-
-using Epic.OnlineServices;
-
-public struct HasPresenceOptions
-{
-	public EpicAccountId LocalUserId { get; set; }
-
-	public EpicAccountId TargetUserId { get; set; }
-}
-
-
-using System;
-using Epic.OnlineServices;
-using Epic.OnlineServices.Presence;
-
-internal struct HasPresenceOptionsInternal : ISettable<HasPresenceOptions>, IDisposable
-{
-	private int m_ApiVersion;
-
-	private IntPtr m_LocalUserId;
-
-	private IntPtr m_TargetUserId;
-
-	public void Set(ref HasPresenceOptions other)
-	{
-		Dispose();
-		m_ApiVersion = 1;
-		Helper.Set((Handle)other.LocalUserId, ref m_LocalUserId);
-		Helper.Set((Handle)other.TargetUserId, ref m_TargetUserId);
-	}
-
-	public void Dispose()
-	{
-		Helper.Dispose(ref m_LocalUserId);
-		Helper.Dispose(ref m_TargetUserId);
-	}
-}
-
-
-using Epic.OnlineServices;
-using Epic.OnlineServices.Presence;
-
-public struct Info
-{
-	public Status Status { get; set; }
-
-	public EpicAccountId UserId { get; set; }
-
-	public Utf8String ProductId { get; set; }
-
-	public Utf8String ProductVersion { get; set; }
-
-	public Utf8String Platform { get; set; }
-
-	public Utf8String RichText { get; set; }
-
-	public DataRecord[] Records { get; set; }
-
-	public Utf8String ProductName { get; set; }
-
-	public Utf8String IntegratedPlatform { get; set; }
-}
-
-
-using System;
-using Epic.OnlineServices;
-using Epic.OnlineServices.Presence;
-
-internal struct InfoInternal : IGettable<Info>
-{
-	private int m_ApiVersion;
-
-	private Status m_Status;
-
-	private IntPtr m_UserId;
-
-	private IntPtr m_ProductId;
-
-	private IntPtr m_ProductVersion;
-
-	private IntPtr m_Platform;
-
-	private IntPtr m_RichText;
-
-	private int m_RecordsCount;
-
-	private IntPtr m_Records;
-
-	private IntPtr m_ProductName;
-
-	private IntPtr m_IntegratedPlatform;
-
-	public void Get(out Info other)
-	{
-		other = default(Info);
-		other.Status = m_Status;
-		Helper.Get(m_UserId, out EpicAccountId to);
-		other.UserId = to;
-		Helper.Get(m_ProductId, out Utf8String to2);
-		other.ProductId = to2;
-		Helper.Get(m_ProductVersion, out Utf8String to3);
-		other.ProductVersion = to3;
-		Helper.Get(m_Platform, out Utf8String to4);
-		other.Platform = to4;
-		Helper.Get(m_RichText, out Utf8String to5);
-		other.RichText = to5;
-		Helper.Get<DataRecordInternal, DataRecord>(m_Records, out var to6, m_RecordsCount, isArrayItemAllocated: false);
-		other.Records = to6;
-		Helper.Get(m_ProductName, out Utf8String to7);
-		other.ProductName = to7;
-		Helper.Get(m_IntegratedPlatform, out Utf8String to8);
-		other.IntegratedPlatform = to8;
-	}
-}
-
-
-using Epic.OnlineServices;
-
-public struct JoinGameAcceptedCallbackInfo : ICallbackInfo
-{
-	public object ClientData { get; set; }
-
-	public Utf8String JoinInfo { get; set; }
-
-	public EpicAccountId LocalUserId { get; set; }
-
-	public EpicAccountId TargetUserId { get; set; }
-
-	public ulong UiEventId { get; set; }
-
-	public object GetClientData()
-	{
-		return ClientData;
-	}
-
-	public Result? GetResultCode()
-	{
-		return null;
-	}
-}
-
-
-using System;
-using Epic.OnlineServices;
-using Epic.OnlineServices.Presence;
-
-internal struct JoinGameAcceptedCallbackInfoInternal : ICallbackInfoInternal, IGettable<JoinGameAcceptedCallbackInfo>
-{
-	private IntPtr m_ClientData;
-
-	private IntPtr m_JoinInfo;
-
-	private IntPtr m_LocalUserId;
-
-	private IntPtr m_TargetUserId;
-
-	private ulong m_UiEventId;
-
-	public IntPtr ClientDataPointer => m_ClientData;
-
-	public void Get(out JoinGameAcceptedCallbackInfo other)
-	{
-		other = default(JoinGameAcceptedCallbackInfo);
-		Helper.Get(m_ClientData, out object to);
-		other.ClientData = to;
-		Helper.Get(m_JoinInfo, out Utf8String to2);
-		other.JoinInfo = to2;
-		Helper.Get(m_LocalUserId, out EpicAccountId to3);
-		other.LocalUserId = to3;
-		Helper.Get(m_TargetUserId, out EpicAccountId to4);
-		other.TargetUserId = to4;
-		other.UiEventId = m_UiEventId;
-	}
-}
-
-
-using Epic.OnlineServices.Presence;
-
-public delegate void OnJoinGameAcceptedCallback(ref JoinGameAcceptedCallbackInfo data);
-
-
-using System.Runtime.InteropServices;
-using Epic.OnlineServices.Presence;
-
-[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-internal delegate void OnJoinGameAcceptedCallbackInternal(ref JoinGameAcceptedCallbackInfoInternal data);
 
 

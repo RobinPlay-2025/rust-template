@@ -449,9 +449,9 @@ public class OrnateFrame : PhotoFrame
 		TextColour = Color.black;
 	}
 
-	[RPC_Server.CallsPerSecond(2uL)]
-	[RPC_Server.IsVisible(3f)]
 	[RPC_Server]
+	[RPC_Server.IsVisible(3f)]
+	[RPC_Server.CallsPerSecond(2uL)]
 	public void RPC_ConfigureFrame(RPCMessage msg)
 	{
 		//IL_0018: Unknown result type (might be due to invalid IL or missing references)
@@ -771,8 +771,8 @@ public class PagerEntity : BaseEntity, IRFObject
 		frequency = newFreq;
 	}
 
-	[RPC_Server]
 	[RPC_Server.IsVisible(3f)]
+	[RPC_Server]
 	public void ServerSetFrequency(RPCMessage msg)
 	{
 		if (!((Object)(object)msg.player == (Object)null) && msg.player.CanBuild() && !(Time.time < nextChangeTime))
@@ -948,8 +948,8 @@ public class PaintballGun : BaseProjectile
 		SendNetworkUpdate();
 	}
 
-	[RPC_Server]
 	[RPC_Server.IsActiveItem]
+	[RPC_Server]
 	private void Server_PaintballColorChanged(RPCMessage msg)
 	{
 		if (PaintballColorLookup.instance == null)
@@ -1112,8 +1112,8 @@ public class PaintedItemStorageEntity : BaseEntity, IServerFileReceiver, IUGCBro
 		info.msg.paintedItem.editedBy = lastEditedBy;
 	}
 
-	[RPC_Server]
 	[RPC_Server.CallsPerSecond(3uL)]
+	[RPC_Server]
 	private void Server_UpdateImage(RPCMessage msg)
 	{
 		//IL_005a: Unknown result type (might be due to invalid IL or missing references)
@@ -1529,9 +1529,9 @@ public class PartyBalloon : BaseCombatEntity
 		TextColour = Color.white;
 	}
 
+	[RPC_Server.IsVisible(3f)]
 	[RPC_Server.CallsPerSecond(2uL)]
 	[RPC_Server]
-	[RPC_Server.IsVisible(3f)]
 	public void RPC_ConfigureBalloon(RPCMessage msg)
 	{
 		//IL_0018: Unknown result type (might be due to invalid IL or missing references)
@@ -1565,8 +1565,8 @@ public class PartyBalloon : BaseCombatEntity
 		TextColour = colour;
 	}
 
-	[RPC_Server.MaxDistance(3f)]
 	[RPC_Server]
+	[RPC_Server.MaxDistance(3f)]
 	public void LockBalloon(RPCMessage msg)
 	{
 		if (msg.player.CanInteract() && CanUpdateBalloon(msg.player))
@@ -1842,6 +1842,8 @@ public class PatrolHelicopter : BaseCombatEntity, SeekerTarget.ISeekerTargetOwne
 		}
 	}
 
+	public weakspot[] weakspots;
+
 	public GameObject rotorPivot;
 
 	public GameObject mainRotor;
@@ -1958,8 +1960,6 @@ public class PatrolHelicopter : BaseCombatEntity, SeekerTarget.ISeekerTargetOwne
 
 	private BaseEntity fleeMapMarkerInstance;
 
-	public weakspot[] weakspots;
-
 	private NetworkableId __sync_FleeMarkerId;
 
 	[Sync(Autosave = true)]
@@ -1998,6 +1998,62 @@ public class PatrolHelicopter : BaseCombatEntity, SeekerTarget.ISeekerTargetOwne
 			((IDisposable)val)?.Dispose();
 		}
 		return base.OnRpcMessage(player, rpc, msg);
+	}
+
+	public void InitalizeWeakspots()
+	{
+		weakspot[] array = weakspots;
+		for (int i = 0; i < array.Length; i++)
+		{
+			array[i].body = this;
+		}
+	}
+
+	public override void OnAttacked(HitInfo info)
+	{
+		base.OnAttacked(info);
+		if (base.isServer)
+		{
+			myAI.WasAttacked(info);
+		}
+	}
+
+	public override void Hurt(HitInfo info)
+	{
+		if (Interface.CallHook("OnPatrolHelicopterTakeDamage", (object)this, (object)info) != null)
+		{
+			return;
+		}
+		bool flag = false;
+		if (info.damageTypes.Total() >= base.health)
+		{
+			if (Interface.CallHook("OnPatrolHelicopterKill", (object)this, (object)info) != null)
+			{
+				return;
+			}
+			base.health = 10000f;
+			myAI.CriticalDamage();
+			flag = true;
+		}
+		base.Hurt(info);
+		if (flag)
+		{
+			return;
+		}
+		myAI.OtherDamaged(info);
+		weakspot[] array = weakspots;
+		foreach (weakspot weakspot in array)
+		{
+			string[] bonenames = weakspot.bonenames;
+			foreach (string str in bonenames)
+			{
+				if (info.HitBone == StringPool.Get(str))
+				{
+					weakspot.Hurt(info.damageTypes.Total(), info);
+					myAI.WeakspotDamaged(weakspot, info);
+				}
+			}
+		}
 	}
 
 	public override float AntiHackVelocity()
@@ -2245,10 +2301,10 @@ public class PatrolHelicopter : BaseCombatEntity, SeekerTarget.ISeekerTargetOwne
 			val2.collisionDetectionMode = (CollisionDetectionMode)2;
 			val2.mass = 2f;
 			val2.interpolation = (RigidbodyInterpolation)1;
-			val2.velocity = val + onUnitSphere2 * Random.Range(1f, 3f);
+			val2.linearVelocity = val + onUnitSphere2 * Random.Range(1f, 3f);
 			val2.angularVelocity = Vector3Ex.Range(-1.75f, 1.75f);
-			val2.drag = 0.5f * (val2.mass / 5f);
-			val2.angularDrag = 0.2f * (val2.mass / 5f);
+			val2.linearDamping = 0.5f * (val2.mass / 5f);
+			val2.angularDamping = 0.2f * (val2.mass / 5f);
 			FireBall fireBall = GameManager.server.CreateEntity(this.fireBall.resourcePath) as FireBall;
 			if (Object.op_Implicit((Object)(object)fireBall))
 			{
@@ -2305,62 +2361,6 @@ public class PatrolHelicopter : BaseCombatEntity, SeekerTarget.ISeekerTargetOwne
 		{
 			SendNetworkUpdate();
 			lastNetworkUpdate = Time.realtimeSinceStartup;
-		}
-	}
-
-	public void InitalizeWeakspots()
-	{
-		weakspot[] array = weakspots;
-		for (int i = 0; i < array.Length; i++)
-		{
-			array[i].body = this;
-		}
-	}
-
-	public override void OnAttacked(HitInfo info)
-	{
-		base.OnAttacked(info);
-		if (base.isServer)
-		{
-			myAI.WasAttacked(info);
-		}
-	}
-
-	public override void Hurt(HitInfo info)
-	{
-		if (Interface.CallHook("OnPatrolHelicopterTakeDamage", (object)this, (object)info) != null)
-		{
-			return;
-		}
-		bool flag = false;
-		if (info.damageTypes.Total() >= base.health)
-		{
-			if (Interface.CallHook("OnPatrolHelicopterKill", (object)this, (object)info) != null)
-			{
-				return;
-			}
-			base.health = 10000f;
-			myAI.CriticalDamage();
-			flag = true;
-		}
-		base.Hurt(info);
-		if (flag)
-		{
-			return;
-		}
-		myAI.OtherDamaged(info);
-		weakspot[] array = weakspots;
-		foreach (weakspot weakspot in array)
-		{
-			string[] bonenames = weakspot.bonenames;
-			foreach (string str in bonenames)
-			{
-				if (info.HitBone == StringPool.Get(str))
-				{
-					weakspot.Hurt(info.damageTypes.Total(), info);
-					myAI.WeakspotDamaged(weakspot, info);
-				}
-			}
 		}
 	}
 
@@ -2679,6 +2679,10 @@ using UnityEngine.Assertions;
 
 public class PhotoFrame : StorageContainer, ILOD, IImageReceiver, ISignage, IUGCBrowserEntity, IEaselPaintable
 {
+	public GameObjectRef SignEditorDialog;
+
+	public OverlayMeshPaintableSource PaintableSource;
+
 	private const float TextureRequestDistance = 100f;
 
 	public EntityRef _photoEntity;
@@ -2689,11 +2693,11 @@ public class PhotoFrame : StorageContainer, ILOD, IImageReceiver, ISignage, IUGC
 
 	private List<ulong> editHistory = new List<ulong>();
 
-	public GameObjectRef SignEditorDialog;
-
-	public OverlayMeshPaintableSource PaintableSource;
-
 	private NetworkableId __sync_EaselId;
+
+	public Vector2i TextureSize => new Vector2i(PaintableSource.texWidth, PaintableSource.texHeight);
+
+	public int TextureCount => 1;
 
 	public GameObject GameObject => ((Component)this).gameObject;
 
@@ -2757,10 +2761,6 @@ public class PhotoFrame : StorageContainer, ILOD, IImageReceiver, ISignage, IUGC
 	public BaseNetworkable UgcEntity => this;
 
 	public string ContentString => string.Empty;
-
-	public Vector2i TextureSize => new Vector2i(PaintableSource.texWidth, PaintableSource.texHeight);
-
-	public int TextureCount => 1;
 
 	public override bool OnRpcMessage(BasePlayer player, uint rpc, Message msg)
 	{
@@ -2930,6 +2930,113 @@ public class PhotoFrame : StorageContainer, ILOD, IImageReceiver, ISignage, IUGC
 			((IDisposable)val)?.Dispose();
 		}
 		return base.OnRpcMessage(player, rpc, msg);
+	}
+
+	public bool CanUpdateSign(BasePlayer player)
+	{
+		object obj = Interface.CallHook("CanUpdateSign", (object)player, (object)this);
+		if (obj is bool)
+		{
+			return (bool)obj;
+		}
+		if (player.IsAdmin || player.IsDeveloper)
+		{
+			return true;
+		}
+		if (!player.CanBuild())
+		{
+			return false;
+		}
+		if (IsLocked())
+		{
+			return (ulong)player.userID == base.OwnerID;
+		}
+		return true;
+	}
+
+	public bool CanUnlockSign(BasePlayer player)
+	{
+		if (!IsLocked())
+		{
+			return false;
+		}
+		return CanUpdateSign(player);
+	}
+
+	public bool CanLockSign(BasePlayer player)
+	{
+		if (IsLocked())
+		{
+			return false;
+		}
+		return CanUpdateSign(player);
+	}
+
+	[RPC_Server]
+	[RPC_Server.MaxDistance(5f)]
+	[RPC_Server.CallsPerSecond(3uL)]
+	public void UpdateSign(RPCMessage msg)
+	{
+		//IL_0052: Unknown result type (might be due to invalid IL or missing references)
+		//IL_006a: Unknown result type (might be due to invalid IL or missing references)
+		if (!((Object)(object)msg.player == (Object)null) && CanUpdateSign(msg.player))
+		{
+			byte[] array = msg.read.BytesWithSize(10485760u, false);
+			if (array != null && ImageProcessing.IsValidPNG(array, 1024, 1024))
+			{
+				FileStorage.server.RemoveAllByEntity(net.ID);
+				_overlayTextureCrc = FileStorage.server.Store(array, FileStorage.Type.png, net.ID);
+				LogEdit(msg.player);
+				SendNetworkUpdate();
+				Interface.CallHook("OnSignUpdated", (object)this, (object)msg.player);
+			}
+		}
+	}
+
+	[RPC_Server]
+	[RPC_Server.MaxDistance(3f)]
+	public void LockSign(RPCMessage msg)
+	{
+		if (msg.player.CanInteract() && CanUpdateSign(msg.player))
+		{
+			SetFlag(Flags.Locked, b: true);
+			SendNetworkUpdate();
+			base.OwnerID = msg.player.userID;
+			Interface.CallHook("OnSignLocked", (object)this, (object)msg.player);
+		}
+	}
+
+	[RPC_Server]
+	[RPC_Server.MaxDistance(3f)]
+	public void UnLockSign(RPCMessage msg)
+	{
+		if (msg.player.CanInteract() && CanUnlockSign(msg.player))
+		{
+			SetFlag(Flags.Locked, b: false);
+			SendNetworkUpdate();
+		}
+	}
+
+	internal override void DoServerDestroy()
+	{
+		//IL_001f: Unknown result type (might be due to invalid IL or missing references)
+		base.DoServerDestroy();
+		RemoveFromEasel();
+		if (net != null)
+		{
+			FileStorage.server.RemoveAllByEntity(net.ID);
+		}
+		_overlayTextureCrc = 0u;
+	}
+
+	public override bool ShouldNetworkOwnerInfo()
+	{
+		return true;
+	}
+
+	public override string Categorize()
+	{
+		return "sign";
 	}
 
 	public override void Load(LoadInfo info)
@@ -3109,113 +3216,6 @@ public class PhotoFrame : StorageContainer, ILOD, IImageReceiver, ISignage, IUGC
 		return false;
 	}
 
-	public bool CanUpdateSign(BasePlayer player)
-	{
-		object obj = Interface.CallHook("CanUpdateSign", (object)player, (object)this);
-		if (obj is bool)
-		{
-			return (bool)obj;
-		}
-		if (player.IsAdmin || player.IsDeveloper)
-		{
-			return true;
-		}
-		if (!player.CanBuild())
-		{
-			return false;
-		}
-		if (IsLocked())
-		{
-			return (ulong)player.userID == base.OwnerID;
-		}
-		return true;
-	}
-
-	public bool CanUnlockSign(BasePlayer player)
-	{
-		if (!IsLocked())
-		{
-			return false;
-		}
-		return CanUpdateSign(player);
-	}
-
-	public bool CanLockSign(BasePlayer player)
-	{
-		if (IsLocked())
-		{
-			return false;
-		}
-		return CanUpdateSign(player);
-	}
-
-	[RPC_Server]
-	[RPC_Server.MaxDistance(5f)]
-	[RPC_Server.CallsPerSecond(3uL)]
-	public void UpdateSign(RPCMessage msg)
-	{
-		//IL_0052: Unknown result type (might be due to invalid IL or missing references)
-		//IL_006a: Unknown result type (might be due to invalid IL or missing references)
-		if (!((Object)(object)msg.player == (Object)null) && CanUpdateSign(msg.player))
-		{
-			byte[] array = msg.read.BytesWithSize(10485760u, false);
-			if (array != null && ImageProcessing.IsValidPNG(array, 1024, 1024))
-			{
-				FileStorage.server.RemoveAllByEntity(net.ID);
-				_overlayTextureCrc = FileStorage.server.Store(array, FileStorage.Type.png, net.ID);
-				LogEdit(msg.player);
-				SendNetworkUpdate();
-				Interface.CallHook("OnSignUpdated", (object)this, (object)msg.player);
-			}
-		}
-	}
-
-	[RPC_Server]
-	[RPC_Server.MaxDistance(3f)]
-	public void LockSign(RPCMessage msg)
-	{
-		if (msg.player.CanInteract() && CanUpdateSign(msg.player))
-		{
-			SetFlag(Flags.Locked, b: true);
-			SendNetworkUpdate();
-			base.OwnerID = msg.player.userID;
-			Interface.CallHook("OnSignLocked", (object)this, (object)msg.player);
-		}
-	}
-
-	[RPC_Server]
-	[RPC_Server.MaxDistance(3f)]
-	public void UnLockSign(RPCMessage msg)
-	{
-		if (msg.player.CanInteract() && CanUnlockSign(msg.player))
-		{
-			SetFlag(Flags.Locked, b: false);
-			SendNetworkUpdate();
-		}
-	}
-
-	internal override void DoServerDestroy()
-	{
-		//IL_001f: Unknown result type (might be due to invalid IL or missing references)
-		base.DoServerDestroy();
-		RemoveFromEasel();
-		if (net != null)
-		{
-			FileStorage.server.RemoveAllByEntity(net.ID);
-		}
-		_overlayTextureCrc = 0u;
-	}
-
-	public override bool ShouldNetworkOwnerInfo()
-	{
-		return true;
-	}
-
-	public override string Categorize()
-	{
-		return "sign";
-	}
-
 	protected override bool WriteSyncVar(byte id, NetWrite writer)
 	{
 		//IL_0037: Unknown result type (might be due to invalid IL or missing references)
@@ -3354,11 +3354,11 @@ public class Planner : HeldEntity
 
 	public BaseEntity[] buildableList;
 
-	public virtual bool isTypeDeployable => (Object)(object)GetModDeployable() != (Object)null;
-
 	public Vector3 serverStartDurationPlacementPosition { get; private set; }
 
 	public TimeSince serverStartDurationPlacementTime { get; private set; }
+
+	public virtual bool isTypeDeployable => (Object)(object)GetModDeployable() != (Object)null;
 
 	public override bool OnRpcMessage(BasePlayer player, uint rpc, Message msg)
 	{
@@ -3479,33 +3479,8 @@ public class Planner : HeldEntity
 		return base.OnRpcMessage(player, rpc, msg);
 	}
 
-	public ItemModDeployable GetModDeployable()
-	{
-		ItemDefinition ownerItemDefinition = GetOwnerItemDefinition();
-		if ((Object)(object)ownerItemDefinition == (Object)null)
-		{
-			return null;
-		}
-		return ((Component)ownerItemDefinition).GetComponent<ItemModDeployable>();
-	}
-
-	public virtual Deployable GetDeployable()
-	{
-		ItemModDeployable modDeployable = GetModDeployable();
-		if ((Object)(object)modDeployable == (Object)null)
-		{
-			return null;
-		}
-		return modDeployable.GetDeployable(this);
-	}
-
-	public virtual Deployable GetDeployable(NetworkableId entityId)
-	{
-		return GetDeployable();
-	}
-
-	[RPC_Server]
 	[RPC_Server.IsActiveItem]
+	[RPC_Server]
 	private void DoPlace(RPCMessage msg)
 	{
 		if (!msg.player.CanInteract())
@@ -3523,8 +3498,8 @@ public class Planner : HeldEntity
 		}
 	}
 
-	[RPC_Server.IsActiveItem]
 	[RPC_Server]
+	[RPC_Server.IsActiveItem]
 	[RPC_Server.CallsPerSecond(10uL)]
 	private void StartDurationPlace(RPCMessage msg)
 	{
@@ -4238,6 +4213,31 @@ public class Planner : HeldEntity
 		}
 		return flag;
 	}
+
+	public ItemModDeployable GetModDeployable()
+	{
+		ItemDefinition ownerItemDefinition = GetOwnerItemDefinition();
+		if ((Object)(object)ownerItemDefinition == (Object)null)
+		{
+			return null;
+		}
+		return ((Component)ownerItemDefinition).GetComponent<ItemModDeployable>();
+	}
+
+	public virtual Deployable GetDeployable()
+	{
+		ItemModDeployable modDeployable = GetModDeployable();
+		if ((Object)(object)modDeployable == (Object)null)
+		{
+			return null;
+		}
+		return modDeployable.GetDeployable(this);
+	}
+
+	public virtual Deployable GetDeployable(NetworkableId entityId)
+	{
+		return GetDeployable();
+	}
 }
 
 
@@ -4753,8 +4753,8 @@ public class PlanterBox : StorageContainer, ISplashable
 		Pool.FreeUnmanaged<uint>(ref list);
 	}
 
-	[RPC_Server]
 	[RPC_Server.MaxDistance(3f)]
+	[RPC_Server]
 	private void RPC_RequestSaturationUpdate(RPCMessage msg)
 	{
 		if ((Object)(object)msg.player != (Object)null)
@@ -4887,8 +4887,8 @@ public class PlayerHelicopter : BaseHelicopter, IEngineControllerUser, IEntity, 
 	[SerializeField]
 	public float maxYawAnim = 1f;
 
-	[Header("Fuel")]
 	[SerializeField]
+	[Header("Fuel")]
 	public GameObjectRef fuelStoragePrefab;
 
 	[SerializeField]
@@ -5678,8 +5678,8 @@ public class PlayerHelicopter : BaseHelicopter, IEngineControllerUser, IEntity, 
 		}
 		float[] array2 = recentVelocities;
 		int num = recentVelIndex;
-		Vector3 velocity = rigidBody.velocity;
-		array2[num] = ((Vector3)(ref velocity)).sqrMagnitude;
+		Vector3 linearVelocity = rigidBody.linearVelocity;
+		array2[num] = ((Vector3)(ref linearVelocity)).sqrMagnitude;
 		recentVelIndex = ++recentVelIndex % recentVelocities.Length;
 		bool flag = true;
 		float[] array3 = recentVelocities;
@@ -5803,8 +5803,8 @@ using UnityEngine.Assertions;
 
 public class PlayerHelicopterWithFlares : PlayerHelicopter, ICanFireHelicopterFlares
 {
-	[Header("Helicopter Flares")]
 	[SerializeField]
+	[Header("Helicopter Flares")]
 	private GameObjectRef flareStoragePrefab;
 
 	[SerializeField]
@@ -6477,8 +6477,8 @@ public class PlayerInventory : EntityComponent<BasePlayer>, IAmmoContainer
 		return CanMoveFromResponse.Success();
 	}
 
-	[BaseEntity.RPC_Server.FromOwner]
 	[BaseEntity.RPC_Server]
+	[BaseEntity.RPC_Server.FromOwner]
 	private void ItemCmd(BaseEntity.RPCMessage msg)
 	{
 		//IL_0030: Unknown result type (might be due to invalid IL or missing references)
@@ -9150,8 +9150,8 @@ public class PowerCounter : IOEntity
 		}
 	}
 
-	[RPC_Server.IsVisible(3f)]
 	[RPC_Server]
+	[RPC_Server.IsVisible(3f)]
 	public void ToggleDisplayMode(RPCMessage msg)
 	{
 		bool flag = msg.read.Bit();
@@ -9607,8 +9607,8 @@ public class PoweredRemoteControlEntity : IOEntity, IRemoteControllable, IAdminU
 		SetID(msg.player, oldID, newID);
 	}
 
-	[RPC_Server]
 	[RPC_Server.MaxDistance(3f)]
+	[RPC_Server]
 	public void Server_AdminUpdateIdentifier(RPCMessage msg)
 	{
 		if (!((Object)(object)msg.player == (Object)null) && (msg.player.IsAdmin || msg.player.IsDeveloper))
@@ -9628,9 +9628,9 @@ public class PoweredRemoteControlEntity : IOEntity, IRemoteControllable, IAdminU
 	}
 
 	[RPC_Server.MaxDistance(3f)]
-	[RPC_Server]
-	[RPC_Server.IsVisible(3f)]
 	[RPC_Server.CallsPerSecond(3uL)]
+	[RPC_Server.IsVisible(3f)]
+	[RPC_Server]
 	public void SERVER_RequestOpenRCPanel(RPCMessage msg)
 	{
 		BasePlayer player = msg.player;
@@ -9909,8 +9909,8 @@ public class PressButton : IOEntity
 		}
 	}
 
-	[RPC_Server]
 	[RPC_Server.IsVisible(3f)]
+	[RPC_Server]
 	public void RPC_SetColor(RPCMessage msg)
 	{
 		if (msg.player.CanBuild() && !(colorSettings == null))
@@ -10414,8 +10414,8 @@ public class ProjectileWeaponMod : BaseEntity
 		info.msg.projectileWeaponMod.zoomLevel = serverZoomLevel;
 	}
 
-	[RPC_Server.FromOwner]
 	[RPC_Server]
+	[RPC_Server.FromOwner]
 	public void SetZoomLevel(int zoomLevel)
 	{
 		serverZoomLevel = zoomLevel;
@@ -10706,7 +10706,7 @@ public class Ragdoll : EntityComponent<BaseEntity>, IPrefabPreProcess
 	public SpringJoint corpseJoint;
 
 	[SerializeField]
-	private PhysicMaterial physicMaterial;
+	private PhysicsMaterial physicMaterial;
 
 	[SerializeField]
 	private Skeleton skeleton;
@@ -10725,20 +10725,20 @@ public class Ragdoll : EntityComponent<BaseEntity>, IPrefabPreProcess
 	[SerializeField]
 	private List<Joint> joints = new List<Joint>();
 
-	[SerializeField]
 	[ReadOnly]
+	[SerializeField]
 	private List<CharacterJoint> characterJoints = new List<CharacterJoint>();
 
-	[ReadOnly]
 	[SerializeField]
+	[ReadOnly]
 	private List<ConfigurableJoint> configurableJoints = new List<ConfigurableJoint>();
 
 	[SerializeField]
 	[ReadOnly]
 	private List<Collider> colliders = new List<Collider>();
 
-	[ReadOnly]
 	[SerializeField]
+	[ReadOnly]
 	private int[] boneIndex;
 
 	[ReadOnly]
@@ -10823,8 +10823,8 @@ public class Ragdoll : EntityComponent<BaseEntity>, IPrefabPreProcess
 		{
 			SetCollisionMode(rigidbody, isServer);
 			rigidbody.excludeLayers = LayerMask.op_Implicit(LayerMask.op_Implicit(rigidbody.excludeLayers) | 0x1200);
-			rigidbody.angularDrag = 1f;
-			rigidbody.drag = 1f;
+			rigidbody.angularDamping = 1f;
+			rigidbody.linearDamping = 1f;
 			rigidbody.detectCollisions = true;
 			if (isServer)
 			{
@@ -10841,10 +10841,10 @@ public class Ragdoll : EntityComponent<BaseEntity>, IPrefabPreProcess
 			{
 				rigidbody.mass = 1f;
 			}
-			Vector3 val = rigidbody.velocity;
+			Vector3 val = rigidbody.linearVelocity;
 			if (((Vector3)(ref val)).sqrMagnitude < 0.25f)
 			{
-				rigidbody.velocity += Random.onUnitSphere * 2.5f;
+				rigidbody.linearVelocity += Random.onUnitSphere * 2.5f;
 			}
 			val = rigidbody.angularVelocity;
 			if (((Vector3)(ref val)).sqrMagnitude < 0.25f)
@@ -11139,7 +11139,7 @@ public class Ragdoll : EntityComponent<BaseEntity>, IPrefabPreProcess
 				Rigidbody component = ((Component)base.baseEntity.GetParentEntity()).GetComponent<Rigidbody>();
 				if ((Object)(object)component != (Object)null)
 				{
-					rigidbody.velocity = component.velocity;
+					rigidbody.linearVelocity = component.linearVelocity;
 					rigidbody.angularVelocity = component.angularVelocity;
 				}
 			}
@@ -11863,9 +11863,9 @@ public class RecorderTool : ThrownWeapon, ICassettePlayer
 		return (Object)(object)cachedCassette != (Object)null;
 	}
 
-	[RPC_Server.CallsPerSecond(2uL)]
-	[RPC_Server]
 	[RPC_Server.FromOwner]
+	[RPC_Server]
+	[RPC_Server.CallsPerSecond(2uL)]
 	public void Server_TogglePlaying(RPCMessage msg)
 	{
 		bool b = ((Stream)(object)msg.read).ReadByte() == 1;
@@ -11902,9 +11902,9 @@ public class RecorderTool : ThrownWeapon, ICassettePlayer
 		}
 	}
 
-	[RPC_Server]
-	[RPC_Server.FromOwner]
 	[RPC_Server.CallsPerSecond(3uL)]
+	[RPC_Server.FromOwner]
+	[RPC_Server]
 	public void OnCassetteRecordingEnded(RPCMessage rpc)
 	{
 		if (GetItem() != null)
@@ -12087,8 +12087,8 @@ public class Recycler : StorageContainer
 		return true;
 	}
 
-	[RPC_Server]
 	[RPC_Server.MaxDistance(3f)]
+	[RPC_Server]
 	private void SVSwitch(RPCMessage msg)
 	{
 		bool flag = msg.read.Bit();
@@ -13579,8 +13579,8 @@ public class RelationshipManager : BaseEntity
 		}
 	}
 
-	[RPC_Server.CallsPerSecond(2uL)]
 	[RPC_Server]
+	[RPC_Server.CallsPerSecond(2uL)]
 	public void SERVER_ChangeRelationship(RPCMessage msg)
 	{
 		EncryptedValue<ulong> userID = msg.player.userID;
@@ -13609,8 +13609,8 @@ public class RelationshipManager : BaseEntity
 		}
 	}
 
-	[RPC_Server.CallsPerSecond(10uL)]
 	[RPC_Server]
+	[RPC_Server.CallsPerSecond(10uL)]
 	public void SERVER_UpdatePlayerNote(RPCMessage msg)
 	{
 		EncryptedValue<ulong> userID = msg.player.userID;
@@ -13620,8 +13620,8 @@ public class RelationshipManager : BaseEntity
 		MarkRelationshipsDirtyFor(userID);
 	}
 
-	[RPC_Server.CallsPerSecond(10uL)]
 	[RPC_Server]
+	[RPC_Server.CallsPerSecond(10uL)]
 	public void SERVER_ReceiveMugshot(RPCMessage msg)
 	{
 		//IL_008e: Unknown result type (might be due to invalid IL or missing references)
@@ -13865,8 +13865,8 @@ public class RelationshipManager : BaseEntity
 		return playerTeam;
 	}
 
-	[RPC_Server.CallsPerSecond(1uL)]
 	[RPC_Server]
+	[RPC_Server.CallsPerSecond(1uL)]
 	private void TryCreateTeam(RPCMessage rpc)
 	{
 		if (maxTeamSize != 0)
@@ -15105,10 +15105,10 @@ public class RemoteControlEntity : BaseCombatEntity, IRemoteControllable, IAdmin
 		}
 	}
 
-	[RPC_Server.CallsPerSecond(3uL)]
 	[RPC_Server.MaxDistance(3f)]
-	[RPC_Server.IsVisible(3f)]
 	[RPC_Server]
+	[RPC_Server.IsVisible(3f)]
+	[RPC_Server.CallsPerSecond(3uL)]
 	public void SERVER_RequestOpenRCPanel(RPCMessage msg)
 	{
 		BasePlayer player = msg.player;
@@ -15601,8 +15601,8 @@ public class RepairBench : StorageContainer
 		}
 	}
 
-	[RPC_Server]
 	[RPC_Server.IsVisible(3f)]
+	[RPC_Server]
 	public void RepairItem(RPCMessage msg)
 	{
 		Item slot = base.inventory.GetSlot(0);
@@ -16406,9 +16406,9 @@ public class RFBroadcaster : IOEntity, IRFObject
 		return true;
 	}
 
-	[RPC_Server.CallsPerSecond(3uL)]
-	[RPC_Server.IsVisible(3f)]
 	[RPC_Server]
+	[RPC_Server.IsVisible(3f)]
+	[RPC_Server.CallsPerSecond(3uL)]
 	public void ServerSetFrequency(RPCMessage msg)
 	{
 		if (CanChangeFrequency(msg.player) && !(Time.time < nextChangeTime))
@@ -16483,10 +16483,10 @@ public class RFBroadcaster : IOEntity, IRFObject
 		base.DoServerDestroy();
 	}
 
-	[RPC_Server.CallsPerSecond(3uL)]
-	[RPC_Server]
 	[RPC_Server.IsVisible(3f)]
+	[RPC_Server]
 	[RPC_Server.MaxDistance(3f)]
+	[RPC_Server.CallsPerSecond(3uL)]
 	public void SERVER_RequestOpenPanel(RPCMessage msg)
 	{
 		BasePlayer player = msg.player;
@@ -16734,8 +16734,8 @@ public class RFReceiver : IOEntity, IRFObject
 		SendNetworkUpdate();
 	}
 
-	[RPC_Server.IsVisible(3f)]
 	[RPC_Server.CallsPerSecond(3uL)]
+	[RPC_Server.IsVisible(3f)]
 	[RPC_Server]
 	public void SERVER_RequestOpenPanel(RPCMessage msg)
 	{
@@ -17057,8 +17057,8 @@ public class RFTimedExplosive : TimedExplosive, IRFObject
 		}
 	}
 
-	[RPC_Server]
 	[RPC_Server.IsVisible(3f)]
+	[RPC_Server]
 	public void Pickup(RPCMessage msg)
 	{
 		if (Interface.CallHook("ICanPickupEntity", (object)msg.player, (object)this) != null || !msg.player.CanInteract() || !IsArmed())
@@ -17232,8 +17232,8 @@ public class RHIB : MotorRowboat
 		return base.OnRpcMessage(player, rpc, msg);
 	}
 
-	[RPC_Server]
 	[RPC_Server.IsVisible(6f)]
+	[RPC_Server]
 	public void Server_Release(RPCMessage msg)
 	{
 		if (!((Object)(object)GetParentEntity() == (Object)null))
@@ -17350,8 +17350,14 @@ using Rust;
 using UnityEngine;
 using UnityEngine.Assertions;
 
-public class RidableHorse : BaseVehicle, IInventoryProvider, IMedicalToolTarget, IDetector, HitchTrough.IHitchable, TriggerHurtNotChild.IHurtTriggerUser, IAnimalRagdollCollisionReceiver, ITowing
+public class RidableHorse : BaseVehicle, IInventoryProvider, IDetector, HitchTrough.IHitchable, TriggerHurtNotChild.IHurtTriggerUser, IAnimalRagdollCollisionReceiver, ITowing, IMedicalToolTarget
 {
+	public enum HorseAvoidanceState
+	{
+		Normal,
+		AvoidingObstacle
+	}
+
 	public enum GaitType : byte
 	{
 		Walk,
@@ -17394,12 +17400,6 @@ public class RidableHorse : BaseVehicle, IInventoryProvider, IMedicalToolTarget,
 		public Sprite icon;
 
 		public int order;
-	}
-
-	public enum HorseAvoidanceState
-	{
-		Normal,
-		AvoidingObstacle
 	}
 
 	[Header("Breed")]
@@ -17447,251 +17447,6 @@ public class RidableHorse : BaseVehicle, IInventoryProvider, IMedicalToolTarget,
 
 	public float equipmentSpeedMod;
 
-	[Header("Horse")]
-	[SerializeField]
-	private Animator animator;
-
-	[SerializeField]
-	private Transform centreOfMassTransform;
-
-	[SerializeField]
-	private RidableHorseAudio horseAudio;
-
-	[SerializeField]
-	private RidableHorseAnimation horseAnimation;
-
-	[SerializeField]
-	private LegsAnimator serverLegsAnimator;
-
-	[SerializeField]
-	private ScaleBySpeed scaleBySpeedWater;
-
-	public WheelCollider wheelCollider;
-
-	public GameObjectRef corpsePrefab;
-
-	[Space]
-	public Collider playerServerCollider;
-
-	public Collider playerServerColliderRear;
-
-	public CapsuleCollider clippingMountCheckCollider;
-
-	public Gait[] gaits;
-
-	public GaitType currentGait;
-
-	public float gaitProgressionInterval = 1f;
-
-	public float gravity = 10f;
-
-	public float waterGravity = 1f;
-
-	public float groundAlignmentSpeed = 50f;
-
-	public float roadSpeedBonus = 1f;
-
-	[Space]
-	public float reverseSpeedFactor = 0.5f;
-
-	public float reverseAccelerationForce = 4000f;
-
-	[Space]
-	public float rotationResponsiveness = 1f;
-
-	[Tooltip("The factor applied to rotationResponsiveness, based on the current speed ratio (0 = stopped, 1 = full speed)")]
-	public AnimationCurve rotationResponsivenessCurve;
-
-	public Transform[] groundSampleOffsets;
-
-	public Vector2 minMaxSlopeAngle = new Vector2(10f, 60f);
-
-	public AnimationCurve slopeAngleSpeedFactor;
-
-	[SerializeField]
-	[Header("Collision Damage")]
-	[Space]
-	private GameObjectRef collisionEffect;
-
-	[SerializeField]
-	[Tooltip("Ignore low magnitude so e.g. Players running into stationary vehicles doesn't trigger damage or FX")]
-	private float minCollisionDamageForce = 20000f;
-
-	[Tooltip("Cap max magnitude so unusual events can't cause mega damage")]
-	[SerializeField]
-	private float maxCollisionDamageForce = 2500000f;
-
-	[SerializeField]
-	[Tooltip("Adjust this away from 1.0 if collision damage to this vehicle seems too high or low")]
-	private float collisionDamageMultiplier = 1f;
-
-	[SerializeField]
-	private float playerDamageThreshold = 40f;
-
-	[SerializeField]
-	private float playerRagdollThreshold = 75f;
-
-	[SerializeField]
-	private float maxAirTimeBeforeRagdoll = 1.5f;
-
-	[Header("Towing")]
-	public TriggerTowing towingTrigger;
-
-	public Transform towingPoint;
-
-	public TowingVisuals towingVisuals;
-
-	private NetworkableId towingEntityId;
-
-	public GameObjectRef towingAttachEffect;
-
-	public GameObjectRef towingDetachEffect;
-
-	[SerializeField]
-	private float towingAccelerationBoost = 2f;
-
-	[SerializeField]
-	private float towingMaxSpeedBoost = 1f;
-
-	[SerializeField]
-	private GaitType maxTowingGait = GaitType.Trot;
-
-	[Header("Stamina")]
-	public float currentStamina = 10f;
-
-	public float currentMaxStamina = 10f;
-
-	public float maxStamina = 20f;
-
-	public float staminaCoreLossRatio = 0.1f;
-
-	public float staminaCoreSpeedBonus = 3f;
-
-	public float calorieToStaminaRatio = 0.1f;
-
-	public float hydrationToStaminaRatio = 0.5f;
-
-	public float maxStaminaCoreFromWater = 0.5f;
-
-	[Header("Purchase")]
-	public List<PurchaseOption> PurchaseOptions;
-
-	[Header("Saddle")]
-	public Phrase SwapToSingleTitle;
-
-	public Phrase SwapToSingleDescription;
-
-	public Sprite SwapToSingleIcon;
-
-	public Phrase SwapToDoubleTitle;
-
-	public Phrase SwapToDoubleDescription;
-
-	public Sprite SwapToDoubleIcon;
-
-	[HideInInspector]
-	[SerializeField]
-	protected bool[] hasItemTokenCache;
-
-	[Space]
-	public SoundPlayer standSound;
-
-	public SoundPlayer slidingSound;
-
-	private TimeSince timeSinceSlidingSoundPlayed;
-
-	public ParticleSystemContainer skidDust;
-
-	public GameObjectRef ragdollPrefab;
-
-	[Header("Pulling")]
-	[SerializeField]
-	private List<ModifierDefintion> pullingPlayerModifiers;
-
-	[Header("Avoidance")]
-	public float avoidanceSphereRadius = 0.5f;
-
-	public Vector2 avoidanceDetectionDistance = new Vector2(3f, 8f);
-
-	public LayerMask avoidanceObstacleMask;
-
-	[Header("Sliding")]
-	public float groundAngleSlideThresholdForced = 50f;
-
-	public float groundAngleSlideThreshold = 37f;
-
-	public float groundAngleToRecoverFromSlide = 24f;
-
-	public float normalVariationSlideThreshold = 2.5f;
-
-	[HideInInspector]
-	public float normalVariation;
-
-	[Header("Healing")]
-	[Min(0f)]
-	public float healingMultiplier = 4f;
-
-	[Min(0f)]
-	[Tooltip("How much stamina to replenish when healing. Value is not final - scaled further if we have a high stamina core.")]
-	public float staminaReplenishAmount = 1f;
-
-	public ItemDefinition[] prohibitedMedicalItems = Array.Empty<ItemDefinition>();
-
-	public const Flags Flag_ForSale = Flags.Reserved2;
-
-	public const Flags Flag_Hitched = Flags.Reserved3;
-
-	public const Flags Flag_HideHair = Flags.Reserved4;
-
-	public const Flags Flag_WoodArmor = Flags.Reserved5;
-
-	public const Flags Flag_RoadsignArmor = Flags.Reserved6;
-
-	public const Flags Flag_LNYArmor = Flags.Unused23;
-
-	public const Flags Flag_Lead = Flags.Reserved16;
-
-	public const Flags Flag_HasSingleSaddle = Flags.Reserved9;
-
-	public const Flags Flag_HasDoubleSaddle = Flags.Reserved10;
-
-	public const Flags Flag_IsRagdolling = Flags.Reserved12;
-
-	public const Flags Flag_IsSwimming = Flags.Reserved13;
-
-	public const Flags Flag_IsSliding = Flags.Reserved18;
-
-	public const Flags Flag_IsInWater = Flags.Reserved19;
-
-	private static readonly Phrase TowAngleErrorPhrase = new Phrase("horse_tow_error", "Straighten up to tow");
-
-	private NetworkableId playerLeadingId;
-
-	[ServerVar(Saved = true, ClientAdmin = true, Help = "(Generated) When enabled, draws debug visualisations for this system (seismic sensor range sphere, escape capture state, etc.); editor/admin-only")]
-	public static bool debug = false;
-
-	[ServerVar(Saved = true, ClientAdmin = true, Help = "(Generated) When enabled, horses use automatic avoidance steering to navigate around obstacles; saved between sessions; admin configurable")]
-	public static bool autoAvoidance = true;
-
-	[ServerVar(Saved = true, ClientAdmin = true, Default = "1", Help = "(Generated) When enabled, ground angle updates for horse body tilt are throttled to groundAngleUpdateRate seconds; improves performance")]
-	public static bool throttledGroundAngleUpdate = true;
-
-	[ServerVar(Saved = true, ClientAdmin = true, Default = "0.05", Help = "(Generated) Interval in seconds between ground angle recalculation updates for horse body tilting; default 0.05s")]
-	public static float groundAngleUpdateRate = 0.05f;
-
-	[ServerVar(Help = "How long before a horse dies unattended")]
-	public static float decayMinutes = 180f;
-
-	[ServerVar(Help = "Population active on the server, per square km", ShowInAdminUI = true)]
-	public static float Population = 2f;
-
-	[Header("Bones")]
-	public Transform rootBone;
-
-	public Transform[] allBones;
-
-	private static Vector3[] bonesInitialLocalPos;
-
 	[Header("Dung")]
 	public TriggerBase foodTrigger;
 
@@ -17706,8 +17461,8 @@ public class RidableHorse : BaseVehicle, IInventoryProvider, IMedicalToolTarget,
 	[NonSerialized]
 	public HorseModifiers modifiers;
 
-	[Help("Scale all rideable animal dung production rates by this value. 0 will disable dung production.")]
 	[ServerVar]
+	[Help("Scale all rideable animal dung production rates by this value. 0 will disable dung production.")]
 	public static float dungTimeScale = 1f;
 
 	private float nextEatTime;
@@ -17800,12 +17555,12 @@ public class RidableHorse : BaseVehicle, IInventoryProvider, IMedicalToolTarget,
 
 	private bool isSubmerged;
 
-	[SerializeField]
 	[HideInInspector]
+	[SerializeField]
 	private float baseDrag;
 
-	[SerializeField]
 	[HideInInspector]
+	[SerializeField]
 	private float baseAngularDrag;
 
 	private HorseAvoidanceState currentAvoidanceState;
@@ -17826,35 +17581,250 @@ public class RidableHorse : BaseVehicle, IInventoryProvider, IMedicalToolTarget,
 
 	private float nextDecayTime;
 
-	public bool HasSingleSaddle => HasFlag(Flags.Reserved9);
+	[Header("Horse")]
+	[SerializeField]
+	private Animator animator;
 
-	public bool HasDoubleSaddle => HasFlag(Flags.Reserved10);
+	[SerializeField]
+	private Transform centreOfMassTransform;
 
-	public bool HasSaddle
-	{
-		get
-		{
-			if (!HasSingleSaddle)
-			{
-				return HasDoubleSaddle;
-			}
-			return true;
-		}
-	}
+	[SerializeField]
+	private RidableHorseAudio horseAudio;
 
-	public bool IsForSale => HasFlag(Flags.Reserved2);
+	[SerializeField]
+	private RidableHorseAnimation horseAnimation;
 
-	public bool IsTowing => HasFlag(Flags.Reserved14);
+	[SerializeField]
+	private LegsAnimator serverLegsAnimator;
 
-	public bool IsLeading => HasFlag(Flags.Reserved16);
+	[SerializeField]
+	private ScaleBySpeed scaleBySpeedWater;
 
-	public bool IsSwimming => HasFlag(Flags.Reserved13);
+	public WheelCollider wheelCollider;
 
-	public bool IsSliding => HasFlag(Flags.Reserved18);
+	public GameObjectRef corpsePrefab;
 
-	public BasePlayer leadingPlayer { get; private set; }
+	[Space]
+	public Collider playerServerCollider;
 
-	public override bool IsNpc => true;
+	public Collider playerServerColliderRear;
+
+	public CapsuleCollider clippingMountCheckCollider;
+
+	public Gait[] gaits;
+
+	public GaitType currentGait;
+
+	public float gaitProgressionInterval = 1f;
+
+	public float gravity = 10f;
+
+	public float waterGravity = 1f;
+
+	public float groundAlignmentSpeed = 50f;
+
+	public float roadSpeedBonus = 1f;
+
+	[Space]
+	public float reverseSpeedFactor = 0.5f;
+
+	public float reverseAccelerationForce = 4000f;
+
+	[Space]
+	public float rotationResponsiveness = 1f;
+
+	[Tooltip("The factor applied to rotationResponsiveness, based on the current speed ratio (0 = stopped, 1 = full speed)")]
+	public AnimationCurve rotationResponsivenessCurve;
+
+	public Transform[] groundSampleOffsets;
+
+	public Vector2 minMaxSlopeAngle = new Vector2(10f, 60f);
+
+	public AnimationCurve slopeAngleSpeedFactor;
+
+	[SerializeField]
+	[Header("Collision Damage")]
+	[Space]
+	private GameObjectRef collisionEffect;
+
+	[Tooltip("Ignore low magnitude so e.g. Players running into stationary vehicles doesn't trigger damage or FX")]
+	[SerializeField]
+	private float minCollisionDamageForce = 20000f;
+
+	[Tooltip("Cap max magnitude so unusual events can't cause mega damage")]
+	[SerializeField]
+	private float maxCollisionDamageForce = 2500000f;
+
+	[SerializeField]
+	[Tooltip("Adjust this away from 1.0 if collision damage to this vehicle seems too high or low")]
+	private float collisionDamageMultiplier = 1f;
+
+	[SerializeField]
+	private float playerDamageThreshold = 40f;
+
+	[SerializeField]
+	private float playerRagdollThreshold = 75f;
+
+	[SerializeField]
+	private float maxAirTimeBeforeRagdoll = 1.5f;
+
+	[Header("Towing")]
+	public TriggerTowing towingTrigger;
+
+	public Transform towingPoint;
+
+	public TowingVisuals towingVisuals;
+
+	private NetworkableId towingEntityId;
+
+	public GameObjectRef towingAttachEffect;
+
+	public GameObjectRef towingDetachEffect;
+
+	[SerializeField]
+	private float towingAccelerationBoost = 2f;
+
+	[SerializeField]
+	private float towingMaxSpeedBoost = 1f;
+
+	[SerializeField]
+	private GaitType maxTowingGait = GaitType.Trot;
+
+	[Header("Stamina")]
+	public float currentStamina = 10f;
+
+	public float currentMaxStamina = 10f;
+
+	public float maxStamina = 20f;
+
+	public float staminaCoreLossRatio = 0.1f;
+
+	public float staminaCoreSpeedBonus = 3f;
+
+	public float calorieToStaminaRatio = 0.1f;
+
+	public float hydrationToStaminaRatio = 0.5f;
+
+	public float maxStaminaCoreFromWater = 0.5f;
+
+	[Header("Purchase")]
+	public List<PurchaseOption> PurchaseOptions;
+
+	[Header("Saddle")]
+	public Phrase SwapToSingleTitle;
+
+	public Phrase SwapToSingleDescription;
+
+	public Sprite SwapToSingleIcon;
+
+	public Phrase SwapToDoubleTitle;
+
+	public Phrase SwapToDoubleDescription;
+
+	public Sprite SwapToDoubleIcon;
+
+	[HideInInspector]
+	[SerializeField]
+	protected bool[] hasItemTokenCache;
+
+	[Space]
+	public SoundPlayer standSound;
+
+	public SoundPlayer slidingSound;
+
+	private TimeSince timeSinceSlidingSoundPlayed;
+
+	public ParticleSystemContainer skidDust;
+
+	public GameObjectRef ragdollPrefab;
+
+	[SerializeField]
+	[Header("Pulling")]
+	private List<ModifierDefintion> pullingPlayerModifiers;
+
+	[Header("Avoidance")]
+	public float avoidanceSphereRadius = 0.5f;
+
+	public Vector2 avoidanceDetectionDistance = new Vector2(3f, 8f);
+
+	public LayerMask avoidanceObstacleMask;
+
+	[Header("Sliding")]
+	public float groundAngleSlideThresholdForced = 50f;
+
+	public float groundAngleSlideThreshold = 37f;
+
+	public float groundAngleToRecoverFromSlide = 24f;
+
+	public float normalVariationSlideThreshold = 2.5f;
+
+	[HideInInspector]
+	public float normalVariation;
+
+	[Header("Healing")]
+	[Min(0f)]
+	public float healingMultiplier = 4f;
+
+	[Min(0f)]
+	[Tooltip("How much stamina to replenish when healing. Value is not final - scaled further if we have a high stamina core.")]
+	public float staminaReplenishAmount = 1f;
+
+	public ItemDefinition[] prohibitedMedicalItems = Array.Empty<ItemDefinition>();
+
+	public const Flags Flag_ForSale = Flags.Reserved2;
+
+	public const Flags Flag_Hitched = Flags.Reserved3;
+
+	public const Flags Flag_HideHair = Flags.Reserved4;
+
+	public const Flags Flag_WoodArmor = Flags.Reserved5;
+
+	public const Flags Flag_RoadsignArmor = Flags.Reserved6;
+
+	public const Flags Flag_LNYArmor = Flags.Unused23;
+
+	public const Flags Flag_Lead = Flags.Reserved16;
+
+	public const Flags Flag_HasSingleSaddle = Flags.Reserved9;
+
+	public const Flags Flag_HasDoubleSaddle = Flags.Reserved10;
+
+	public const Flags Flag_IsRagdolling = Flags.Reserved12;
+
+	public const Flags Flag_IsSwimming = Flags.Reserved13;
+
+	public const Flags Flag_IsSliding = Flags.Reserved18;
+
+	public const Flags Flag_IsInWater = Flags.Reserved19;
+
+	private static readonly Phrase TowAngleErrorPhrase = new Phrase("horse_tow_error", "Straighten up to tow");
+
+	private NetworkableId playerLeadingId;
+
+	[ServerVar(Saved = true, ClientAdmin = true, Help = "(Generated) When enabled, draws debug visualisations for this system (seismic sensor range sphere, escape capture state, etc.); editor/admin-only")]
+	public static bool debug = false;
+
+	[ServerVar(Saved = true, ClientAdmin = true, Help = "(Generated) When enabled, horses use automatic avoidance steering to navigate around obstacles; saved between sessions; admin configurable")]
+	public static bool autoAvoidance = true;
+
+	[ServerVar(Saved = true, ClientAdmin = true, Default = "1", Help = "(Generated) When enabled, ground angle updates for horse body tilt are throttled to groundAngleUpdateRate seconds; improves performance")]
+	public static bool throttledGroundAngleUpdate = true;
+
+	[ServerVar(Saved = true, ClientAdmin = true, Default = "0.05", Help = "(Generated) Interval in seconds between ground angle recalculation updates for horse body tilting; default 0.05s")]
+	public static float groundAngleUpdateRate = 0.05f;
+
+	[ServerVar(Help = "How long before a horse dies unattended")]
+	public static float decayMinutes = 180f;
+
+	[ServerVar(Help = "Population active on the server, per square km", ShowInAdminUI = true)]
+	public static float Population = 2f;
+
+	[Header("Bones")]
+	public Transform rootBone;
+
+	public Transform[] allBones;
+
+	private static Vector3[] bonesInitialLocalPos;
 
 	public bool isGrounded { get; private set; }
 
@@ -17889,6 +17859,36 @@ public class RidableHorse : BaseVehicle, IInventoryProvider, IMedicalToolTarget,
 	public Rigidbody TowBody => rigidBody;
 
 	public bool IsTowingAllowed => !IsTowing;
+
+	public bool HasSingleSaddle => HasFlag(Flags.Reserved9);
+
+	public bool HasDoubleSaddle => HasFlag(Flags.Reserved10);
+
+	public bool HasSaddle
+	{
+		get
+		{
+			if (!HasSingleSaddle)
+			{
+				return HasDoubleSaddle;
+			}
+			return true;
+		}
+	}
+
+	public bool IsForSale => HasFlag(Flags.Reserved2);
+
+	public bool IsTowing => HasFlag(Flags.Reserved14);
+
+	public bool IsLeading => HasFlag(Flags.Reserved16);
+
+	public bool IsSwimming => HasFlag(Flags.Reserved13);
+
+	public bool IsSliding => HasFlag(Flags.Reserved18);
+
+	public BasePlayer leadingPlayer { get; private set; }
+
+	public override bool IsNpc => true;
 
 	public override bool OnRpcMessage(BasePlayer player, uint rpc, Message msg)
 	{
@@ -18617,151 +18617,6 @@ public class RidableHorse : BaseVehicle, IInventoryProvider, IMedicalToolTarget,
 		}
 	}
 
-	public override void PreInitShared()
-	{
-		base.PreInitShared();
-		modifiers = ((Component)this).GetComponent<HorseModifiers>();
-	}
-
-	public bool HasSeatAvailable()
-	{
-		if (HasSaddle)
-		{
-			return !HasFlag(Flags.Reserved11);
-		}
-		return false;
-	}
-
-	public bool IsPlayerTooHeavy(BasePlayer player)
-	{
-		return player.Weight >= 10f;
-	}
-
-	public static float UnitsToKPH(float unitsPerSecond)
-	{
-		return unitsPerSecond * 60f * 60f / 1000f;
-	}
-
-	public override void PreProcess(IPrefabProcessor preProcess, GameObject rootObj, string name, bool serverside, bool clientside, bool bundling)
-	{
-		//IL_0072: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0077: Unknown result type (might be due to invalid IL or missing references)
-		base.PreProcess(preProcess, rootObj, name, serverside, clientside, bundling);
-		hasItemTokenCache = new bool[PurchaseOptions.Count];
-		if (serverside || bundling)
-		{
-			baseDrag = rigidBody.drag;
-			baseAngularDrag = rigidBody.angularDrag;
-		}
-		bonesInitialLocalPos = (Vector3[])(object)new Vector3[allBones.Length];
-		for (int i = 0; i < allBones.Length; i++)
-		{
-			bonesInitialLocalPos[i] = allBones[i].localPosition;
-		}
-	}
-
-	public void ResetBonesPositions()
-	{
-		//IL_0012: Unknown result type (might be due to invalid IL or missing references)
-		for (int i = 0; i < allBones.Length; i++)
-		{
-			allBones[i].localPosition = bonesInitialLocalPos[i];
-		}
-	}
-
-	public override void OnFlagsChanged(Flags old, Flags next)
-	{
-		base.OnFlagsChanged(old, next);
-		if (old != next && base.isServer)
-		{
-			ServerFlagsChanged(old, next);
-		}
-	}
-
-	public override bool AnyMounted()
-	{
-		return base.AnyMounted();
-	}
-
-	private bool CanPlayerSeeSaddlePoint(BasePlayer player)
-	{
-		//IL_0006: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0011: Unknown result type (might be due to invalid IL or missing references)
-		//IL_002e: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0039: Unknown result type (might be due to invalid IL or missing references)
-		//IL_003e: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0048: Unknown result type (might be due to invalid IL or missing references)
-		//IL_004d: Unknown result type (might be due to invalid IL or missing references)
-		if (!GamePhysics.CheckCapsule(player.eyes.position, mountAnchor.position, 0.25f, 2162688, (QueryTriggerInteraction)0))
-		{
-			return !GamePhysics.CheckCapsule(player.eyes.position, mountAnchor.position + Vector3.up * 0.5f, 0.25f, 2162688, (QueryTriggerInteraction)0);
-		}
-		return false;
-	}
-
-	bool IMedicalToolTarget.IsValidMedicalToolItem(ItemDefinition itemDef)
-	{
-		for (int i = 0; i < prohibitedMedicalItems.Length; i++)
-		{
-			if ((Object)(object)prohibitedMedicalItems[i] == (Object)(object)itemDef)
-			{
-				return false;
-			}
-		}
-		return true;
-	}
-
-	public override void Save(SaveInfo info)
-	{
-		//IL_0061: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0066: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00d7: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00dc: Unknown result type (might be due to invalid IL or missing references)
-		base.Save(info);
-		info.msg.horse = Pool.Get<Horse>();
-		SaveContainer(info, info.msg.horse);
-		info.msg.horse.stamina = currentStamina;
-		info.msg.horse.maxStamina = currentMaxStamina;
-		info.msg.horse.towEntityId = towingEntityId;
-		info.msg.horse.breedIndex = currentBreedIndex;
-		info.msg.horse.numStorageSlots = numStorageSlots;
-		if (!info.forDisk)
-		{
-			info.msg.horse.gait = (int)currentGait;
-			info.msg.horse.equipmentSpeedMod = equipmentSpeedMod;
-			info.msg.horse.playerLeadingId = playerLeadingId;
-		}
-		info.msg.horse.modifiers = null;
-		if ((Object)(object)modifiers != (Object)null)
-		{
-			info.msg.horse.modifiers = modifiers.Save(info.forDisk);
-		}
-	}
-
-	public override void Load(LoadInfo info)
-	{
-		//IL_005e: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0063: Unknown result type (might be due to invalid IL or missing references)
-		base.Load(info);
-		if (info.msg.horse != null)
-		{
-			LoadContainer(info);
-			currentStamina = info.msg.horse.stamina;
-			currentMaxStamina = info.msg.horse.maxStamina;
-			if (info.fromDisk)
-			{
-				towingEntityId = info.msg.horse.towEntityId;
-				ValidateTowableEntity();
-				TowAttach();
-			}
-			if ((Object)(object)modifiers != (Object)null)
-			{
-				modifiers.Load(info.msg.horse.modifiers, info.fromDisk);
-			}
-			ApplyBreed(info.msg.horse.breedIndex);
-		}
-	}
-
 	public bool ShouldTrigger()
 	{
 		if (IsStopped() && isGrounded && !IsSwimming)
@@ -18990,7 +18845,7 @@ public class RidableHorse : BaseVehicle, IInventoryProvider, IMedicalToolTarget,
 		Vector3 val = Vector3.zero;
 		if (base.isServer)
 		{
-			val = rigidBody.velocity;
+			val = rigidBody.linearVelocity;
 		}
 		return Vector3.Dot(val, ((Component)this).transform.forward) < -0.1f;
 	}
@@ -19001,8 +18856,8 @@ public class RidableHorse : BaseVehicle, IInventoryProvider, IMedicalToolTarget,
 		//IL_0013: Unknown result type (might be due to invalid IL or missing references)
 		if (base.isServer)
 		{
-			Vector3 velocity = rigidBody.velocity;
-			return ((Vector3)(ref velocity)).magnitude;
+			Vector3 linearVelocity = rigidBody.linearVelocity;
+			return ((Vector3)(ref linearVelocity)).magnitude;
 		}
 		return 0f;
 	}
@@ -19479,8 +19334,8 @@ public class RidableHorse : BaseVehicle, IInventoryProvider, IMedicalToolTarget,
 				{
 					SetFlag(Flags.Reserved19, flag2);
 				}
-				rigidBody.drag = Mathf.Max(baseDrag, currentWaterFactor * 3f);
-				rigidBody.angularDrag = Mathf.Max(baseAngularDrag, currentWaterFactor * 2f);
+				rigidBody.linearDamping = Mathf.Max(baseDrag, currentWaterFactor * 3f);
+				rigidBody.angularDamping = Mathf.Max(baseAngularDrag, currentWaterFactor * 2f);
 				timeSinceWaterCheck = TimeSince.op_Implicit(0f);
 			}
 		}
@@ -19515,17 +19370,17 @@ public class RidableHorse : BaseVehicle, IInventoryProvider, IMedicalToolTarget,
 			}
 			airTime = 0f;
 			flag3 = IsStopped();
-			force = rigidBody.velocity;
+			force = rigidBody.linearVelocity;
 			if (((Vector3)(ref force)).magnitude > 0.5f && !isSwimming)
 			{
 				Vector3 val3 = -((Component)this).transform.up;
-				force = rigidBody.velocity;
+				force = rigidBody.linearVelocity;
 				Vector3 val4 = val3 * ((Vector3)(ref force)).magnitude * 20f;
 				rigidBody.AddForce(val4, (ForceMode)0);
 			}
 			AlignWithNormal(averagedUp);
 			Vector3 forward = ((Component)this).transform.forward;
-			Vector3 velocity = rigidBody.velocity;
+			Vector3 linearVelocity = rigidBody.linearVelocity;
 			if (ShouldSlide())
 			{
 				SetWheelStiffness(0.1f, 0f);
@@ -19541,7 +19396,7 @@ public class RidableHorse : BaseVehicle, IInventoryProvider, IMedicalToolTarget,
 					slidingTime = 0f;
 				}
 				slidingTime += Time.fixedDeltaTime;
-				float num = Vector3.Dot(rigidBody.velocity, -((Component)this).transform.forward);
+				float num = Vector3.Dot(rigidBody.linearVelocity, -((Component)this).transform.forward);
 				if (slidingTime > Time.fixedDeltaTime * 5f && num > 7f)
 				{
 					if (groundAngle > groundAngleToRecoverFromSlide + 5f)
@@ -19552,8 +19407,8 @@ public class RidableHorse : BaseVehicle, IInventoryProvider, IMedicalToolTarget,
 					RagdollHorse();
 				}
 			}
-			Vector3 val5 = Vector3.Project(velocity, forward);
-			Vector3 val6 = velocity - val5;
+			Vector3 val5 = Vector3.Project(linearVelocity, forward);
+			Vector3 val6 = linearVelocity - val5;
 			if (((Vector3)(ref val6)).magnitude > 1f)
 			{
 				Vector3 val7 = -val6 * (isSkidding ? 1f : 3f);
@@ -19570,7 +19425,7 @@ public class RidableHorse : BaseVehicle, IInventoryProvider, IMedicalToolTarget,
 			{
 				SetWheelStiffness(0f, 0f);
 				Brake(1.25f);
-				if (num2 <= 0.01f || Vector3.Dot(forward, ((Vector3)(ref velocity)).normalized) < 0.2f)
+				if (num2 <= 0.01f || Vector3.Dot(forward, ((Vector3)(ref linearVelocity)).normalized) < 0.2f)
 				{
 					isSkidding = false;
 				}
@@ -19595,7 +19450,7 @@ public class RidableHorse : BaseVehicle, IInventoryProvider, IMedicalToolTarget,
 					wheelCollider.motorTorque = 1E-05f * Mathf.Sign(throttleInput);
 					if (throttleInput < 0f)
 					{
-						if (Vector3.Dot(velocity, forward) < -0.1f || flag3)
+						if (Vector3.Dot(linearVelocity, forward) < -0.1f || flag3)
 						{
 							float num3 = GetCurrentMaxSpeed() * reverseSpeedFactor;
 							float num4 = Mathf.Max(num3 - currentSpeed, 0f);
@@ -19611,7 +19466,7 @@ public class RidableHorse : BaseVehicle, IInventoryProvider, IMedicalToolTarget,
 					{
 						float currentMaxSpeed = GetCurrentMaxSpeed();
 						float currentAcceleration = GetCurrentAcceleration();
-						if (((Vector3)(ref velocity)).magnitude < currentMaxSpeed)
+						if (((Vector3)(ref linearVelocity)).magnitude < currentMaxSpeed)
 						{
 							Vector3 val9 = forward * currentAcceleration;
 							if (currentGait != 0 || IsTowing)
@@ -19627,7 +19482,7 @@ public class RidableHorse : BaseVehicle, IInventoryProvider, IMedicalToolTarget,
 						}
 						else
 						{
-							Vector3 val10 = forward * currentMaxSpeed - velocity;
+							Vector3 val10 = forward * currentMaxSpeed - linearVelocity;
 							Vector3 val11 = ((Vector3)(ref val10)).normalized * (currentAcceleration * 0.2f);
 							rigidBody.AddForce(val11, (ForceMode)0);
 						}
@@ -19636,14 +19491,14 @@ public class RidableHorse : BaseVehicle, IInventoryProvider, IMedicalToolTarget,
 				else
 				{
 					float num6 = 0.1f;
-					force = rigidBody.velocity;
+					force = rigidBody.linearVelocity;
 					if (((Vector3)(ref force)).sqrMagnitude < num6 * num6)
 					{
-						rigidBody.velocity = Vector3.zero;
+						rigidBody.linearVelocity = Vector3.zero;
 					}
 					else
 					{
-						Vector3 val12 = -((Vector3)(ref velocity)).normalized * (rigidBody.mass * (AnyMounted() ? 1.1f : 3f));
+						Vector3 val12 = -((Vector3)(ref linearVelocity)).normalized * (rigidBody.mass * (AnyMounted() ? 1.1f : 3f));
 						rigidBody.AddForce(val12, (ForceMode)0);
 					}
 				}
@@ -19660,7 +19515,7 @@ public class RidableHorse : BaseVehicle, IInventoryProvider, IMedicalToolTarget,
 			}
 			if (Mathf.Abs(throttleInput) <= 0f)
 			{
-				force = rigidBody.velocity;
+				force = rigidBody.linearVelocity;
 				if (((Vector3)(ref force)).magnitude < 2.5f && groundAngle < minMaxSlopeAngle.y && !isSwimming && !IsSliding)
 				{
 					goto IL_08ac;
@@ -19691,15 +19546,15 @@ public class RidableHorse : BaseVehicle, IInventoryProvider, IMedicalToolTarget,
 			ApplyBuoyancy();
 		}
 		float num10 = 10000f;
-		force = rigidBody.velocity;
+		force = rigidBody.linearVelocity;
 		if (((Vector3)(ref force)).magnitude > num10)
 		{
 			Rigidbody obj = rigidBody;
-			force = rigidBody.velocity;
-			obj.velocity = ((Vector3)(ref force)).normalized * num10;
+			force = rigidBody.linearVelocity;
+			obj.linearVelocity = ((Vector3)(ref force)).normalized * num10;
 		}
 		float num11 = -1.3f;
-		float num12 = Vector3.Dot(rigidBody.velocity, ((Component)this).transform.forward);
+		float num12 = Vector3.Dot(rigidBody.linearVelocity, ((Component)this).transform.forward);
 		if (num12 <= num11)
 		{
 			float num13 = num11 - num12;
@@ -19714,7 +19569,7 @@ public class RidableHorse : BaseVehicle, IInventoryProvider, IMedicalToolTarget,
 				rigidBody.angularVelocity = Vector3.zero;
 			}
 		}
-		lastYVelocity = rigidBody.velocity.y;
+		lastYVelocity = rigidBody.linearVelocity.y;
 		return;
 		IL_08c4:
 		if (IsLeading)
@@ -19782,7 +19637,7 @@ public class RidableHorse : BaseVehicle, IInventoryProvider, IMedicalToolTarget,
 		//IL_002e: Unknown result type (might be due to invalid IL or missing references)
 		//IL_0033: Unknown result type (might be due to invalid IL or missing references)
 		//IL_003a: Unknown result type (might be due to invalid IL or missing references)
-		Vector3 val = Vector3.zero - rigidBody.velocity;
+		Vector3 val = Vector3.zero - rigidBody.linearVelocity;
 		Vector3 val2 = ((Vector3)(ref val)).normalized * GetCurrentGait().brakingForce * multiplier;
 		rigidBody.AddForce(val2, (ForceMode)0);
 	}
@@ -19794,7 +19649,7 @@ public class RidableHorse : BaseVehicle, IInventoryProvider, IMedicalToolTarget,
 		//IL_0048: Unknown result type (might be due to invalid IL or missing references)
 		if ((IsSliding || !(groundAngle > groundAngleSlideThreshold) || !(normalVariation < normalVariationSlideThreshold)) && !(groundAngle > groundAngleSlideThresholdForced))
 		{
-			return Vector3.Dot(rigidBody.velocity, -((Component)this).transform.forward) > 4f;
+			return Vector3.Dot(rigidBody.linearVelocity, -((Component)this).transform.forward) > 4f;
 		}
 		return true;
 	}
@@ -19829,10 +19684,10 @@ public class RidableHorse : BaseVehicle, IInventoryProvider, IMedicalToolTarget,
 			float num3 = 1f + num2;
 			Vector3 val = Vector3.up * (10f * num * num3);
 			rigidBody.AddForce(val, (ForceMode)5);
-			Vector3 val2 = Vector3.ProjectOnPlane(rigidBody.velocity, Vector3.up);
-			Vector3 val3 = Vector3.Project(rigidBody.velocity, Vector3.up);
+			Vector3 val2 = Vector3.ProjectOnPlane(rigidBody.linearVelocity, Vector3.up);
+			Vector3 val3 = Vector3.Project(rigidBody.linearVelocity, Vector3.up);
 			val3 *= 1f - Time.fixedDeltaTime * 6f;
-			rigidBody.velocity = val2 + val3;
+			rigidBody.linearVelocity = val2 + val3;
 		}
 	}
 
@@ -20111,7 +19966,7 @@ public class RidableHorse : BaseVehicle, IInventoryProvider, IMedicalToolTarget,
 			return;
 		}
 		float num = Mathf.Lerp(avoidanceDetectionDistance.x, avoidanceDetectionDistance.y, GetSpeedFraction());
-		Vector3 val = rigidBody.velocity;
+		Vector3 val = rigidBody.linearVelocity;
 		Vector3 val2;
 		if (!(((Vector3)(ref val)).sqrMagnitude > 0.01f))
 		{
@@ -20119,7 +19974,7 @@ public class RidableHorse : BaseVehicle, IInventoryProvider, IMedicalToolTarget,
 		}
 		else
 		{
-			val = rigidBody.velocity;
+			val = rigidBody.linearVelocity;
 			val2 = ((Vector3)(ref val)).normalized;
 		}
 		Vector3 val3 = ((Component)this).transform.right * steerInput * 0.4f;
@@ -20647,9 +20502,9 @@ public class RidableHorse : BaseVehicle, IInventoryProvider, IMedicalToolTarget,
 		}
 	}
 
-	[RPC_Server]
-	[RPC_Server.IsVisible(3f)]
 	[RPC_Server.CallsPerSecond(1uL)]
+	[RPC_Server.IsVisible(3f)]
+	[RPC_Server]
 	public void SERVER_Lead(RPCMessage msg)
 	{
 		BasePlayer player = msg.player;
@@ -21096,10 +20951,10 @@ public class RidableHorse : BaseVehicle, IInventoryProvider, IMedicalToolTarget,
 		}, 1f);
 	}
 
-	[RPC_Server]
-	[RPC_Server.IsVisible(3f)]
 	[RPC_Server.MaxDistance(3f)]
+	[RPC_Server.IsVisible(3f)]
 	[RPC_Server.CallsPerSecond(1uL)]
+	[RPC_Server]
 	public void SERVER_RequestTow(RPCMessage msg)
 	{
 		//IL_0039: Unknown result type (might be due to invalid IL or missing references)
@@ -21111,10 +20966,10 @@ public class RidableHorse : BaseVehicle, IInventoryProvider, IMedicalToolTarget,
 		}
 	}
 
-	[RPC_Server]
-	[RPC_Server.CallsPerSecond(1uL)]
 	[RPC_Server.IsVisible(3f)]
 	[RPC_Server.MaxDistance(3f)]
+	[RPC_Server]
+	[RPC_Server.CallsPerSecond(1uL)]
 	public void SERVER_RequestDetach(RPCMessage msg)
 	{
 		//IL_0049: Unknown result type (might be due to invalid IL or missing references)
@@ -21308,6 +21163,158 @@ public class RidableHorse : BaseVehicle, IInventoryProvider, IMedicalToolTarget,
 		}
 		modifiers.Add(consumable.modifiers);
 	}
+
+	public override void PreInitShared()
+	{
+		base.PreInitShared();
+		modifiers = ((Component)this).GetComponent<HorseModifiers>();
+	}
+
+	public bool HasSeatAvailable()
+	{
+		if (HasSaddle)
+		{
+			return !HasFlag(Flags.Reserved11);
+		}
+		return false;
+	}
+
+	public bool IsPlayerTooHeavy(BasePlayer player)
+	{
+		return player.Weight >= 10f;
+	}
+
+	public static float UnitsToKPH(float unitsPerSecond)
+	{
+		return unitsPerSecond * 60f * 60f / 1000f;
+	}
+
+	public override void PreProcess(IPrefabProcessor preProcess, GameObject rootObj, string name, bool serverside, bool clientside, bool bundling)
+	{
+		//IL_0072: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0077: Unknown result type (might be due to invalid IL or missing references)
+		base.PreProcess(preProcess, rootObj, name, serverside, clientside, bundling);
+		hasItemTokenCache = new bool[PurchaseOptions.Count];
+		if (serverside || bundling)
+		{
+			baseDrag = rigidBody.linearDamping;
+			baseAngularDrag = rigidBody.angularDamping;
+		}
+		bonesInitialLocalPos = (Vector3[])(object)new Vector3[allBones.Length];
+		for (int i = 0; i < allBones.Length; i++)
+		{
+			bonesInitialLocalPos[i] = allBones[i].localPosition;
+		}
+	}
+
+	public void ResetBonesPositions()
+	{
+		//IL_0012: Unknown result type (might be due to invalid IL or missing references)
+		for (int i = 0; i < allBones.Length; i++)
+		{
+			allBones[i].localPosition = bonesInitialLocalPos[i];
+		}
+	}
+
+	public override void OnFlagsChanged(Flags old, Flags next)
+	{
+		base.OnFlagsChanged(old, next);
+		if (old != next && base.isServer)
+		{
+			ServerFlagsChanged(old, next);
+		}
+	}
+
+	public override bool AnyMounted()
+	{
+		return base.AnyMounted();
+	}
+
+	private bool CanPlayerSeeSaddlePoint(BasePlayer player)
+	{
+		//IL_0006: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0011: Unknown result type (might be due to invalid IL or missing references)
+		//IL_002e: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0039: Unknown result type (might be due to invalid IL or missing references)
+		//IL_003e: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0048: Unknown result type (might be due to invalid IL or missing references)
+		//IL_004d: Unknown result type (might be due to invalid IL or missing references)
+		if (!GamePhysics.CheckCapsule(player.eyes.position, mountAnchor.position, 0.25f, 2162688, (QueryTriggerInteraction)0))
+		{
+			return !GamePhysics.CheckCapsule(player.eyes.position, mountAnchor.position + Vector3.up * 0.5f, 0.25f, 2162688, (QueryTriggerInteraction)0);
+		}
+		return false;
+	}
+
+	bool IMedicalToolTarget.IsValidMedicalToolItem(ItemDefinition itemDef)
+	{
+		for (int i = 0; i < prohibitedMedicalItems.Length; i++)
+		{
+			if ((Object)(object)prohibitedMedicalItems[i] == (Object)(object)itemDef)
+			{
+				return false;
+			}
+		}
+		return true;
+	}
+
+	public override void Save(SaveInfo info)
+	{
+		//IL_0061: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0066: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00d7: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00dc: Unknown result type (might be due to invalid IL or missing references)
+		base.Save(info);
+		info.msg.horse = Pool.Get<Horse>();
+		SaveContainer(info, info.msg.horse);
+		info.msg.horse.stamina = currentStamina;
+		info.msg.horse.maxStamina = currentMaxStamina;
+		info.msg.horse.towEntityId = towingEntityId;
+		info.msg.horse.breedIndex = currentBreedIndex;
+		info.msg.horse.numStorageSlots = numStorageSlots;
+		if (!info.forDisk)
+		{
+			info.msg.horse.gait = (int)currentGait;
+			info.msg.horse.equipmentSpeedMod = equipmentSpeedMod;
+			info.msg.horse.playerLeadingId = playerLeadingId;
+		}
+		info.msg.horse.modifiers = null;
+		if ((Object)(object)modifiers != (Object)null)
+		{
+			info.msg.horse.modifiers = modifiers.Save(info.forDisk);
+		}
+	}
+
+	public override void Load(LoadInfo info)
+	{
+		//IL_005e: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0063: Unknown result type (might be due to invalid IL or missing references)
+		base.Load(info);
+		if (info.msg.horse != null)
+		{
+			LoadContainer(info);
+			currentStamina = info.msg.horse.stamina;
+			currentMaxStamina = info.msg.horse.maxStamina;
+			if (info.fromDisk)
+			{
+				towingEntityId = info.msg.horse.towEntityId;
+				ValidateTowableEntity();
+				TowAttach();
+			}
+			if ((Object)(object)modifiers != (Object)null)
+			{
+				modifiers.Load(info.msg.horse.modifiers, info.fromDisk);
+			}
+			ApplyBreed(info.msg.horse.breedIndex);
+		}
+	}
+}
+
+
+public enum HorseAvoidanceState
+{
+	Normal,
+	AvoidingObstacle
 }
 
 
@@ -21360,13 +21367,6 @@ public struct PurchaseOption
 	public Sprite icon;
 
 	public int order;
-}
-
-
-public enum HorseAvoidanceState
-{
-	Normal,
-	AvoidingObstacle
 }
 
 
@@ -22070,8 +22070,8 @@ public class Sail : DecayEntity, IBoatBuildingPiece, IBoatPropulsion
 		return DeployVolume.Check(((Component)this).transform.position, ((Component)this).transform.rotation * Quaternion.AngleAxis(180f, Vector3.up), volumes, ~(1 << ((Component)this).gameObject.layer));
 	}
 
-	[RPC_Server]
 	[RPC_Server.CallsPerSecond(5uL)]
+	[RPC_Server]
 	[RPC_Server.IsVisible(3f)]
 	public void LowerSail(RPCMessage msg)
 	{
@@ -22112,9 +22112,9 @@ public class Sail : DecayEntity, IBoatBuildingPiece, IBoatPropulsion
 		ToggleColliders();
 	}
 
+	[RPC_Server]
 	[RPC_Server.CallsPerSecond(5uL)]
 	[RPC_Server.IsVisible(3f)]
-	[RPC_Server]
 	public void RaiseSail(RPCMessage msg)
 	{
 		Raise(msg.player);
@@ -22153,8 +22153,8 @@ public class Sail : DecayEntity, IBoatBuildingPiece, IBoatPropulsion
 	}
 
 	[RPC_Server.IsVisible(3f)]
-	[RPC_Server]
 	[RPC_Server.CallsPerSecond(5uL)]
+	[RPC_Server]
 	public void RotateSail(RPCMessage msg)
 	{
 		RotateSail(msg.player);
@@ -22932,9 +22932,9 @@ public class SamSite : ContainerIOEntity
 		}
 	}
 
-	[RPC_Server.CallsPerSecond(1uL)]
-	[RPC_Server.IsVisible(3f)]
 	[RPC_Server]
+	[RPC_Server.IsVisible(3f)]
+	[RPC_Server.CallsPerSecond(1uL)]
 	private void ToggleDefenderMode(RPCMessage msg)
 	{
 		if (staticRespawn)
@@ -23583,6 +23583,8 @@ using UnityEngine.Assertions;
 
 public class SeismicSensor : IOEntity
 {
+	private static readonly BaseEntity[] resultBuffer = new BaseEntity[128];
+
 	public static int MinRange = 1;
 
 	public static int MaxRange = 30;
@@ -23594,8 +23596,6 @@ public class SeismicSensor : IOEntity
 	private int vibrationLevel;
 
 	private const int holdTime = 3;
-
-	private static readonly BaseEntity[] resultBuffer = new BaseEntity[128];
 
 	public override bool OnRpcMessage(BasePlayer player, uint rpc, Message msg)
 	{
@@ -23663,6 +23663,44 @@ public class SeismicSensor : IOEntity
 			((IDisposable)val)?.Dispose();
 		}
 		return base.OnRpcMessage(player, rpc, msg);
+	}
+
+	public static void Notify(Vector3 position, int value)
+	{
+		//IL_0009: Unknown result type (might be due to invalid IL or missing references)
+		//IL_003e: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0043: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0044: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0045: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0046: Unknown result type (might be due to invalid IL or missing references)
+		//IL_004b: Unknown result type (might be due to invalid IL or missing references)
+		if (value == 0)
+		{
+			return;
+		}
+		int inSphereFast = Query.Server.GetInSphereFast(position, MaxRange, resultBuffer, FilterOutSensors);
+		for (int i = 0; i < inSphereFast; i++)
+		{
+			SeismicSensor seismicSensor = resultBuffer[i] as SeismicSensor;
+			Vector3 position2 = ((Component)seismicSensor).transform.position;
+			Vector3 val = position - position2;
+			float sqrMagnitude = ((Vector3)(ref val)).sqrMagnitude;
+			float num = (float)seismicSensor.range + 0.5f;
+			if (sqrMagnitude < num * num)
+			{
+				seismicSensor.SetVibrationLevel(value);
+			}
+		}
+	}
+
+	private static bool FilterOutSensors(BaseEntity entity)
+	{
+		SeismicSensor seismicSensor = entity as SeismicSensor;
+		if ((Object)(object)seismicSensor != (Object)null && seismicSensor.IsValidEntityReference())
+		{
+			return seismicSensor.HasFlag(Flags.Reserved8);
+		}
+		return false;
 	}
 
 	public void SetVibrationLevel(int value)
@@ -23759,44 +23797,6 @@ public class SeismicSensor : IOEntity
 				SetVibrationLevel(0);
 			}
 		}
-	}
-
-	public static void Notify(Vector3 position, int value)
-	{
-		//IL_0009: Unknown result type (might be due to invalid IL or missing references)
-		//IL_003e: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0043: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0044: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0045: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0046: Unknown result type (might be due to invalid IL or missing references)
-		//IL_004b: Unknown result type (might be due to invalid IL or missing references)
-		if (value == 0)
-		{
-			return;
-		}
-		int inSphereFast = Query.Server.GetInSphereFast(position, MaxRange, resultBuffer, FilterOutSensors);
-		for (int i = 0; i < inSphereFast; i++)
-		{
-			SeismicSensor seismicSensor = resultBuffer[i] as SeismicSensor;
-			Vector3 position2 = ((Component)seismicSensor).transform.position;
-			Vector3 val = position - position2;
-			float sqrMagnitude = ((Vector3)(ref val)).sqrMagnitude;
-			float num = (float)seismicSensor.range + 0.5f;
-			if (sqrMagnitude < num * num)
-			{
-				seismicSensor.SetVibrationLevel(value);
-			}
-		}
-	}
-
-	private static bool FilterOutSensors(BaseEntity entity)
-	{
-		SeismicSensor seismicSensor = entity as SeismicSensor;
-		if ((Object)(object)seismicSensor != (Object)null && seismicSensor.IsValidEntityReference())
-		{
-			return seismicSensor.HasFlag(Flags.Reserved8);
-		}
-		return false;
 	}
 }
 
@@ -23972,8 +23972,8 @@ public class Shield : HeldEntity
 	}
 
 	[RPC_Server]
-	[RPC_Server.FromOwner]
 	[RPC_Server.CallsPerSecond(10uL)]
+	[RPC_Server.FromOwner]
 	private void ServerToggleBlock(RPCMessage msg)
 	{
 		bool flag = msg.read.Bit();
@@ -24498,8 +24498,8 @@ public class ShopFront : StorageContainer
 		}
 	}
 
-	[RPC_Server.IsVisible(3f)]
 	[RPC_Server]
+	[RPC_Server.IsVisible(3f)]
 	public void CancelClicked(RPCMessage msg)
 	{
 		if (IsTradingPlayer(msg.player) && Interface.CallHook("OnShopCancelClick", (object)this, (object)msg.player) == null)
@@ -24892,9 +24892,9 @@ public class ShutterFrame : PhotoFrame, IFlagNotify
 		}
 	}
 
+	[RPC_Server]
 	[RPC_Server.IsVisible(6f)]
 	[RPC_Server.CallsPerSecond(2uL)]
-	[RPC_Server]
 	public void RPC_ToggleShutter(RPCMessage msg)
 	{
 		IsShutterOpen = !IsShutterOpen;
@@ -25030,8 +25030,12 @@ using UnityEngine.Assertions;
 
 public class SiegeTower : BaseSiegeWeapon
 {
-	[SerializeField]
+	private bool shouldRaise;
+
+	private float raiseTimer;
+
 	[Header("Siege Tower")]
+	[SerializeField]
 	private SiegeTowerDoor drawBridgePrefab;
 
 	[SerializeField]
@@ -25054,10 +25058,6 @@ public class SiegeTower : BaseSiegeWeapon
 	public float torqueForce = 10f;
 
 	public float uprightAngle = 10f;
-
-	private bool shouldRaise;
-
-	private float raiseTimer;
 
 	public override float DriveWheelVelocity { get; }
 
@@ -25123,108 +25123,6 @@ public class SiegeTower : BaseSiegeWeapon
 			((IDisposable)val)?.Dispose();
 		}
 		return base.OnRpcMessage(player, rpc, msg);
-	}
-
-	public override void Load(LoadInfo info)
-	{
-		//IL_002d: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0048: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0063: Unknown result type (might be due to invalid IL or missing references)
-		base.Load(info);
-		if (info.msg.siegeTower != null && base.isServer)
-		{
-			drawBridgeRef.uid = info.msg.siegeTower.drawBridgeID;
-			drawBridge2Ref.uid = info.msg.siegeTower.drawBridge2ID;
-			drawBridge3Ref.uid = info.msg.siegeTower.drawBridge3ID;
-		}
-	}
-
-	public override void Save(SaveInfo info)
-	{
-		//IL_0028: Unknown result type (might be due to invalid IL or missing references)
-		//IL_002d: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0043: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0048: Unknown result type (might be due to invalid IL or missing references)
-		//IL_005e: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0063: Unknown result type (might be due to invalid IL or missing references)
-		base.Save(info);
-		info.msg.siegeTower = Pool.Get<SiegeTower>();
-		info.msg.siegeTower.drawBridgeID = drawBridgeRef.uid;
-		info.msg.siegeTower.drawBridge2ID = drawBridge2Ref.uid;
-		info.msg.siegeTower.drawBridge3ID = drawBridge3Ref.uid;
-	}
-
-	protected override void OnChildAdded(BaseEntity child)
-	{
-		base.OnChildAdded(child);
-		if (base.isServer && !Application.isLoadingSave)
-		{
-			if (child.prefabID == drawBridgePrefab.GetEntity().prefabID)
-			{
-				SiegeTowerDoor siegeTowerDoor = (SiegeTowerDoor)child;
-				drawBridgeRef.Set(siegeTowerDoor);
-				SetupDoor(siegeTowerDoor);
-			}
-			if (child.prefabID == drawBridge2Prefab.GetEntity().prefabID)
-			{
-				SiegeTowerDoor siegeTowerDoor2 = (SiegeTowerDoor)child;
-				drawBridge2Ref.Set(siegeTowerDoor2);
-				SetupDoor(siegeTowerDoor2);
-			}
-			if (child.prefabID == drawBridge3Prefab.GetEntity().prefabID)
-			{
-				SiegeTowerDoor siegeTowerDoor3 = (SiegeTowerDoor)child;
-				drawBridge3Ref.Set(siegeTowerDoor3);
-				SetupDoor(siegeTowerDoor3);
-			}
-			UpdateDoorHp();
-		}
-	}
-
-	protected override bool CanPushNow(BasePlayer pusher)
-	{
-		if (HasFlag(Flags.Reserved16))
-		{
-			return false;
-		}
-		if (base.isServer)
-		{
-			BaseEntity baseEntity = pusher.parentEntity.Get(serverside: true);
-			if (baseEntity.IsValid())
-			{
-				BaseEntity baseEntity2 = baseEntity.parentEntity.Get(serverside: true);
-				if (baseEntity2.IsValid() && (Object)(object)baseEntity2 == (Object)(object)this)
-				{
-					return false;
-				}
-			}
-			if (!IsYValid(pusher))
-			{
-				return false;
-			}
-		}
-		return true;
-	}
-
-	private bool IsYValid(BasePlayer pusher)
-	{
-		//IL_0006: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0016: Unknown result type (might be due to invalid IL or missing references)
-		return !(Mathf.Abs(((Component)this).transform.position.y - ((Component)pusher).transform.position.y) > 2f);
-	}
-
-	protected override void CreateEngineController()
-	{
-	}
-
-	public override bool SupportsChildDeployables()
-	{
-		return true;
-	}
-
-	public override bool ForceDeployableSetParent()
-	{
-		return true;
 	}
 
 	public override void ServerInit()
@@ -25404,12 +25302,12 @@ public class SiegeTower : BaseSiegeWeapon
 		{
 			if (Mathf.Abs(((Component)this).transform.up.y) > uprightAngle || raiseTimer > 5f)
 			{
-				rigidBody.angularDrag = 0.95f;
+				rigidBody.angularDamping = 0.95f;
 			}
 			else if (Mathf.Abs(((Component)this).transform.up.y) > 1f || raiseTimer > 15f)
 			{
 				shouldRaise = false;
-				rigidBody.angularDrag = 0.05f;
+				rigidBody.angularDamping = 0.05f;
 			}
 			Vector3 angularVelocity = rigidBody.angularVelocity;
 			Vector3 val = Quaternion.AngleAxis(((Vector3)(ref angularVelocity)).magnitude * 57.29578f * 100f / 350f, rigidBody.angularVelocity) * ((Component)this).transform.up;
@@ -25448,8 +25346,8 @@ public class SiegeTower : BaseSiegeWeapon
 		return false;
 	}
 
-	[RPC_Server]
 	[RPC_Server.MaxDistance(3f)]
+	[RPC_Server]
 	public void SV_RequestRaise(RPCMessage msg)
 	{
 		if (HasFlag(Flags.Reserved16) && !((FacepunchBehaviour)this).IsInvoking((Action)AlignRotationToZero))
@@ -25461,6 +25359,108 @@ public class SiegeTower : BaseSiegeWeapon
 			raiseTimer = 0f;
 			shouldRaise = true;
 		}
+	}
+
+	public override void Load(LoadInfo info)
+	{
+		//IL_002d: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0048: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0063: Unknown result type (might be due to invalid IL or missing references)
+		base.Load(info);
+		if (info.msg.siegeTower != null && base.isServer)
+		{
+			drawBridgeRef.uid = info.msg.siegeTower.drawBridgeID;
+			drawBridge2Ref.uid = info.msg.siegeTower.drawBridge2ID;
+			drawBridge3Ref.uid = info.msg.siegeTower.drawBridge3ID;
+		}
+	}
+
+	public override void Save(SaveInfo info)
+	{
+		//IL_0028: Unknown result type (might be due to invalid IL or missing references)
+		//IL_002d: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0043: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0048: Unknown result type (might be due to invalid IL or missing references)
+		//IL_005e: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0063: Unknown result type (might be due to invalid IL or missing references)
+		base.Save(info);
+		info.msg.siegeTower = Pool.Get<SiegeTower>();
+		info.msg.siegeTower.drawBridgeID = drawBridgeRef.uid;
+		info.msg.siegeTower.drawBridge2ID = drawBridge2Ref.uid;
+		info.msg.siegeTower.drawBridge3ID = drawBridge3Ref.uid;
+	}
+
+	protected override void OnChildAdded(BaseEntity child)
+	{
+		base.OnChildAdded(child);
+		if (base.isServer && !Application.isLoadingSave)
+		{
+			if (child.prefabID == drawBridgePrefab.GetEntity().prefabID)
+			{
+				SiegeTowerDoor siegeTowerDoor = (SiegeTowerDoor)child;
+				drawBridgeRef.Set(siegeTowerDoor);
+				SetupDoor(siegeTowerDoor);
+			}
+			if (child.prefabID == drawBridge2Prefab.GetEntity().prefabID)
+			{
+				SiegeTowerDoor siegeTowerDoor2 = (SiegeTowerDoor)child;
+				drawBridge2Ref.Set(siegeTowerDoor2);
+				SetupDoor(siegeTowerDoor2);
+			}
+			if (child.prefabID == drawBridge3Prefab.GetEntity().prefabID)
+			{
+				SiegeTowerDoor siegeTowerDoor3 = (SiegeTowerDoor)child;
+				drawBridge3Ref.Set(siegeTowerDoor3);
+				SetupDoor(siegeTowerDoor3);
+			}
+			UpdateDoorHp();
+		}
+	}
+
+	protected override bool CanPushNow(BasePlayer pusher)
+	{
+		if (HasFlag(Flags.Reserved16))
+		{
+			return false;
+		}
+		if (base.isServer)
+		{
+			BaseEntity baseEntity = pusher.parentEntity.Get(serverside: true);
+			if (baseEntity.IsValid())
+			{
+				BaseEntity baseEntity2 = baseEntity.parentEntity.Get(serverside: true);
+				if (baseEntity2.IsValid() && (Object)(object)baseEntity2 == (Object)(object)this)
+				{
+					return false;
+				}
+			}
+			if (!IsYValid(pusher))
+			{
+				return false;
+			}
+		}
+		return true;
+	}
+
+	private bool IsYValid(BasePlayer pusher)
+	{
+		//IL_0006: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0016: Unknown result type (might be due to invalid IL or missing references)
+		return !(Mathf.Abs(((Component)this).transform.position.y - ((Component)pusher).transform.position.y) > 2f);
+	}
+
+	protected override void CreateEngineController()
+	{
+	}
+
+	public override bool SupportsChildDeployables()
+	{
+		return true;
+	}
+
+	public override bool ForceDeployableSetParent()
+	{
+		return true;
 	}
 }
 
@@ -25480,15 +25480,6 @@ using UnityEngine.Assertions;
 
 public class Signage : IOEntity, ILOD, ISignage, IUGCBrowserEntity, IEaselPaintable
 {
-	[Header("Signage")]
-	public ItemDefinition RequiredHeldEntity;
-
-	private EaselDeployable _cachedParentEasel;
-
-	public bool showIODisplayName;
-
-	private List<ulong> editHistory = new List<ulong>();
-
 	private const float TextureRequestTimeout = 15f;
 
 	public GameObjectRef changeTextDialog;
@@ -25498,7 +25489,44 @@ public class Signage : IOEntity, ILOD, ISignage, IUGCBrowserEntity, IEaselPainta
 	[NonSerialized]
 	public uint[] textureIDs;
 
+	[Header("Signage")]
+	public ItemDefinition RequiredHeldEntity;
+
+	private EaselDeployable _cachedParentEasel;
+
+	public bool showIODisplayName;
+
+	private List<ulong> editHistory = new List<ulong>();
+
 	private NetworkableId __sync_EaselId;
+
+	public Vector2i TextureSize
+	{
+		get
+		{
+			//IL_0011: Unknown result type (might be due to invalid IL or missing references)
+			//IL_002c: Unknown result type (might be due to invalid IL or missing references)
+			if (paintableSources == null || paintableSources.Length == 0)
+			{
+				return Vector2i.zero;
+			}
+			MeshPaintableSource meshPaintableSource = paintableSources[0];
+			return new Vector2i(meshPaintableSource.texWidth, meshPaintableSource.texHeight);
+		}
+	}
+
+	public int TextureCount
+	{
+		get
+		{
+			MeshPaintableSource[] array = paintableSources;
+			if (array == null)
+			{
+				return 0;
+			}
+			return array.Length;
+		}
+	}
 
 	[Sync(Autosave = true)]
 	public NetworkableId EaselId
@@ -25562,34 +25590,6 @@ public class Signage : IOEntity, ILOD, ISignage, IUGCBrowserEntity, IEaselPainta
 	public uint[] GetContentCRCs => GetTextureCRCs();
 
 	public override bool ShouldTransferAssociatedFiles => true;
-
-	public Vector2i TextureSize
-	{
-		get
-		{
-			//IL_0011: Unknown result type (might be due to invalid IL or missing references)
-			//IL_002c: Unknown result type (might be due to invalid IL or missing references)
-			if (paintableSources == null || paintableSources.Length == 0)
-			{
-				return Vector2i.zero;
-			}
-			MeshPaintableSource meshPaintableSource = paintableSources[0];
-			return new Vector2i(meshPaintableSource.texWidth, meshPaintableSource.texHeight);
-		}
-	}
-
-	public int TextureCount
-	{
-		get
-		{
-			MeshPaintableSource[] array = paintableSources;
-			if (array == null)
-			{
-				return 0;
-			}
-			return array.Length;
-		}
-	}
 
 	public override bool OnRpcMessage(BasePlayer player, uint rpc, Message msg)
 	{
@@ -25761,6 +25761,85 @@ public class Signage : IOEntity, ILOD, ISignage, IUGCBrowserEntity, IEaselPainta
 		return base.OnRpcMessage(player, rpc, msg);
 	}
 
+	public override void PreProcess(IPrefabProcessor preProcess, GameObject rootObj, string name, bool serverside, bool clientside, bool bundling)
+	{
+		base.PreProcess(preProcess, rootObj, name, serverside, clientside, bundling);
+		if (clientside && paintableSources != null && paintableSources.Length > 1)
+		{
+			MeshPaintableSource meshPaintableSource = paintableSources[0];
+			for (int i = 1; i < paintableSources.Length; i++)
+			{
+				MeshPaintableSource obj = paintableSources[i];
+				obj.texWidth = meshPaintableSource.texWidth;
+				obj.texHeight = meshPaintableSource.texHeight;
+			}
+		}
+	}
+
+	[RPC_Server]
+	[RPC_Server.MaxDistance(5f)]
+	[RPC_Server.CallsPerSecond(5uL)]
+	public void UpdateSign(RPCMessage msg)
+	{
+		//IL_00b4: Unknown result type (might be due to invalid IL or missing references)
+		//IL_011a: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00fb: Unknown result type (might be due to invalid IL or missing references)
+		if ((Object)(object)msg.player == (Object)null || !CanUpdateSign(msg.player))
+		{
+			return;
+		}
+		int num = msg.read.Int32();
+		if (num < 0 || num >= paintableSources.Length)
+		{
+			return;
+		}
+		byte[] array = msg.read.BytesWithSize(10485760u, false);
+		if (msg.read.Unread > 0 && msg.read.Bit() && !msg.player.IsAdmin)
+		{
+			Debug.LogWarning((object)$"{msg.player} tried to upload a sign from a file but they aren't admin, ignoring");
+			return;
+		}
+		EnsureInitialized();
+		if (array == null)
+		{
+			if (textureIDs[num] != 0)
+			{
+				FileStorage.server.RemoveExact(textureIDs[num], FileStorage.Type.png, net.ID, (uint)num);
+			}
+			textureIDs[num] = 0u;
+		}
+		else
+		{
+			if (!ImageProcessing.IsValidPNG(array, 1024, 1024))
+			{
+				return;
+			}
+			if (textureIDs[num] != 0)
+			{
+				FileStorage.server.RemoveExact(textureIDs[num], FileStorage.Type.png, net.ID, (uint)num);
+			}
+			textureIDs[num] = FileStorage.server.Store(array, FileStorage.Type.png, net.ID, (uint)num);
+		}
+		LogEdit(msg.player);
+		SendNetworkUpdate();
+		Interface.CallHook("OnSignUpdated", (object)this, (object)msg.player, (object)num);
+	}
+
+	public void EnsureInitialized()
+	{
+		int num = Mathf.Max(paintableSources.Length, 1);
+		if (textureIDs == null || textureIDs.Length != num)
+		{
+			Array.Resize(ref textureIDs, num);
+		}
+	}
+
+	[Conditional("SIGN_DEBUG")]
+	private static void SignDebugLog(string str)
+	{
+		Debug.Log((object)str);
+	}
+
 	public override bool ShowDisplayName()
 	{
 		return showIODisplayName;
@@ -25906,8 +25985,8 @@ public class Signage : IOEntity, ILOD, ISignage, IUGCBrowserEntity, IEaselPainta
 		return textureIDs;
 	}
 
-	[RPC_Server.MaxDistance(3f)]
 	[RPC_Server]
+	[RPC_Server.MaxDistance(3f)]
 	public void LockSign(RPCMessage msg)
 	{
 		if (msg.player.CanInteract() && CanUpdateSign(msg.player))
@@ -26084,85 +26163,6 @@ public class Signage : IOEntity, ILOD, ISignage, IUGCBrowserEntity, IEaselPainta
 	public override string Categorize()
 	{
 		return "sign";
-	}
-
-	public override void PreProcess(IPrefabProcessor preProcess, GameObject rootObj, string name, bool serverside, bool clientside, bool bundling)
-	{
-		base.PreProcess(preProcess, rootObj, name, serverside, clientside, bundling);
-		if (clientside && paintableSources != null && paintableSources.Length > 1)
-		{
-			MeshPaintableSource meshPaintableSource = paintableSources[0];
-			for (int i = 1; i < paintableSources.Length; i++)
-			{
-				MeshPaintableSource obj = paintableSources[i];
-				obj.texWidth = meshPaintableSource.texWidth;
-				obj.texHeight = meshPaintableSource.texHeight;
-			}
-		}
-	}
-
-	[RPC_Server]
-	[RPC_Server.MaxDistance(5f)]
-	[RPC_Server.CallsPerSecond(5uL)]
-	public void UpdateSign(RPCMessage msg)
-	{
-		//IL_00b4: Unknown result type (might be due to invalid IL or missing references)
-		//IL_011a: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00fb: Unknown result type (might be due to invalid IL or missing references)
-		if ((Object)(object)msg.player == (Object)null || !CanUpdateSign(msg.player))
-		{
-			return;
-		}
-		int num = msg.read.Int32();
-		if (num < 0 || num >= paintableSources.Length)
-		{
-			return;
-		}
-		byte[] array = msg.read.BytesWithSize(10485760u, false);
-		if (msg.read.Unread > 0 && msg.read.Bit() && !msg.player.IsAdmin)
-		{
-			Debug.LogWarning((object)$"{msg.player} tried to upload a sign from a file but they aren't admin, ignoring");
-			return;
-		}
-		EnsureInitialized();
-		if (array == null)
-		{
-			if (textureIDs[num] != 0)
-			{
-				FileStorage.server.RemoveExact(textureIDs[num], FileStorage.Type.png, net.ID, (uint)num);
-			}
-			textureIDs[num] = 0u;
-		}
-		else
-		{
-			if (!ImageProcessing.IsValidPNG(array, 1024, 1024))
-			{
-				return;
-			}
-			if (textureIDs[num] != 0)
-			{
-				FileStorage.server.RemoveExact(textureIDs[num], FileStorage.Type.png, net.ID, (uint)num);
-			}
-			textureIDs[num] = FileStorage.server.Store(array, FileStorage.Type.png, net.ID, (uint)num);
-		}
-		LogEdit(msg.player);
-		SendNetworkUpdate();
-		Interface.CallHook("OnSignUpdated", (object)this, (object)msg.player, (object)num);
-	}
-
-	public void EnsureInitialized()
-	{
-		int num = Mathf.Max(paintableSources.Length, 1);
-		if (textureIDs == null || textureIDs.Length != num)
-		{
-			Array.Resize(ref textureIDs, num);
-		}
-	}
-
-	[Conditional("SIGN_DEBUG")]
-	private static void SignDebugLog(string str)
-	{
-		Debug.Log((object)str);
 	}
 
 	protected override bool WriteSyncVar(byte id, NetWrite writer)
@@ -26404,9 +26404,9 @@ public class SimpleBuildingBlock : StabilityEntity, ISimpleUpgradable, ISprayCal
 		return true;
 	}
 
-	[RPC_Server.IsVisible(3f)]
-	[RPC_Server]
 	[RPC_Server.CallsPerSecond(5uL)]
+	[RPC_Server]
+	[RPC_Server.IsVisible(3f)]
 	public void DoSimpleUpgrade(RPCMessage msg)
 	{
 		if (base.SecondsSinceAttacked < 30f)
@@ -28133,8 +28133,8 @@ public class SleepingBag : DecayEntity
 		obj.SendNetworkUpdate();
 	}
 
-	[RPC_Server.IsVisible(3f)]
 	[RPC_Server]
+	[RPC_Server.IsVisible(3f)]
 	public virtual void RPC_MakePublic(RPCMessage msg)
 	{
 		if (!canBePublic || !msg.player.CanInteract() || (deployerUserID != (ulong)msg.player.userID && !msg.player.CanBuild()))
@@ -28182,8 +28182,8 @@ public class SleepingBag : DecayEntity
 		SendNetworkUpdate();
 	}
 
-	[RPC_Server.IsVisible(3f)]
 	[RPC_Server]
+	[RPC_Server.IsVisible(3f)]
 	public void RPC_MakeBed(RPCMessage msg)
 	{
 		if (!canBePublic || !IsPublic() || !msg.player.CanInteract())
@@ -28499,8 +28499,8 @@ public class SleepingBagCamper : SleepingBag
 		return (RespawnState)1;
 	}
 
-	[RPC_Server]
 	[RPC_Server.MaxDistance(3f)]
+	[RPC_Server]
 	public void ServerClearBed(RPCMessage msg)
 	{
 		BasePlayer player = msg.player;
@@ -28927,8 +28927,8 @@ public class SlotMachine : BaseMountable, INotifyLOD
 		((FacepunchBehaviour)this).Invoke((Action)CheckPayout, SpinDuration);
 	}
 
-	[RPC_Server.MaxDistance(3f)]
 	[RPC_Server]
+	[RPC_Server.MaxDistance(3f)]
 	private void RPC_Deposit(RPCMessage rpc)
 	{
 		BasePlayer player = rpc.player;
@@ -29051,9 +29051,9 @@ public class SlotMachine : BaseMountable, INotifyLOD
 		}
 	}
 
-	[RPC_Server.MaxDistance(3f)]
 	[RPC_Server.CallsPerSecond(5uL)]
 	[RPC_Server]
+	[RPC_Server.MaxDistance(3f)]
 	private void Server_RequestMultiplierChange(RPCMessage msg)
 	{
 		if (!((Object)(object)msg.player != (Object)(object)GetMounted()) && !HasFlag(Flags.Reserved2))
@@ -29211,8 +29211,8 @@ public class SmallEngine : DecayEntity, IBoatBuildingPiece, IBoatPropulsion, IEn
 	[ReplicatedVar]
 	public static float MaxThrustMultiplier = 1f;
 
-	[Header("Small Engine")]
 	[SerializeField]
+	[Header("Small Engine")]
 	private float maxThrust = 1000f;
 
 	[SerializeField]
@@ -29541,8 +29541,8 @@ public class SmallEngine : DecayEntity, IBoatBuildingPiece, IBoatPropulsion, IEn
 		SetFlag(Flags.Reserved2, fuelSystem.HasFuel());
 	}
 
-	[RPC_Server]
 	[RPC_Server.CallsPerSecond(5uL)]
+	[RPC_Server]
 	[RPC_Server.IsVisible(3f)]
 	public void TurnOn(RPCMessage msg)
 	{
@@ -29573,9 +29573,9 @@ public class SmallEngine : DecayEntity, IBoatBuildingPiece, IBoatPropulsion, IEn
 		SetFlag(Flags.On, b: false);
 	}
 
-	[RPC_Server]
-	[RPC_Server.IsVisible(3f)]
 	[RPC_Server.CallsPerSecond(5uL)]
+	[RPC_Server.IsVisible(3f)]
+	[RPC_Server]
 	public void SV_ToggleReverse(RPCMessage msg)
 	{
 		if (Interface.CallHook("OnEngineReverse", (object)this, (object)msg.player) == null && PlayerBoat.IsPlayerAuthedOnChildEntity(this, msg.player, authedIfNoPrivOrLock: true) && PlayerBoat.IsChildOfInteractablePlayerBoat(this))
@@ -29913,9 +29913,9 @@ public class SmartAlarm : AppIOEntity, ISubscribable
 		}
 	}
 
-	[RPC_Server.IsVisible(3f)]
 	[RPC_Server]
 	[RPC_Server.CallsPerSecond(5uL)]
+	[RPC_Server.IsVisible(3f)]
 	private void SetNotificationTextImpl(RPCMessage rpc)
 	{
 		if (!rpc.player.CanInteract())
@@ -30107,9 +30107,9 @@ public class SmartSwitch : AppIOEntity
 		}
 	}
 
+	[RPC_Server]
 	[RPC_Server.IsVisible(3f)]
 	[RPC_Server.CallsPerSecond(3uL)]
-	[RPC_Server]
 	public void ToggleSwitch(RPCMessage msg)
 	{
 		if (PlayerCanToggle(msg.player))
@@ -30334,8 +30334,24 @@ using Rust;
 using UnityEngine;
 using UnityEngine.Assertions;
 
-public class Snowmobile : GroundVehicle, VehicleChassisVisuals<Snowmobile>.IClientWheelUser, IPrefabPreProcess, CarPhysics<Snowmobile>.ICar, TriggerHurtNotChild.IHurtTriggerUser
+public class Snowmobile : GroundVehicle, CarPhysics<Snowmobile>.ICar, TriggerHurtNotChild.IHurtTriggerUser, VehicleChassisVisuals<Snowmobile>.IClientWheelUser, IPrefabPreProcess
 {
+	private float _steer;
+
+	public CarPhysics<Snowmobile> carPhysics;
+
+	public VehicleTerrainHandler serverTerrainHandler;
+
+	private CarWheel[] wheels;
+
+	public TimeSince timeSinceLastUsed;
+
+	private const float DECAY_TICK_TIME = 60f;
+
+	public float prevTerrainModDrag;
+
+	public TimeSince timeSinceTerrainModCheck;
+
 	[Header("Snowmobile")]
 	[SerializeField]
 	private Transform centreOfMassTransform;
@@ -30447,21 +30463,29 @@ public class Snowmobile : GroundVehicle, VehicleChassisVisuals<Snowmobile>.IClie
 
 	private const float FORCE_MULTIPLIER = 10f;
 
-	private float _steer;
+	public float SteerInput
+	{
+		get
+		{
+			return _steer;
+		}
+		protected set
+		{
+			_steer = Mathf.Clamp(value, -1f, 1f);
+		}
+	}
 
-	public CarPhysics<Snowmobile> carPhysics;
-
-	public VehicleTerrainHandler serverTerrainHandler;
-
-	private CarWheel[] wheels;
-
-	public TimeSince timeSinceLastUsed;
-
-	private const float DECAY_TICK_TIME = 60f;
-
-	public float prevTerrainModDrag;
-
-	public TimeSince timeSinceTerrainModCheck;
+	public VehicleTerrainHandler.Surface OnSurface
+	{
+		get
+		{
+			if (serverTerrainHandler == null)
+			{
+				return VehicleTerrainHandler.Surface.Default;
+			}
+			return serverTerrainHandler.OnSurface;
+		}
+	}
 
 	public float ThrottleInput
 	{
@@ -30555,30 +30579,6 @@ public class Snowmobile : GroundVehicle, VehicleChassisVisuals<Snowmobile>.IClie
 				return rigidBody.mass;
 			}
 			return _mass;
-		}
-	}
-
-	public float SteerInput
-	{
-		get
-		{
-			return _steer;
-		}
-		protected set
-		{
-			_steer = Mathf.Clamp(value, -1f, 1f);
-		}
-	}
-
-	public VehicleTerrainHandler.Surface OnSurface
-	{
-		get
-		{
-			if (serverTerrainHandler == null)
-			{
-				return VehicleTerrainHandler.Surface.Default;
-			}
-			return serverTerrainHandler.OnSurface;
 		}
 	}
 
@@ -30680,106 +30680,6 @@ public class Snowmobile : GroundVehicle, VehicleChassisVisuals<Snowmobile>.IClie
 			((IDisposable)val)?.Dispose();
 		}
 		return base.OnRpcMessage(player, rpc, msg);
-	}
-
-	public override void Load(LoadInfo info)
-	{
-		//IL_0026: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0046: Unknown result type (might be due to invalid IL or missing references)
-		base.Load(info);
-		if (info.msg.snowmobile != null)
-		{
-			itemStorageInstance.uid = info.msg.snowmobile.storageID;
-			engineController.FuelSystem.SetInstanceID(info.msg.snowmobile.fuelStorageID);
-			cachedFuelFraction = info.msg.snowmobile.fuelFraction;
-		}
-	}
-
-	public float GetMaxDriveForce()
-	{
-		return (float)engineKW * 10f * GetPerformanceFraction();
-	}
-
-	public override float GetMaxForwardSpeed()
-	{
-		return GetMaxDriveForce() / Mass * 15f;
-	}
-
-	public override float GetThrottleInput()
-	{
-		return ThrottleInput;
-	}
-
-	public override float GetBrakeInput()
-	{
-		return BrakeInput;
-	}
-
-	public bool GetSteerSpeedMod(float speed)
-	{
-		return false;
-	}
-
-	public virtual float GetSteerMaxMult(float speed)
-	{
-		return 1f;
-	}
-
-	public float GetPerformanceFraction()
-	{
-		float num = Mathf.InverseLerp(0.25f, 0.5f, base.healthFraction);
-		return Mathf.Lerp(0.5f, 1f, num);
-	}
-
-	public float GetFuelFraction()
-	{
-		if (base.isServer)
-		{
-			return engineController.FuelSystem.GetFuelFraction();
-		}
-		return cachedFuelFraction;
-	}
-
-	public override bool CanBeLooted(BasePlayer player)
-	{
-		if (!base.CanBeLooted(player))
-		{
-			return false;
-		}
-		if (!PlayerIsMounted(player))
-		{
-			return !IsOn();
-		}
-		return true;
-	}
-
-	public override void OnFlagsChanged(Flags old, Flags next)
-	{
-		base.OnFlagsChanged(old, next);
-		if (base.isServer && GameInfo.HasAchievements && (old & Flags.On) != Flags.On && (next & Flags.On) == Flags.On)
-		{
-			BasePlayer driver = GetDriver();
-			if ((Object)(object)driver != (Object)null && (Object)(object)driver.FindTrigger<TriggerSnowmobileAchievement>() != (Object)null)
-			{
-				driver.GiveAchievement("DRIVE_SNOWMOBILE");
-			}
-		}
-	}
-
-	private bool CanPlayerSeeMountPoint(BasePlayer player)
-	{
-		//IL_0006: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0011: Unknown result type (might be due to invalid IL or missing references)
-		//IL_002e: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0039: Unknown result type (might be due to invalid IL or missing references)
-		//IL_003e: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0048: Unknown result type (might be due to invalid IL or missing references)
-		//IL_004d: Unknown result type (might be due to invalid IL or missing references)
-		if (!GamePhysics.CheckCapsule(player.eyes.position, mountAnchor.position, 0.25f, 2162688, (QueryTriggerInteraction)0))
-		{
-			return !GamePhysics.CheckCapsule(player.eyes.position, mountAnchor.position + Vector3.up * 0.5f, 0.25f, 2162688, (QueryTriggerInteraction)0);
-		}
-		return false;
 	}
 
 	public float GetSteerInput()
@@ -31111,6 +31011,106 @@ public class Snowmobile : GroundVehicle, VehicleChassisVisuals<Snowmobile>.IClie
 				itemContainer.PlayerOpenLoot(player);
 			}
 		}
+	}
+
+	public override void Load(LoadInfo info)
+	{
+		//IL_0026: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0046: Unknown result type (might be due to invalid IL or missing references)
+		base.Load(info);
+		if (info.msg.snowmobile != null)
+		{
+			itemStorageInstance.uid = info.msg.snowmobile.storageID;
+			engineController.FuelSystem.SetInstanceID(info.msg.snowmobile.fuelStorageID);
+			cachedFuelFraction = info.msg.snowmobile.fuelFraction;
+		}
+	}
+
+	public float GetMaxDriveForce()
+	{
+		return (float)engineKW * 10f * GetPerformanceFraction();
+	}
+
+	public override float GetMaxForwardSpeed()
+	{
+		return GetMaxDriveForce() / Mass * 15f;
+	}
+
+	public override float GetThrottleInput()
+	{
+		return ThrottleInput;
+	}
+
+	public override float GetBrakeInput()
+	{
+		return BrakeInput;
+	}
+
+	public bool GetSteerSpeedMod(float speed)
+	{
+		return false;
+	}
+
+	public virtual float GetSteerMaxMult(float speed)
+	{
+		return 1f;
+	}
+
+	public float GetPerformanceFraction()
+	{
+		float num = Mathf.InverseLerp(0.25f, 0.5f, base.healthFraction);
+		return Mathf.Lerp(0.5f, 1f, num);
+	}
+
+	public float GetFuelFraction()
+	{
+		if (base.isServer)
+		{
+			return engineController.FuelSystem.GetFuelFraction();
+		}
+		return cachedFuelFraction;
+	}
+
+	public override bool CanBeLooted(BasePlayer player)
+	{
+		if (!base.CanBeLooted(player))
+		{
+			return false;
+		}
+		if (!PlayerIsMounted(player))
+		{
+			return !IsOn();
+		}
+		return true;
+	}
+
+	public override void OnFlagsChanged(Flags old, Flags next)
+	{
+		base.OnFlagsChanged(old, next);
+		if (base.isServer && GameInfo.HasAchievements && (old & Flags.On) != Flags.On && (next & Flags.On) == Flags.On)
+		{
+			BasePlayer driver = GetDriver();
+			if ((Object)(object)driver != (Object)null && (Object)(object)driver.FindTrigger<TriggerSnowmobileAchievement>() != (Object)null)
+			{
+				driver.GiveAchievement("DRIVE_SNOWMOBILE");
+			}
+		}
+	}
+
+	private bool CanPlayerSeeMountPoint(BasePlayer player)
+	{
+		//IL_0006: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0011: Unknown result type (might be due to invalid IL or missing references)
+		//IL_002e: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0039: Unknown result type (might be due to invalid IL or missing references)
+		//IL_003e: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0048: Unknown result type (might be due to invalid IL or missing references)
+		//IL_004d: Unknown result type (might be due to invalid IL or missing references)
+		if (!GamePhysics.CheckCapsule(player.eyes.position, mountAnchor.position, 0.25f, 2162688, (QueryTriggerInteraction)0))
+		{
+			return !GamePhysics.CheckCapsule(player.eyes.position, mountAnchor.position + Vector3.up * 0.5f, 0.25f, 2162688, (QueryTriggerInteraction)0);
+		}
+		return false;
 	}
 }
 
@@ -31625,9 +31625,9 @@ public class SpinUpWeapon : BaseProjectile, ITurretNotify
 		}
 	}
 
-	[RPC_Server.CallsPerSecond(8uL)]
-	[RPC_Server.IsActiveItem]
 	[RPC_Server]
+	[RPC_Server.IsActiveItem]
+	[RPC_Server.CallsPerSecond(8uL)]
 	private void Server_SetSpinButton(RPCMessage msg)
 	{
 		bool flag = msg.read.Bit();
@@ -31846,8 +31846,8 @@ public class SpookySpeaker : IOEntity
 		UpdateInvokes();
 	}
 
-	[RPC_Server.IsVisible(3f)]
 	[RPC_Server]
+	[RPC_Server.IsVisible(3f)]
 	public void SetWantsOn(RPCMessage msg)
 	{
 		bool targetState = msg.read.Bit();
@@ -32573,9 +32573,9 @@ public class SprayCan : HeldEntity
 		ClientRPC(RpcTarget.NetworkGroup("Client_ReskinResult"), 0, (int)reason);
 	}
 
-	[RPC_Server.CallsPerSecond(2uL)]
 	[RPC_Server.IsActiveItem]
 	[RPC_Server]
+	[RPC_Server.CallsPerSecond(2uL)]
 	private void ChangeItemSkin(RPCMessage msg)
 	{
 		//IL_0013: Unknown result type (might be due to invalid IL or missing references)
@@ -33103,7 +33103,7 @@ public class SprayCan : HeldEntity
 		return false;
 	}
 
-	[RPC_Server]
+	[RPC_Server.IsActiveItem]
 	[RPC_Server.InputValidation(new Type[]
 	{
 		typeof(Vector3),
@@ -33111,7 +33111,7 @@ public class SprayCan : HeldEntity
 		typeof(Vector3),
 		typeof(int)
 	})]
-	[RPC_Server.IsActiveItem]
+	[RPC_Server]
 	private void CreateSpray(RPCMessage msg)
 	{
 		//IL_0046: Unknown result type (might be due to invalid IL or missing references)
@@ -33209,9 +33209,9 @@ public class SprayCan : HeldEntity
 		}
 	}
 
-	[RPC_Server]
-	[RPC_Server.IsActiveItem]
 	[RPC_Server.CallsPerSecond(3uL)]
+	[RPC_Server.IsActiveItem]
+	[RPC_Server]
 	private void Server_SetBlockColourId(RPCMessage msg)
 	{
 		//IL_0006: Unknown result type (might be due to invalid IL or missing references)
@@ -33862,12 +33862,12 @@ public class SprayCanSpray_Freehand : SprayCanSpray
 		}
 	}
 
-	[RPC_Server]
 	[RPC_Server.InputValidation(new Type[]
 	{
 		typeof(int),
 		typeof(SprayList)
 	})]
+	[RPC_Server]
 	private void Server_FinishEditing(RPCMessage msg)
 	{
 		//IL_00c6: Unknown result type (might be due to invalid IL or missing references)
@@ -34289,6 +34289,11 @@ public class StashContainer : StorageContainer
 		return base.OnRpcMessage(player, rpc, msg);
 	}
 
+	public bool IsHidden()
+	{
+		return HasFlag(Flags.Reserved5);
+	}
+
 	public bool PlayerInRange(BasePlayer ply)
 	{
 		//IL_0006: Unknown result type (might be due to invalid IL or missing references)
@@ -34434,11 +34439,6 @@ public class StashContainer : StorageContainer
 			LeanTween.cancel(((Component)visuals).gameObject);
 			LeanTween.moveLocalY(((Component)visuals).gameObject, num2, 1f);
 		}
-	}
-
-	public bool IsHidden()
-	{
-		return HasFlag(Flags.Reserved5);
 	}
 }
 
@@ -34590,8 +34590,6 @@ public class StaticInstrument : BaseMountable
 		return base.OnRpcMessage(player, rpc, msg);
 	}
 
-	[RPC_Server.FromMounted]
-	[RPC_Server]
 	[RPC_Server.InputValidation(new Type[]
 	{
 		typeof(int),
@@ -34599,6 +34597,8 @@ public class StaticInstrument : BaseMountable
 		typeof(int),
 		typeof(float)
 	})]
+	[RPC_Server.FromMounted]
+	[RPC_Server]
 	private void Server_PlayNote(RPCMessage msg)
 	{
 		int arg = msg.read.Int32();
