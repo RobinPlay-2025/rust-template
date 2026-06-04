@@ -682,9 +682,9 @@ using System.CodeDom.Compiler;
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
 
-[CompilerGenerated]
 [GeneratedCode("Unity.MonoScriptGenerator.MonoScriptInfoGenerator", null)]
 [EditorBrowsable(EditorBrowsableState.Never)]
+[CompilerGenerated]
 internal class UnitySourceGeneratedAssemblyMonoScriptTypes_v1
 {
 	private struct MonoScriptData
@@ -5783,6 +5783,8 @@ public interface Provider
 	float GetFarDistanceForRange(EntityNetworkRange range);
 
 	void ForEach(int layer, Action<Group> callback);
+
+	void AddGroups(int layer, ListHashSet<Group> groups, bool create);
 }
 
 
@@ -5867,6 +5869,7 @@ public class Subscriber : IPooled
 using System;
 using System.Collections.Generic;
 using Network;
+using Network.Relay;
 using Network.Visibility;
 using UnityEngine;
 
@@ -5950,12 +5953,23 @@ public class Group : IDisposable
 
 	public bool HasSubscribers()
 	{
-		List<Connection> list = subscribers;
-		if (list != null)
+		if (subscribers == null)
 		{
-			return list.Count > 0;
+			return false;
 		}
-		return false;
+		if (!RustRelay.HasActiveFakeConnection)
+		{
+			return subscribers.Count > 0;
+		}
+		if (subscribers.Count == 0)
+		{
+			return false;
+		}
+		if (!RustRelay.IsFakeConnection(subscribers[0]))
+		{
+			return true;
+		}
+		return subscribers.Count > 1;
 	}
 
 	public override string ToString()
@@ -6091,6 +6105,11 @@ public class Manager : IDisposable
 	public void ForEachGroup(int layer, Action<Group> callback)
 	{
 		provider.ForEach(layer, callback);
+	}
+
+	public void AddGroups(int layer, ListHashSet<Group> groups, bool create)
+	{
+		provider.AddGroups(layer, groups, create);
 	}
 }
 
@@ -6471,6 +6490,8 @@ public static class RustRelay
 
 	private static string _saveFileName;
 
+	private static Connection _fakeConnection;
+
 	private static HashSet<uint> _rpcWhitelist;
 
 	private static byte[] _rpcPacketBuffer;
@@ -6492,6 +6513,32 @@ public static class RustRelay
 	public static RustRelayConfig Config { get; set; }
 
 	public static Func<bool> ForceSave { get; set; }
+
+	public static Action<bool> EnabledChanged { get; set; }
+
+	public static bool HasActiveFakeConnection
+	{
+		get
+		{
+			if (_fakeConnection != null && Config.Enabled)
+			{
+				return Config.FakePlayer;
+			}
+			return false;
+		}
+	}
+
+	public static Connection ActiveFakeConnection
+	{
+		get
+		{
+			if (!HasActiveFakeConnection)
+			{
+				return null;
+			}
+			return _fakeConnection;
+		}
+	}
 
 	static RustRelay()
 	{
@@ -6566,10 +6613,6 @@ public static class RustRelay
 
 	public static void EnqueuePacket(NetWrite packet)
 	{
-		if (Interlocked.Exchange(ref _sendThreadStarted, 1) == 0)
-		{
-			_sendThread.Start();
-		}
 		Message.Type type = (Message.Type)(packet.PeekPacketID() - 140);
 		bool shouldEncrypt = false;
 		switch (type)
@@ -6603,19 +6646,173 @@ public static class RustRelay
 		case Message.Type.EntityFlags:
 			break;
 		}
-		if (Config.EncryptPackets)
+		if (ShouldRelayPacket(packet))
 		{
-			shouldEncrypt = true;
+			if (Interlocked.Exchange(ref _sendThreadStarted, 1) == 0)
+			{
+				_sendThread.Start();
+			}
+			if (Config.EncryptPackets)
+			{
+				shouldEncrypt = true;
+			}
+			if (packet.serverTicks != _lastMarkerTicks)
+			{
+				_lastMarkerTicks = packet.serverTicks;
+				EnqueueMarker(packet.serverTicks);
+			}
+			packet.AddReference();
+			_sendQueue.Enqueue(RelayQueueItem.FromNetWrite(packet, RelayWipeId, packet.serverTicks, shouldEncrypt));
+			Interlocked.Increment(ref SendQueueCount);
+			_sendThreadReset.Set();
 		}
-		if (packet.serverTicks != _lastMarkerTicks)
+	}
+
+	public static void RegisterFakeConnection(Connection connection)
+	{
+		Debug.Assert(connection != null, "RustRelay fake connection cannot be null");
+		Debug.Assert(_fakeConnection == null || _fakeConnection == connection, "RustRelay fake connection registered twice");
+		_fakeConnection = connection;
+	}
+
+	public static void ClearFakeConnection(Connection connection)
+	{
+		Debug.Assert(connection != null, "RustRelay fake connection cannot be null");
+		Debug.Assert(_fakeConnection == connection, "RustRelay fake connection clear mismatch");
+		_fakeConnection = null;
+	}
+
+	public static bool IsFakeConnection(Connection connection)
+	{
+		if (connection != null)
 		{
-			_lastMarkerTicks = packet.serverTicks;
-			EnqueueMarker(packet.serverTicks);
+			return _fakeConnection == connection;
 		}
-		packet.AddReference();
-		_sendQueue.Enqueue(RelayQueueItem.FromNetWrite(packet, RelayWipeId, packet.serverTicks, shouldEncrypt));
-		Interlocked.Increment(ref SendQueueCount);
-		_sendThreadReset.Set();
+		return false;
+	}
+
+	public static string GetStatusReport()
+	{
+		//IL_032c: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0331: Unknown result type (might be due to invalid IL or missing references)
+		StringBuilder stringBuilder = new StringBuilder(2048);
+		WebSocket socket = _socket;
+		Connection fakeConnection = _fakeConnection;
+		string text = Config.AuthToken ?? string.Empty;
+		Thread sendThread = _sendThread;
+		stringBuilder.AppendLine("Rust Relay Status");
+		stringBuilder.AppendLine("=================");
+		stringBuilder.AppendLine();
+		stringBuilder.AppendLine("Config");
+		stringBuilder.AppendLine($"  Enabled: {Config.Enabled}");
+		stringBuilder.AppendLine($"  FakePlayer: {Config.FakePlayer}");
+		stringBuilder.AppendLine($"  EncryptPackets: {Config.EncryptPackets}");
+		stringBuilder.AppendLine($"  RPCFilterMode: {Config.RPCFilterMode}");
+		stringBuilder.AppendLine($"  RPCWhitelist configured/resolved: {Config.RPCWhitelist?.Count ?? 0}/{_rpcWhitelist.Count}");
+		stringBuilder.AppendLine($"  EnableVoiceData: {Config.EnableVoiceData}");
+		stringBuilder.AppendLine($"  EnableConsoleData: {Config.EnableConsoleData}");
+		stringBuilder.AppendLine("  ServerUrl: " + FormatStatusValue(Config.ServerUrl));
+		stringBuilder.AppendLine($"  AuthToken configured: {!string.IsNullOrWhiteSpace(text)}");
+		stringBuilder.AppendLine();
+		stringBuilder.AppendLine("Runtime");
+		stringBuilder.AppendLine("  RelayWipeId: " + FormatStatusValue(RelayWipeId));
+		stringBuilder.AppendLine($"  HasActiveFakeConnection: {HasActiveFakeConnection}");
+		stringBuilder.AppendLine($"  ForceSave callback set: {ForceSave != null}");
+		stringBuilder.AppendLine($"  EnabledChanged callback set: {EnabledChanged != null}");
+		stringBuilder.AppendLine($"  Send thread started flag: {Volatile.Read(in _sendThreadStarted)}");
+		stringBuilder.AppendLine($"  Send thread alive: {sendThread?.IsAlive ?? false}");
+		stringBuilder.AppendLine("  Send thread state: " + (sendThread?.ThreadState.ToString() ?? "null"));
+		stringBuilder.AppendLine($"  SendQueueCount counter: {Volatile.Read(in SendQueueCount)}");
+		stringBuilder.AppendLine($"  Send queue actual count: {_sendQueue.Count}");
+		stringBuilder.AppendLine($"  Last marker ticks: {_lastMarkerTicks}");
+		stringBuilder.AppendLine();
+		stringBuilder.AppendLine("WebSocket");
+		stringBuilder.AppendLine($"  Socket exists: {socket != null}");
+		object obj;
+		if (socket == null)
+		{
+			obj = null;
+		}
+		else
+		{
+			WebSocketState readyState = socket.ReadyState;
+			obj = ((object)(WebSocketState)(ref readyState)/*cast due to .constrained prefix*/).ToString();
+		}
+		if (obj == null)
+		{
+			obj = "null";
+		}
+		stringBuilder.AppendLine("  ReadyState: " + (string?)obj);
+		stringBuilder.AppendLine("  Socket wipe id: " + FormatStatusValue(_socketWipeId));
+		stringBuilder.AppendLine($"  Socket wipe id matches current: {_socketWipeId == RelayWipeId}");
+		stringBuilder.AppendLine($"  Socket token matches current: {_socketToken == text}");
+		stringBuilder.AppendLine();
+		stringBuilder.AppendLine("URLs");
+		stringBuilder.AppendLine("  StringPoolUrl: " + FormatStatusValue(StringPoolUrl));
+		stringBuilder.AppendLine("  SnapshotUrl: " + FormatStatusValue(SnapshotUrl));
+		stringBuilder.AppendLine("  MapSnapshotUrl: " + FormatStatusValue(MapSnapshotUrl));
+		stringBuilder.AppendLine("  ManifestUrl: " + FormatStatusValue(ManifestUrl));
+		stringBuilder.AppendLine("  KeyExchangeUrl: " + FormatStatusValue(KeyExchangeUrl));
+		stringBuilder.AppendLine();
+		stringBuilder.AppendLine("Key exchange");
+		stringBuilder.AppendLine($"  Local private key ready: {_localPrivateKey != null}");
+		stringBuilder.AppendLine($"  Local public key ready: {_localPublicKey != null}");
+		stringBuilder.AppendLine($"  Remote public key ready: {_remotePublicKey != null}");
+		stringBuilder.AppendLine($"  AES key parameter ready: {_aesKeyParameter != null}");
+		stringBuilder.AppendLine("  Key exchange wipe id: " + FormatStatusValue(_keyExchangeWipeId));
+		stringBuilder.AppendLine($"  Key exchange wipe id matches current: {_keyExchangeWipeId == RelayWipeId}");
+		stringBuilder.AppendLine($"  Key exchange token matches current: {_keyExchangeToken == text}");
+		stringBuilder.AppendLine();
+		stringBuilder.AppendLine("Cached uploads");
+		stringBuilder.AppendLine($"  Manifest entries: {_manifestPayload?.Count ?? 0}");
+		stringBuilder.AppendLine($"  String pool entries: {_stringPool?.Count ?? 0}");
+		stringBuilder.AppendLine($"  String pool reverse entries: {_stringPoolByString?.Count ?? 0}");
+		stringBuilder.AppendLine("  Map folder/name: " + FormatStatusValue(_mapFolderName) + " / " + FormatStatusValue(_mapFileName));
+		stringBuilder.AppendLine("  Save root/name: " + FormatStatusValue(_rootFolder) + " / " + FormatStatusValue(_saveFileName));
+		stringBuilder.AppendLine();
+		stringBuilder.AppendLine("Registered fake connection");
+		stringBuilder.AppendLine($"  Exists: {fakeConnection != null}");
+		if (fakeConnection != null)
+		{
+			stringBuilder.AppendLine($"  Guid: {fakeConnection.guid}");
+			stringBuilder.AppendLine($"  UserId: {fakeConnection.userid}");
+			stringBuilder.AppendLine($"  OwnerId: {fakeConnection.ownerid}");
+			stringBuilder.AppendLine($"  Active: {fakeConnection.active}");
+			stringBuilder.AppendLine($"  Connected: {fakeConnection.connected}");
+			stringBuilder.AppendLine($"  State: {fakeConnection.state}");
+			stringBuilder.AppendLine($"  GlobalNetworking: {fakeConnection.globalNetworking}");
+			stringBuilder.AppendLine($"  Player: {fakeConnection.player}");
+		}
+		stringBuilder.AppendLine();
+		return stringBuilder.ToString();
+	}
+
+	private static string FormatStatusValue(string value)
+	{
+		if (!string.IsNullOrWhiteSpace(value))
+		{
+			return value;
+		}
+		return "<unset>";
+	}
+
+	public static bool ShouldRelayPacket(NetWrite packet)
+	{
+		if (!Config.FakePlayer)
+		{
+			return true;
+		}
+		Connection fakeConnection = _fakeConnection;
+		if (fakeConnection == null)
+		{
+			return false;
+		}
+		List<Connection> connections = packet.connections;
+		if (connections == null || connections.Count == 0)
+		{
+			return false;
+		}
+		return connections[0] == fakeConnection;
 	}
 
 	private static bool ShouldAllowRpc(NetWrite packet)
@@ -6694,6 +6891,7 @@ public static class RustRelay
 		Debug.LogError((object)("[Rust Relay] DISABLED! Reason: " + reason));
 		ResetKeyExchangeState();
 		Config.Enabled = false;
+		EnabledChanged?.Invoke(obj: false);
 	}
 
 	public static void SetCachedStringPool(Dictionary<uint, string> stringPool)
@@ -7178,6 +7376,7 @@ public static class RustRelay
 				Debug.Log((object)"[Rust Relay] Server key exchange completed");
 			}
 			Config.Enabled = true;
+			EnabledChanged?.Invoke(obj: true);
 			await Task.WhenAll(UploadManifestToRelayAsync(_manifestPayload), UploadStringPoolToRelayAsync(_stringPool), UploadMapSnapshotAsync(_mapFolderName, _mapFileName), UploadSnapshotAsync(_rootFolder, _saveFileName));
 			Debug.Log((object)"[Rust Relay] Initial server state uploaded");
 			BuildRPCWhitelist();
@@ -7464,6 +7663,8 @@ public class RustRelayConfig
 	public string AuthToken { get; set; }
 
 	public bool EncryptPackets { get; set; }
+
+	public bool FakePlayer { get; set; }
 
 	public RPCFilterMode RPCFilterMode { get; set; }
 

@@ -3689,6 +3689,17 @@ public static class Mathx
 		//IL_0003: Unknown result type (might be due to invalid IL or missing references)
 		return new Vector3(value, value, value);
 	}
+
+	public static int FlattenArrayCoord(int x, int y, int width)
+	{
+		return x + y * width;
+	}
+
+	public static Vector2Int ExpandArrayCoord(int index, int width)
+	{
+		//IL_0006: Unknown result type (might be due to invalid IL or missing references)
+		return new Vector2Int(index % width, index / width);
+	}
 }
 
 
@@ -8156,6 +8167,43 @@ public static class StringEx
 		}
 		return false;
 	}
+
+	public static bool EqualsAfterLastSeparator(string left, string right, char separator, StringComparison comparison = StringComparison.Ordinal)
+	{
+		if (left == null || right == null)
+		{
+			throw new ArgumentNullException();
+		}
+		ReadOnlySpan<char> readOnlySpan = left.AsSpan();
+		ReadOnlySpan<char> readOnlySpan2 = right.AsSpan();
+		int num = readOnlySpan.LastIndexOf(separator);
+		int num2 = readOnlySpan2.LastIndexOf(separator);
+		ReadOnlySpan<char> span;
+		ReadOnlySpan<char> readOnlySpan3;
+		if (num < 0)
+		{
+			span = readOnlySpan;
+		}
+		else
+		{
+			readOnlySpan3 = readOnlySpan;
+			int num3 = num + 1;
+			span = readOnlySpan3.Slice(num3, readOnlySpan3.Length - num3);
+		}
+		ReadOnlySpan<char> readOnlySpan4;
+		if (num2 < 0)
+		{
+			readOnlySpan4 = readOnlySpan2;
+		}
+		else
+		{
+			readOnlySpan3 = readOnlySpan2;
+			int num3 = num2 + 1;
+			readOnlySpan4 = readOnlySpan3.Slice(num3, readOnlySpan3.Length - num3);
+		}
+		ReadOnlySpan<char> other = readOnlySpan4;
+		return MemoryExtensions.Equals(span, other, comparison);
+	}
 }
 
 
@@ -9335,8 +9383,8 @@ public static class Global
 
 	public static void Init()
 	{
-		LaunchCountThisVersion = PlayerPrefs.GetInt($"launch{2625}", 0) + 1;
-		PlayerPrefs.SetInt($"launch{2625}", LaunchCountThisVersion);
+		LaunchCountThisVersion = PlayerPrefs.GetInt($"launch{2627}", 0) + 1;
+		PlayerPrefs.SetInt($"launch{2627}", LaunchCountThisVersion);
 	}
 }
 
@@ -9537,6 +9585,13 @@ public class PropRenderer : MonoBehaviour, IClientComponent
 
 	public string PathOverride = "";
 
+	[Header("Bind Pose")]
+	public bool UseLegacyBindPose;
+
+	private const string LegacyBindPosePrefabPath = "Assets/Content/Player/IconRenderPose.prefab";
+
+	private const string NewBindPosePrefabPath = "Assets/Content/Player/Animations/RustPlayer.fbx";
+
 	public SkinViewerSettings skinViewerSettings;
 
 	private static void GetTransformsRootToChild(List<Transform> transforms, Transform start)
@@ -9573,6 +9628,51 @@ public class PropRenderer : MonoBehaviour, IClientComponent
 			val = val3;
 		}
 		return val;
+	}
+
+	public void SyncLegacyBindPoseState()
+	{
+		Type type = Type.GetType("Wearable,Assembly-CSharp");
+		if (!(type == null) && !((Object)(object)((Component)this).GetComponentInChildren(type, true) == (Object)null))
+		{
+			if (UseLegacyBindPose)
+			{
+				ApplyPoseFromAsset("Assets/Content/Player/IconRenderPose.prefab");
+			}
+			else
+			{
+				ApplyPoseFromAsset("Assets/Content/Player/Animations/RustPlayer.fbx");
+			}
+		}
+	}
+
+	private void ApplyPoseFromAsset(string assetPath)
+	{
+		//IL_0098: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00a6: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00b4: Unknown result type (might be due to invalid IL or missing references)
+		GameObject val = Global.LoadPrefab?.Invoke(assetPath);
+		if ((Object)(object)val == (Object)null)
+		{
+			Debug.LogWarning((object)("PropRenderer: Could not load bind pose asset at " + assetPath), (Object)(object)this);
+			return;
+		}
+		Dictionary<string, Transform> dictionary = new Dictionary<string, Transform>();
+		Transform[] componentsInChildren = ((Component)this).gameObject.GetComponentsInChildren<Transform>(true);
+		foreach (Transform val2 in componentsInChildren)
+		{
+			dictionary[((Object)val2).name] = val2;
+		}
+		componentsInChildren = val.GetComponentsInChildren<Transform>(true);
+		foreach (Transform val3 in componentsInChildren)
+		{
+			if (!((Object)(object)val3 == (Object)(object)val.transform) && dictionary.TryGetValue(((Object)val3).name, out var value))
+			{
+				value.localPosition = val3.localPosition;
+				value.localRotation = val3.localRotation;
+				value.localScale = val3.localScale;
+			}
+		}
 	}
 
 	private static GameObject[] MatchGameObjectsBetweenObjects(GameObject[] sourceObjects, GameObject target)
@@ -9630,6 +9730,7 @@ public class PropRenderer : MonoBehaviour, IClientComponent
 		target.PostRotation = PostRotation;
 		target.Rotation = Rotation;
 		target.UpDirection = UpDirection;
+		target.UseLegacyBindPose = UseLegacyBindPose;
 		if (HideDuringRender != null && HideDuringRender.Length != 0)
 		{
 			GameObject[] source = MatchGameObjectsBetweenObjects(HideDuringRender, ((Component)target).gameObject);
@@ -9728,6 +9829,7 @@ public class PropRenderer : MonoBehaviour, IClientComponent
 	public void PreRender()
 	{
 		PreRender(((Component)this).gameObject, HideLowLods, HideUnskinnable, HideDuringRender);
+		SyncLegacyBindPoseState();
 	}
 
 	public static void PreRender(GameObject gameObject, bool hideLowLODs, bool hideUnskinnable, GameObject[] hideDuringRender = null)
@@ -9983,19 +10085,19 @@ public class PropRendererDebug : MonoBehaviour
 
 public static class Protocol
 {
-	public const int network = 2625;
+	public const int network = 2627;
 
-	public const int save = 284;
+	public const int save = 285;
 
 	public const int report = 1;
 
-	public const int persistance = 13;
+	public const int persistance = 14;
 
 	public const int analytics_db = 1;
 
 	public const int ping = 1;
 
-	public static string printable => 2625 + "." + 284 + "." + 1;
+	public static string printable => 2627 + "." + 285 + "." + 1;
 }
 
 
