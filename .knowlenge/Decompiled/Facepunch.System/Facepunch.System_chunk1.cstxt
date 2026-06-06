@@ -5639,7 +5639,8 @@ public readonly struct StringView
 	{
 		if (source == null)
 		{
-			throw new ArgumentNullException("source");
+			this = default(StringView);
+			return;
 		}
 		_source = source;
 		_start = 0;
@@ -5650,7 +5651,12 @@ public readonly struct StringView
 	{
 		if (source == null)
 		{
-			throw new ArgumentNullException("source");
+			if (start != 0)
+			{
+				throw new ArgumentOutOfRangeException("Start can only be 0 for a null string input!");
+			}
+			this = default(StringView);
+			return;
 		}
 		_source = source;
 		_start = start;
@@ -5659,19 +5665,25 @@ public readonly struct StringView
 		{
 			throw new ArgumentOutOfRangeException($"Invalid view arguments: start({_start}) is after end({_end})!");
 		}
-		if (_start < 0)
+		if (_start >= 0)
 		{
-			throw new ArgumentOutOfRangeException($"Start({_start}) was past the start of string!");
+			return;
 		}
+		throw new ArgumentOutOfRangeException($"Start({_start}) was past the start of string!");
 	}
 
 	public StringView(string source, int start, int length)
 	{
 		if (source == null)
 		{
-			throw new ArgumentNullException("source");
+			if (start != 0 || length != 0)
+			{
+				throw new ArgumentOutOfRangeException("Start and length can only be 0 for a null string input!");
+			}
+			this = default(StringView);
+			return;
 		}
-		_source = source;
+		_source = ((source != null) ? source : string.Empty);
 		_start = start;
 		_end = _start + length;
 		if (_start > _end)
@@ -5682,10 +5694,11 @@ public readonly struct StringView
 		{
 			throw new ArgumentOutOfRangeException($"End({_end}) was past the length of string!");
 		}
-		if (_start < 0)
+		if (_start >= 0)
 		{
-			throw new ArgumentOutOfRangeException($"Start({_start}) was past the start of string!");
+			return;
 		}
+		throw new ArgumentOutOfRangeException($"Start({_start}) was past the start of string!");
 	}
 
 	public static implicit operator StringView(string source)
@@ -5710,7 +5723,7 @@ public readonly struct StringView
 
 	public override string ToString()
 	{
-		return _source.Substring(_start, Length);
+		return _source?.Substring(_start, Length) ?? string.Empty;
 	}
 
 	public override int GetHashCode()
@@ -5734,49 +5747,37 @@ public readonly struct StringView
 
 	public override bool Equals(object obj)
 	{
-		return Equals(obj, StringComparison.CurrentCulture);
-	}
-
-	public bool Equals(object obj, StringComparison comparisonOptions)
-	{
 		if (obj is StringView otherSv)
 		{
 			return Equals(otherSv);
 		}
-		if (obj is string text)
+		if (obj is string other)
 		{
-			if (text.Length == Length)
-			{
-				return string.Compare(_source, _start, text, 0, Length, comparisonOptions) == 0;
-			}
-			return false;
+			return Equals(other);
 		}
 		throw new ArgumentException($"Unsupported type for equality check! Other object was {obj.GetType()}");
 	}
 
 	public bool Equals(string other)
 	{
-		if (other == null || other.Length != Length)
+		return Equals((StringView)other);
+	}
+
+	public bool Equals(string other, StringComparison comparisonOptions)
+	{
+		if (other == null)
+		{
+			return Length == 0;
+		}
+		if (Length != other.Length)
 		{
 			return false;
 		}
-		for (int i = 0; i < Length; i++)
+		if (Length == 0)
 		{
-			if (_source[_start + i] != other[i])
-			{
-				return false;
-			}
+			return true;
 		}
-		return true;
-	}
-
-	public bool Equals(char other)
-	{
-		if (Length == 1)
-		{
-			return _source[_start] == other;
-		}
-		return false;
+		return string.Compare(_source, _start, other, 0, Length, comparisonOptions) == 0;
 	}
 
 	public bool Equals(StringView otherSv)
@@ -5793,6 +5794,19 @@ public readonly struct StringView
 			}
 		}
 		return true;
+	}
+
+	public bool Equals(StringView otherSv, StringComparison comparisonOptions)
+	{
+		if (Length != otherSv.Length)
+		{
+			return false;
+		}
+		if (Length == 0)
+		{
+			return true;
+		}
+		return string.Compare(_source, _start, otherSv._source, otherSv._start, Length, comparisonOptions) == 0;
 	}
 
 	public static bool operator ==(StringView left, StringView right)
@@ -5831,14 +5845,16 @@ public readonly struct StringView
 		{
 			return false;
 		}
-		for (int i = 0; i < other.Length; i++)
+		return Substring(0, other.Length).Equals(other);
+	}
+
+	public bool StartsWith(StringView other, StringComparison comp)
+	{
+		if (other.Length > Length)
 		{
-			if (_source[_start + i] != other._source[other._start + i])
-			{
-				return false;
-			}
+			return false;
 		}
-		return true;
+		return Substring(0, other.Length).Equals(other, comp);
 	}
 
 	public bool EndsWith(StringView other)
@@ -5847,14 +5863,16 @@ public readonly struct StringView
 		{
 			return false;
 		}
-		for (int i = 0; i < other.Length; i++)
+		return Substring(_end - other.Length).Equals(other);
+	}
+
+	public bool EndsWith(StringView other, StringComparison comp)
+	{
+		if (other.Length > Length)
 		{
-			if (_source[_end - other.Length + i] != other._source[other._start + i])
-			{
-				return false;
-			}
+			return false;
 		}
-		return true;
+		return Substring(_end - other.Length).Equals(other, comp);
 	}
 
 	public StringView Substring(int offset)
@@ -5891,9 +5909,13 @@ public readonly struct StringView
 
 	public int IndexOf(StringView other)
 	{
-		if (other.Length > Length || other.Length == 0)
+		if (other.Length > Length)
 		{
 			return -1;
+		}
+		if (other.Length == 0)
+		{
+			return 0;
 		}
 		int num = 0;
 		for (int i = 0; i < Length; i++)
