@@ -326,11 +326,11 @@ using Unity.Mathematics;
 [Serializable]
 internal struct SkinConstraint
 {
-	public float3 WorldSkinPosition;
+	public float3 SimSkinPosition;
 
-	public float3 WorldSkinNormal;
+	public float3 SimSkinNormal;
 
-	public float3 WorldEscapeNormal;
+	public float3 SimEscapeNormal;
 
 	public float3 LocalSkinPosition;
 
@@ -384,15 +384,13 @@ public class BurstCloth : MonoBehaviour
 	[Header("Structure")]
 	public Transform[] RootBones;
 
-	[Tooltip("You only need to set this value if this is a ViewModel prefab")]
+	[Tooltip("LEGACY no longer used - scale anywhere above the bones is now handled automatically")]
 	public Transform ViewModelRootTransform;
 
 	public bool SiblingConstraints = true;
 
 	[Range(0f, 1f)]
 	public float LengthModifier = 1f;
-
-	public bool HackFixWorldScaleWithLengthModifier;
 
 	[Header("Simulation")]
 	public BurstClothMaterial Material;
@@ -448,25 +446,19 @@ public class BurstCloth : MonoBehaviour
 	[HideInInspector]
 	internal List<RotationConstraint> _rotationConstraintsDataOriginal;
 
+	private RigidTransform _localToWorld = RigidTransform.identity;
+
+	private float4x4 _worldToLocal = float4x4.identity;
+
+	private RigidTransform _lastTickPose = RigidTransform.identity;
+
 	private Vector3 _origin;
 
 	private Quaternion _rotation;
 
-	private Quaternion _prevRotation;
-
-	private Quaternion _rotationDelta;
-
-	private Vector3 _up;
-
-	private Vector3 _simulationSpaceDelta;
+	protected Vector3 _up;
 
 	private Transform _prevSimulationSpace;
-
-	private Vector3? _prevSimulationOrigin;
-
-	private Vector3 _originDelta;
-
-	private Vector3? _prevOrigin;
 
 	private bool _originDirty;
 
@@ -515,93 +507,105 @@ public class BurstCloth : MonoBehaviour
 
 	protected void Initialize()
 	{
-		//IL_01d5: Unknown result type (might be due to invalid IL or missing references)
-		//IL_01da: Unknown result type (might be due to invalid IL or missing references)
-		//IL_020e: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0213: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0216: Unknown result type (might be due to invalid IL or missing references)
+		//IL_01db: Unknown result type (might be due to invalid IL or missing references)
+		//IL_01e0: Unknown result type (might be due to invalid IL or missing references)
+		//IL_01e5: Unknown result type (might be due to invalid IL or missing references)
+		//IL_01ed: Unknown result type (might be due to invalid IL or missing references)
+		//IL_01f2: Unknown result type (might be due to invalid IL or missing references)
+		//IL_01f7: Unknown result type (might be due to invalid IL or missing references)
+		//IL_01fc: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0205: Unknown result type (might be due to invalid IL or missing references)
+		//IL_020a: Unknown result type (might be due to invalid IL or missing references)
+		//IL_020d: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0212: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0214: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0219: Unknown result type (might be due to invalid IL or missing references)
 		//IL_021b: Unknown result type (might be due to invalid IL or missing references)
 		//IL_021d: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0222: Unknown result type (might be due to invalid IL or missing references)
+		//IL_021f: Unknown result type (might be due to invalid IL or missing references)
 		//IL_0224: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0226: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0229: Unknown result type (might be due to invalid IL or missing references)
 		//IL_022b: Unknown result type (might be due to invalid IL or missing references)
-		//IL_01f0: Unknown result type (might be due to invalid IL or missing references)
-		//IL_01f5: Unknown result type (might be due to invalid IL or missing references)
-		//IL_01fd: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0714: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0269: Unknown result type (might be due to invalid IL or missing references)
-		//IL_026e: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0270: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0272: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0274: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0279: Unknown result type (might be due to invalid IL or missing references)
-		//IL_027b: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0280: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0282: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0287: Unknown result type (might be due to invalid IL or missing references)
-		//IL_02ba: Unknown result type (might be due to invalid IL or missing references)
-		//IL_02bf: Unknown result type (might be due to invalid IL or missing references)
-		//IL_02f9: Unknown result type (might be due to invalid IL or missing references)
-		//IL_02fe: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0332: Unknown result type (might be due to invalid IL or missing references)
-		//IL_033b: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0340: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0345: Unknown result type (might be due to invalid IL or missing references)
-		//IL_04e3: Unknown result type (might be due to invalid IL or missing references)
-		//IL_04e5: Unknown result type (might be due to invalid IL or missing references)
-		//IL_04ea: Unknown result type (might be due to invalid IL or missing references)
-		//IL_04ee: Unknown result type (might be due to invalid IL or missing references)
-		//IL_04f3: Unknown result type (might be due to invalid IL or missing references)
-		//IL_04f8: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0511: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0513: Unknown result type (might be due to invalid IL or missing references)
+		//IL_022d: Unknown result type (might be due to invalid IL or missing references)
+		//IL_022f: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0234: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0239: Unknown result type (might be due to invalid IL or missing references)
+		//IL_023b: Unknown result type (might be due to invalid IL or missing references)
+		//IL_023d: Unknown result type (might be due to invalid IL or missing references)
+		//IL_023f: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0244: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0249: Unknown result type (might be due to invalid IL or missing references)
+		//IL_024e: Unknown result type (might be due to invalid IL or missing references)
+		//IL_028a: Unknown result type (might be due to invalid IL or missing references)
+		//IL_028e: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0293: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0298: Unknown result type (might be due to invalid IL or missing references)
+		//IL_029d: Unknown result type (might be due to invalid IL or missing references)
+		//IL_029f: Unknown result type (might be due to invalid IL or missing references)
+		//IL_02a1: Unknown result type (might be due to invalid IL or missing references)
+		//IL_02a3: Unknown result type (might be due to invalid IL or missing references)
+		//IL_02a8: Unknown result type (might be due to invalid IL or missing references)
+		//IL_02aa: Unknown result type (might be due to invalid IL or missing references)
+		//IL_02af: Unknown result type (might be due to invalid IL or missing references)
+		//IL_02b1: Unknown result type (might be due to invalid IL or missing references)
+		//IL_02b6: Unknown result type (might be due to invalid IL or missing references)
+		//IL_02ed: Unknown result type (might be due to invalid IL or missing references)
+		//IL_02f2: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0330: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0335: Unknown result type (might be due to invalid IL or missing references)
+		//IL_036b: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0370: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0375: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0377: Unknown result type (might be due to invalid IL or missing references)
+		//IL_050c: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0510: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0516: Unknown result type (might be due to invalid IL or missing references)
 		//IL_0518: Unknown result type (might be due to invalid IL or missing references)
 		//IL_051d: Unknown result type (might be due to invalid IL or missing references)
-		//IL_052d: Unknown result type (might be due to invalid IL or missing references)
-		//IL_052f: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0534: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0539: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0550: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0552: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0557: Unknown result type (might be due to invalid IL or missing references)
-		//IL_055c: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0565: Unknown result type (might be due to invalid IL or missing references)
-		//IL_056a: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0536: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0538: Unknown result type (might be due to invalid IL or missing references)
+		//IL_053d: Unknown result type (might be due to invalid IL or missing references)
+		//IL_054d: Unknown result type (might be due to invalid IL or missing references)
+		//IL_054f: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0554: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0564: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0566: Unknown result type (might be due to invalid IL or missing references)
 		//IL_056f: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0576: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0578: Unknown result type (might be due to invalid IL or missing references)
-		//IL_057a: Unknown result type (might be due to invalid IL or missing references)
-		//IL_057c: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0581: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0574: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0579: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0580: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0582: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0584: Unknown result type (might be due to invalid IL or missing references)
 		//IL_0586: Unknown result type (might be due to invalid IL or missing references)
-		//IL_058a: Unknown result type (might be due to invalid IL or missing references)
-		//IL_058f: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0594: Unknown result type (might be due to invalid IL or missing references)
-		//IL_05f0: Unknown result type (might be due to invalid IL or missing references)
-		//IL_05f5: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0390: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0397: Unknown result type (might be due to invalid IL or missing references)
-		//IL_039c: Unknown result type (might be due to invalid IL or missing references)
-		//IL_03a1: Unknown result type (might be due to invalid IL or missing references)
-		//IL_03a8: Unknown result type (might be due to invalid IL or missing references)
-		//IL_03ad: Unknown result type (might be due to invalid IL or missing references)
-		//IL_03b2: Unknown result type (might be due to invalid IL or missing references)
-		//IL_03b9: Unknown result type (might be due to invalid IL or missing references)
-		//IL_03be: Unknown result type (might be due to invalid IL or missing references)
-		//IL_03c3: Unknown result type (might be due to invalid IL or missing references)
-		//IL_060a: Unknown result type (might be due to invalid IL or missing references)
-		//IL_060f: Unknown result type (might be due to invalid IL or missing references)
-		//IL_05fe: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0603: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0422: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0427: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0430: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0435: Unknown result type (might be due to invalid IL or missing references)
-		//IL_043a: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0443: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0448: Unknown result type (might be due to invalid IL or missing references)
-		//IL_044d: Unknown result type (might be due to invalid IL or missing references)
+		//IL_058b: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0592: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0598: Unknown result type (might be due to invalid IL or missing references)
+		//IL_059a: Unknown result type (might be due to invalid IL or missing references)
+		//IL_059f: Unknown result type (might be due to invalid IL or missing references)
+		//IL_05fb: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0600: Unknown result type (might be due to invalid IL or missing references)
+		//IL_03c0: Unknown result type (might be due to invalid IL or missing references)
+		//IL_03c7: Unknown result type (might be due to invalid IL or missing references)
+		//IL_03cc: Unknown result type (might be due to invalid IL or missing references)
+		//IL_03d1: Unknown result type (might be due to invalid IL or missing references)
+		//IL_03d8: Unknown result type (might be due to invalid IL or missing references)
+		//IL_03dd: Unknown result type (might be due to invalid IL or missing references)
+		//IL_03e2: Unknown result type (might be due to invalid IL or missing references)
+		//IL_03e9: Unknown result type (might be due to invalid IL or missing references)
+		//IL_03ee: Unknown result type (might be due to invalid IL or missing references)
+		//IL_03f3: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0615: Unknown result type (might be due to invalid IL or missing references)
+		//IL_061a: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0609: Unknown result type (might be due to invalid IL or missing references)
+		//IL_060e: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0452: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0457: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0460: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0465: Unknown result type (might be due to invalid IL or missing references)
+		//IL_046a: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0473: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0478: Unknown result type (might be due to invalid IL or missing references)
+		//IL_047d: Unknown result type (might be due to invalid IL or missing references)
 		if ((Object)(object)Material == (Object)null)
 		{
 			Material = BurstClothMaterial.DefaultMaterial;
@@ -674,17 +678,15 @@ public class BurstCloth : MonoBehaviour
 		_rotationConstraintsDataOriginal = new List<RotationConstraint>();
 		_skinConstraintTargetsIds = new List<string>();
 		_skinConstraintsOriginal = new List<SkinConstraint>();
-		Vector3 localScale = Vector3.one;
-		if ((Object)(object)ViewModelRootTransform != (Object)null)
-		{
-			localScale = ViewModelRootTransform.localScale;
-			ViewModelRootTransform.localScale = Vector3.one;
-		}
+		float4x4 worldToLocal = float4x4.op_Implicit(((Component)this).transform.worldToLocalMatrix);
+		quaternion worldToLocalRotation = quaternion.op_Implicit(Quaternion.Inverse(((Component)this).transform.rotation));
 		(Vector3 Origin, Quaternion Rotation, Vector3 Up) originTransform = GetOriginTransform();
 		Vector3 item2 = originTransform.Origin;
 		Quaternion item3 = originTransform.Rotation;
 		Vector3 item4 = originTransform.Up;
-		Quaternion val3 = Quaternion.Inverse(item3);
+		float3 val3 = math.transform(worldToLocal, float3.op_Implicit(item2));
+		float3 val4 = math.rotate(worldToLocalRotation, float3.op_Implicit(item4));
+		quaternion val5 = math.conjugate(math.mul(worldToLocalRotation, quaternion.op_Implicit(item3)));
 		int num = 0;
 		int num2 = 0;
 		BurstClothConstraint burstClothConstraint = default(BurstClothConstraint);
@@ -694,24 +696,24 @@ public class BurstCloth : MonoBehaviour
 			for (int l = 0; l < nodes.Count; l++)
 			{
 				Transform transform = nodes[l].Transform;
-				Vector3 position = transform.position;
-				Vector3 val4 = Vector3.Project(position - item2, item4) + item2;
+				float3 bonePosition = math.transform(worldToLocal, float3.op_Implicit(transform.position));
+				float3 val6 = math.project(bonePosition - val3, val4) + val3;
 				(Transform, int) siblingAndIndex = GetSiblingAndIndex(k - 1, nodes[l].Depth);
 				Transform item5 = siblingAndIndex.Item1;
 				int item6 = siblingAndIndex.Item2;
-				(Vector3, float) boneLocalPositionAndLength = GetBoneLocalPositionAndLength(transform, item5);
-				Vector3 item7 = boneLocalPositionAndLength.Item1;
+				(float3, float) boneLocalPositionAndLength = GetBoneLocalPositionAndLength(in bonePosition, item5, in worldToLocal, in worldToLocalRotation);
+				float3 item7 = boneLocalPositionAndLength.Item1;
 				float item8 = boneLocalPositionAndLength.Item2;
 				(Transform, int) siblingAndIndex2 = GetSiblingAndIndex(k + 1, nodes[l].Depth);
 				Transform item9 = siblingAndIndex2.Item1;
 				int item10 = siblingAndIndex2.Item2;
-				(Vector3, float) boneLocalPositionAndLength2 = GetBoneLocalPositionAndLength(transform, item9);
-				Vector3 item11 = boneLocalPositionAndLength2.Item1;
+				(float3, float) boneLocalPositionAndLength2 = GetBoneLocalPositionAndLength(in bonePosition, item9, in worldToLocal, in worldToLocalRotation);
+				float3 item11 = boneLocalPositionAndLength2.Item1;
 				float item12 = boneLocalPositionAndLength2.Item2;
 				float num3 = (float)nodes[l].Depth / (float)_maxBoneDepth;
 				BurstClothConstraint burstClothConstraint2 = (((Component)transform).TryGetComponent<BurstClothConstraint>(ref burstClothConstraint) ? burstClothConstraint : null);
-				Vector3 val5 = position - transform.parent.position;
-				float magnitude = ((Vector3)(ref val5)).magnitude;
+				float3 val7 = float3.op_Implicit(transform.localPosition);
+				float num4 = math.length(val7);
 				int rotationConstraintIndex = -1;
 				int skinConstraintIndex = -1;
 				if ((Object)(object)burstClothConstraint2 != (Object)null)
@@ -739,35 +741,31 @@ public class BurstCloth : MonoBehaviour
 						skinConstraintIndex = _skinConstraintsOriginal.Count - 1;
 					}
 				}
-				List<BoneData> boneDataOriginal = _boneDataOriginal;
-				BoneData item15 = new BoneData
+				_boneDataOriginal.Add(new BoneData
 				{
 					Depth = nodes[l].Depth,
 					Parent = num + nodes[l].Parent,
 					Child = -1,
-					Length = magnitude
-				};
-				Vector3 val6 = transform.parent.InverseTransformPoint(position);
-				item15.NormalFromParent = float3.op_Implicit(((Vector3)(ref val6)).normalized);
-				item15.LeftSibling = item6;
-				item15.LengthToLeft = item8;
-				item15.NormalFromLeft = math.normalize(float3.op_Implicit(item7));
-				item15.RightSibling = item10;
-				item15.NormalFromRight = math.normalize(float3.op_Implicit(item11));
-				item15.LengthToRight = item12;
-				item15.LocalPosition = float3.op_Implicit(transform.parent.InverseTransformPoint(position));
-				item15.LocalRotation = quaternion.op_Implicit(transform.localRotation);
-				val6 = val3 * (position - val4);
-				item15.DirectionFromOrigin = float3.op_Implicit(((Vector3)(ref val6)).normalized);
-				item15.CollisionRadius = CollisionRadius * CollisionRadiusCurve.Evaluate(num3);
-				item15.DampingInv = 1f - Material.GetDamping(num3);
-				item15.RotationConstraintIndex = rotationConstraintIndex;
-				item15.SkinConstraintIndex = skinConstraintIndex;
-				item15.LengthConstraint = ((burstClothConstraint2 != null && burstClothConstraint2.ConstrainLength) ? float2.op_Implicit(burstClothConstraint2.Length) : float2.op_Implicit(DefaultLengthConstraint)) * magnitude;
-				item15.LengthRelaxation = Material.GetLengthRelaxation(num3);
-				item15.ShapeRelaxation = Material.GetShapeRelaxation(num3);
-				item15.SiblingRelaxation = Material.GetSiblingRelaxation(num3);
-				boneDataOriginal.Add(item15);
+					Length = num4,
+					NormalFromParent = math.normalizesafe(val7, default(float3)),
+					LeftSibling = item6,
+					LengthToLeft = item8,
+					NormalFromLeft = math.normalize(item7),
+					RightSibling = item10,
+					NormalFromRight = math.normalize(item11),
+					LengthToRight = item12,
+					LocalPosition = val7,
+					LocalRotation = quaternion.op_Implicit(transform.localRotation),
+					DirectionFromOrigin = math.normalizesafe(math.rotate(val5, bonePosition - val6), default(float3)),
+					CollisionRadius = CollisionRadius * CollisionRadiusCurve.Evaluate(num3),
+					DampingInv = 1f - Material.GetDamping(num3),
+					RotationConstraintIndex = rotationConstraintIndex,
+					SkinConstraintIndex = skinConstraintIndex,
+					LengthConstraint = ((burstClothConstraint2 != null && burstClothConstraint2.ConstrainLength) ? float2.op_Implicit(burstClothConstraint2.Length) : float2.op_Implicit(DefaultLengthConstraint)) * num4,
+					LengthRelaxation = Material.GetLengthRelaxation(num3),
+					ShapeRelaxation = Material.GetShapeRelaxation(num3),
+					SiblingRelaxation = Material.GetSiblingRelaxation(num3)
+				});
 				if (nodes[l].Parent != -1)
 				{
 					BoneData value = _boneDataOriginal[num + nodes[l].Parent];
@@ -780,10 +778,6 @@ public class BurstCloth : MonoBehaviour
 				num2++;
 			}
 			num += nodes.Count;
-		}
-		if ((Object)(object)ViewModelRootTransform != (Object)null)
-		{
-			ViewModelRootTransform.localScale = localScale;
 		}
 	}
 
@@ -800,26 +794,37 @@ public class BurstCloth : MonoBehaviour
 
 	protected void ResetBoneTransforms(bool resetBoneStates = false)
 	{
-		//IL_0068: Unknown result type (might be due to invalid IL or missing references)
-		//IL_006d: Unknown result type (might be due to invalid IL or missing references)
-		//IL_007b: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0080: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00b8: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00ba: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00bf: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00c6: Unknown result type (might be due to invalid IL or missing references)
+		//IL_001c: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0021: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0026: Unknown result type (might be due to invalid IL or missing references)
+		//IL_002d: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0032: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0037: Unknown result type (might be due to invalid IL or missing references)
+		//IL_008e: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0093: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00a1: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00a6: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00c0: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00c3: Unknown result type (might be due to invalid IL or missing references)
 		//IL_00c8: Unknown result type (might be due to invalid IL or missing references)
 		//IL_00cd: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00d4: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00d6: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00db: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00d2: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00e7: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00e9: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00f0: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00f2: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00f9: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00fc: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0101: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0106: Unknown result type (might be due to invalid IL or missing references)
+		//IL_010b: Unknown result type (might be due to invalid IL or missing references)
 		if (_boneDataOriginal == null || _boneDataOriginal.Count == 0)
 		{
 			return;
 		}
+		float4x4 val = float4x4.op_Implicit(((Component)this).transform.worldToLocalMatrix);
+		Quaternion val2 = Quaternion.Inverse(((Component)this).transform.rotation);
 		int num = 0;
-		Vector3 val = default(Vector3);
-		Quaternion val2 = default(Quaternion);
 		for (int i = 0; i < _chains.Count; i++)
 		{
 			Chain chain = _chains[i];
@@ -834,12 +839,12 @@ public class BurstCloth : MonoBehaviour
 					transform.localRotation = quaternion.op_Implicit(boneData.LocalRotation);
 					if (resetBoneStates && _boneState.IsCreated)
 					{
-						transform.GetPositionAndRotation(ref val, ref val2);
+						float3 val3 = math.transform(val, float3.op_Implicit(transform.position));
 						_boneState[num - 1] = new BoneState
 						{
-							Position = float3.op_Implicit(val),
-							OldPosition = float3.op_Implicit(val),
-							Rotation = quaternion.op_Implicit(val2)
+							Position = val3,
+							OldPosition = val3,
+							Rotation = quaternion.op_Implicit(val2 * transform.rotation)
 						};
 					}
 				}
@@ -896,77 +901,40 @@ public class BurstCloth : MonoBehaviour
 		BurstClothManager.Get().Instances.Remove(this);
 	}
 
+	protected virtual void GravityAdjust()
+	{
+	}
+
 	protected internal virtual void FrameUpdate()
 	{
 		//IL_0001: Unknown result type (might be due to invalid IL or missing references)
 		//IL_0006: Unknown result type (might be due to invalid IL or missing references)
 		//IL_000b: Unknown result type (might be due to invalid IL or missing references)
-		//IL_001b: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0020: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0028: Unknown result type (might be due to invalid IL or missing references)
-		//IL_002d: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0035: Unknown result type (might be due to invalid IL or missing references)
-		//IL_003a: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0040: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0045: Unknown result type (might be due to invalid IL or missing references)
-		//IL_004a: Unknown result type (might be due to invalid IL or missing references)
-		//IL_004f: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0050: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0089: Unknown result type (might be due to invalid IL or missing references)
-		//IL_008f: Unknown result type (might be due to invalid IL or missing references)
-		//IL_009a: Unknown result type (might be due to invalid IL or missing references)
-		//IL_009f: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00a3: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00a8: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00ab: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00b0: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00b1: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00b6: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0019: Unknown result type (might be due to invalid IL or missing references)
+		//IL_001e: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0025: Unknown result type (might be due to invalid IL or missing references)
+		//IL_002a: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0031: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0036: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0042: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0047: Unknown result type (might be due to invalid IL or missing references)
+		//IL_004c: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0051: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0052: Unknown result type (might be due to invalid IL or missing references)
 		//IL_00bb: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00bf: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00c4: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00da: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00d3: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00df: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00e0: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00e5: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0114: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00ef: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00f4: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00fa: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00ff: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0105: Unknown result type (might be due to invalid IL or missing references)
-		//IL_012d: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0134: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0139: Unknown result type (might be due to invalid IL or missing references)
-		//IL_013e: Unknown result type (might be due to invalid IL or missing references)
-		//IL_013f: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0126: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0140: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0145: Unknown result type (might be due to invalid IL or missing references)
-		//IL_014b: Unknown result type (might be due to invalid IL or missing references)
-		//IL_016a: Unknown result type (might be due to invalid IL or missing references)
-		//IL_016f: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0174: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0179: Unknown result type (might be due to invalid IL or missing references)
-		//IL_01ae: Unknown result type (might be due to invalid IL or missing references)
-		//IL_018f: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0194: Unknown result type (might be due to invalid IL or missing references)
-		//IL_019b: Unknown result type (might be due to invalid IL or missing references)
-		//IL_01c8: Unknown result type (might be due to invalid IL or missing references)
-		//IL_01d3: Unknown result type (might be due to invalid IL or missing references)
-		//IL_01d8: Unknown result type (might be due to invalid IL or missing references)
-		//IL_01dd: Unknown result type (might be due to invalid IL or missing references)
-		//IL_01de: Unknown result type (might be due to invalid IL or missing references)
-		//IL_01c0: Unknown result type (might be due to invalid IL or missing references)
-		//IL_01e3: Unknown result type (might be due to invalid IL or missing references)
-		//IL_01e8: Unknown result type (might be due to invalid IL or missing references)
-		//IL_01ef: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00bc: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00c1: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00c2: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00c7: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00cc: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00d8: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00dd: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00e2: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00f1: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00f6: Unknown result type (might be due to invalid IL or missing references)
 		Vector3 val = _rotation * Vector3.forward;
-		(Vector3, Quaternion, Vector3) originTransform = GetOriginTransform();
-		_origin = originTransform.Item1;
-		_rotation = originTransform.Item2;
-		_up = originTransform.Item3;
+		(_origin, _rotation, _up) = GetOriginTransform();
+		GravityAdjust();
 		Vector3 val2 = _rotation * Vector3.forward;
 		if (Vector3.Dot(val, val2) < 0.2f)
 		{
@@ -977,41 +945,21 @@ public class BurstCloth : MonoBehaviour
 		{
 			SimulationSpace = null;
 		}
-		Quaternion val3 = Quaternion.Slerp(_prevRotation, _rotation, RootMotionStrength);
-		Quaternion normalized = ((Quaternion)(ref val3)).normalized;
-		val3 = _rotation * Quaternion.Inverse(normalized);
-		_rotationDelta = ((Quaternion)(ref val3)).normalized;
-		Transform simulationSpace = SimulationSpace;
-		Vector3 val4 = ((simulationSpace != null) ? simulationSpace.position : Vector3.zero);
-		Vector3 val5 = Vector3.zero;
-		if (_originDirty)
-		{
-			_simulationSpaceDelta = Vector3.zero;
-			_rotationDelta = Quaternion.identity;
-			_prevSimulationOrigin = val4;
-		}
-		else
-		{
-			_simulationSpaceDelta += ((!_prevSimulationOrigin.HasValue) ? Vector3.zero : (val5 = val4 - _prevSimulationOrigin.Value));
-			_prevSimulationOrigin = val4;
-		}
 		if (SimulationSpace != _prevSimulationSpace)
 		{
-			_simulationSpaceDelta = Vector3.zero;
-			val5 = Vector3.zero;
+			_originDirty = true;
 		}
 		_prevSimulationSpace = SimulationSpace;
+		Vector3 val3 = default(Vector3);
+		Quaternion val4 = default(Quaternion);
+		((Component)this).transform.GetPositionAndRotation(ref val3, ref val4);
+		_localToWorld = math.RigidTransform(quaternion.op_Implicit(val4), float3.op_Implicit(val3));
+		_worldToLocal = float4x4.op_Implicit(((Component)this).transform.worldToLocalMatrix);
 		if (_originDirty)
 		{
-			_originDelta = Vector3.zero;
-			_prevOrigin = _origin;
+			_lastTickPose = _localToWorld;
+			_originDirty = false;
 		}
-		else
-		{
-			_originDelta += (_prevOrigin.HasValue ? (_origin - _prevOrigin.Value - val5) : Vector3.zero);
-			_prevOrigin = _origin;
-		}
-		_originDirty = false;
 	}
 
 	private void VerifySkinConstraintTransformCache()
@@ -1058,95 +1006,118 @@ public class BurstCloth : MonoBehaviour
 
 	public virtual JobHandle SimulateSystem()
 	{
+		//IL_005f: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0064: Unknown result type (might be due to invalid IL or missing references)
 		//IL_0069: Unknown result type (might be due to invalid IL or missing references)
-		//IL_006e: Unknown result type (might be due to invalid IL or missing references)
+		//IL_006a: Unknown result type (might be due to invalid IL or missing references)
+		//IL_006b: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0070: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0071: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0073: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0078: Unknown result type (might be due to invalid IL or missing references)
+		//IL_007d: Unknown result type (might be due to invalid IL or missing references)
+		//IL_007f: Unknown result type (might be due to invalid IL or missing references)
 		//IL_0081: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0086: Unknown result type (might be due to invalid IL or missing references)
-		//IL_008e: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0093: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00a6: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00ab: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00b3: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00b8: Unknown result type (might be due to invalid IL or missing references)
 		//IL_0044: Unknown result type (might be due to invalid IL or missing references)
 		//IL_004a: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00e2: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00e7: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0100: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0105: Unknown result type (might be due to invalid IL or missing references)
-		//IL_010d: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0112: Unknown result type (might be due to invalid IL or missing references)
-		//IL_011a: Unknown result type (might be due to invalid IL or missing references)
-		//IL_011f: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0127: Unknown result type (might be due to invalid IL or missing references)
-		//IL_012c: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0134: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0139: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0141: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0146: Unknown result type (might be due to invalid IL or missing references)
-		//IL_019a: Unknown result type (might be due to invalid IL or missing references)
-		//IL_01ab: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0192: Unknown result type (might be due to invalid IL or missing references)
-		//IL_01b0: Unknown result type (might be due to invalid IL or missing references)
-		//IL_01b5: Unknown result type (might be due to invalid IL or missing references)
-		//IL_01bd: Unknown result type (might be due to invalid IL or missing references)
-		//IL_01c2: Unknown result type (might be due to invalid IL or missing references)
-		//IL_01c7: Unknown result type (might be due to invalid IL or missing references)
-		//IL_01f1: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0202: Unknown result type (might be due to invalid IL or missing references)
-		//IL_01e9: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0207: Unknown result type (might be due to invalid IL or missing references)
-		//IL_020c: Unknown result type (might be due to invalid IL or missing references)
-		//IL_023c: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0226: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0241: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0246: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0271: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0276: Unknown result type (might be due to invalid IL or missing references)
-		//IL_027b: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0283: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0288: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00ca: Unknown result type (might be due to invalid IL or missing references)
+		//IL_009a: Unknown result type (might be due to invalid IL or missing references)
+		//IL_009f: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00a1: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00ac: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00b1: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00b3: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00be: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00c3: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00cf: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00d3: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00d8: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00e8: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00ed: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00f4: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00f5: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0109: Unknown result type (might be due to invalid IL or missing references)
+		//IL_010e: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0116: Unknown result type (might be due to invalid IL or missing references)
+		//IL_011b: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0123: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0128: Unknown result type (might be due to invalid IL or missing references)
+		//IL_012f: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0130: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0144: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0149: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0151: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0156: Unknown result type (might be due to invalid IL or missing references)
+		//IL_015d: Unknown result type (might be due to invalid IL or missing references)
+		//IL_015e: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0190: Unknown result type (might be due to invalid IL or missing references)
+		//IL_017a: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0195: Unknown result type (might be due to invalid IL or missing references)
+		//IL_01a2: Unknown result type (might be due to invalid IL or missing references)
+		//IL_01a7: Unknown result type (might be due to invalid IL or missing references)
+		//IL_01af: Unknown result type (might be due to invalid IL or missing references)
+		//IL_01b4: Unknown result type (might be due to invalid IL or missing references)
+		//IL_01bc: Unknown result type (might be due to invalid IL or missing references)
+		//IL_01c1: Unknown result type (might be due to invalid IL or missing references)
+		//IL_01c9: Unknown result type (might be due to invalid IL or missing references)
+		//IL_01ce: Unknown result type (might be due to invalid IL or missing references)
+		//IL_01d6: Unknown result type (might be due to invalid IL or missing references)
+		//IL_01db: Unknown result type (might be due to invalid IL or missing references)
+		//IL_01e3: Unknown result type (might be due to invalid IL or missing references)
+		//IL_01e8: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0219: Unknown result type (might be due to invalid IL or missing references)
+		//IL_021b: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0222: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0223: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0225: Unknown result type (might be due to invalid IL or missing references)
+		//IL_022a: Unknown result type (might be due to invalid IL or missing references)
+		//IL_022f: Unknown result type (might be due to invalid IL or missing references)
+		//IL_025d: Unknown result type (might be due to invalid IL or missing references)
+		//IL_025f: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0264: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0269: Unknown result type (might be due to invalid IL or missing references)
+		//IL_026e: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0275: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0277: Unknown result type (might be due to invalid IL or missing references)
+		//IL_027c: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0281: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0286: Unknown result type (might be due to invalid IL or missing references)
 		//IL_028d: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0295: Unknown result type (might be due to invalid IL or missing references)
-		//IL_029a: Unknown result type (might be due to invalid IL or missing references)
-		//IL_029f: Unknown result type (might be due to invalid IL or missing references)
-		//IL_02d0: Unknown result type (might be due to invalid IL or missing references)
-		//IL_02d5: Unknown result type (might be due to invalid IL or missing references)
-		//IL_02db: Unknown result type (might be due to invalid IL or missing references)
-		//IL_02e0: Unknown result type (might be due to invalid IL or missing references)
-		//IL_02e6: Unknown result type (might be due to invalid IL or missing references)
-		//IL_02eb: Unknown result type (might be due to invalid IL or missing references)
-		//IL_02fb: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0300: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0308: Unknown result type (might be due to invalid IL or missing references)
-		//IL_030d: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0316: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0361: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0386: Unknown result type (might be due to invalid IL or missing references)
-		//IL_038c: Unknown result type (might be due to invalid IL or missing references)
-		//IL_038e: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0393: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0398: Unknown result type (might be due to invalid IL or missing references)
-		//IL_03bd: Unknown result type (might be due to invalid IL or missing references)
-		//IL_03c3: Unknown result type (might be due to invalid IL or missing references)
-		//IL_03c5: Unknown result type (might be due to invalid IL or missing references)
-		//IL_03ca: Unknown result type (might be due to invalid IL or missing references)
-		//IL_03cc: Unknown result type (might be due to invalid IL or missing references)
-		//IL_03ce: Unknown result type (might be due to invalid IL or missing references)
-		//IL_03d0: Unknown result type (might be due to invalid IL or missing references)
-		//IL_03d2: Unknown result type (might be due to invalid IL or missing references)
-		//IL_03d7: Unknown result type (might be due to invalid IL or missing references)
-		//IL_03db: Unknown result type (might be due to invalid IL or missing references)
-		//IL_03dd: Unknown result type (might be due to invalid IL or missing references)
-		//IL_03e2: Unknown result type (might be due to invalid IL or missing references)
-		//IL_03e5: Unknown result type (might be due to invalid IL or missing references)
-		//IL_03ea: Unknown result type (might be due to invalid IL or missing references)
-		//IL_03ec: Unknown result type (might be due to invalid IL or missing references)
-		//IL_032b: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0350: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0356: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0358: Unknown result type (might be due to invalid IL or missing references)
-		//IL_035d: Unknown result type (might be due to invalid IL or missing references)
+		//IL_028f: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0294: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0299: Unknown result type (might be due to invalid IL or missing references)
+		//IL_029e: Unknown result type (might be due to invalid IL or missing references)
+		//IL_02d8: Unknown result type (might be due to invalid IL or missing references)
+		//IL_02dd: Unknown result type (might be due to invalid IL or missing references)
+		//IL_02e5: Unknown result type (might be due to invalid IL or missing references)
+		//IL_02ea: Unknown result type (might be due to invalid IL or missing references)
+		//IL_02f3: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0340: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0365: Unknown result type (might be due to invalid IL or missing references)
+		//IL_036b: Unknown result type (might be due to invalid IL or missing references)
+		//IL_036d: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0372: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0377: Unknown result type (might be due to invalid IL or missing references)
+		//IL_039c: Unknown result type (might be due to invalid IL or missing references)
+		//IL_03a2: Unknown result type (might be due to invalid IL or missing references)
+		//IL_03a4: Unknown result type (might be due to invalid IL or missing references)
+		//IL_03a9: Unknown result type (might be due to invalid IL or missing references)
+		//IL_03ab: Unknown result type (might be due to invalid IL or missing references)
+		//IL_03ad: Unknown result type (might be due to invalid IL or missing references)
+		//IL_03af: Unknown result type (might be due to invalid IL or missing references)
+		//IL_03b1: Unknown result type (might be due to invalid IL or missing references)
+		//IL_03b6: Unknown result type (might be due to invalid IL or missing references)
+		//IL_03ba: Unknown result type (might be due to invalid IL or missing references)
+		//IL_03bc: Unknown result type (might be due to invalid IL or missing references)
+		//IL_03c1: Unknown result type (might be due to invalid IL or missing references)
+		//IL_03c4: Unknown result type (might be due to invalid IL or missing references)
+		//IL_03c9: Unknown result type (might be due to invalid IL or missing references)
+		//IL_03cb: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0309: Unknown result type (might be due to invalid IL or missing references)
+		//IL_032e: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0334: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0336: Unknown result type (might be due to invalid IL or missing references)
+		//IL_033b: Unknown result type (might be due to invalid IL or missing references)
 		SetupData();
 		_accumulator += Time.deltaTime;
 		float num = 1f / (float)TickRate;
@@ -1156,18 +1127,27 @@ public class BurstCloth : MonoBehaviour
 			return default(JobHandle);
 		}
 		_accumulator -= (float)num2 * num;
+		RigidTransform val = math.inverse(_localToWorld);
+		quaternion rot = val.rot;
+		RigidTransform val2 = math.mul(val, _lastTickPose);
+		RigidTransform stateAdjustment = ((math.lengthsq(val2.pos) >= MaxOriginDelta * MaxOriginDelta) ? RigidTransform.identity : math.RigidTransform(math.slerp(quaternion.identity, val2.rot, RootMotionStrength), val2.pos * RootMotionStrength));
+		_lastTickPose = _localToWorld;
 		UpdateSkinConstraintsJob updateSkinConstraintsJob = default(UpdateSkinConstraintsJob);
 		updateSkinConstraintsJob.SkinConstraints = _skinConstraints;
+		updateSkinConstraintsJob.WorldToSim = val;
 		UpdateSkinConstraintsJob updateSkinConstraintsJob2 = updateSkinConstraintsJob;
 		InitializeBoneStateJob initializeBoneStateJob = default(InitializeBoneStateJob);
 		initializeBoneStateJob.Data = _boneData;
 		initializeBoneStateJob.State = _boneState;
+		initializeBoneStateJob.WorldToSim = _worldToLocal;
+		initializeBoneStateJob.WorldToSimRotation = rot;
 		InitializeBoneStateJob initializeBoneStateJob2 = initializeBoneStateJob;
 		InitializeSphereColliderStateJob initializeSphereColliderStateJob = default(InitializeSphereColliderStateJob);
 		initializeSphereColliderStateJob.Data = _sphereColliderData;
 		initializeSphereColliderStateJob.State = _sphereColliderState;
+		initializeSphereColliderStateJob.WorldToSim = val;
 		InitializeSphereColliderStateJob initializeSphereColliderStateJob2 = initializeSphereColliderStateJob;
-		float lengthModifier = (HackFixWorldScaleWithLengthModifier ? (LengthModifier * (1f / math.cmin(float3.op_Implicit(((Component)this).transform.lossyScale)))) : LengthModifier);
+		Vector3 val3 = (Vector3)((((Vector3)(ref Gravity)).sqrMagnitude < 0.01f) ? new Vector3(0f, -0.01f, 0f) : Gravity);
 		SimulatePositionsJob simulatePositionsJob = default(SimulatePositionsJob);
 		simulatePositionsJob.ColliderData = _sphereColliderData;
 		simulatePositionsJob.ColliderState = _sphereColliderState;
@@ -1179,37 +1159,32 @@ public class BurstCloth : MonoBehaviour
 		simulatePositionsJob.DeltaTime = num;
 		simulatePositionsJob.IterationCount = num2;
 		simulatePositionsJob.ConstraintIterationCount = ConstraintIterationCount;
-		simulatePositionsJob.SimulationSpaceDelta = float3.op_Implicit((((Vector3)(ref _simulationSpaceDelta)).sqrMagnitude < MaxOriginDelta * MaxOriginDelta) ? (_simulationSpaceDelta * (1f - RootMotionStrength)) : _simulationSpaceDelta);
-		simulatePositionsJob.OriginRotationDelta = quaternion.op_Implicit(_rotationDelta);
-		simulatePositionsJob.OriginDelta = float3.op_Implicit((((Vector3)(ref _originDelta)).sqrMagnitude < MaxOriginDelta * MaxOriginDelta) ? (_originDelta * (1f - RootMotionStrength)) : _originDelta);
-		simulatePositionsJob.Gravity = float3.op_Implicit((Vector3)((((Vector3)(ref Gravity)).sqrMagnitude < 0.01f) ? new Vector3(0f, -0.01f, 0f) : Gravity));
+		simulatePositionsJob.StateAdjustment = stateAdjustment;
+		simulatePositionsJob.Gravity = math.rotate(rot, float3.op_Implicit(val3));
 		simulatePositionsJob.SiblingConstraints = SiblingConstraints;
-		simulatePositionsJob.LengthModifier = lengthModifier;
+		simulatePositionsJob.LengthModifier = LengthModifier;
 		simulatePositionsJob.EnableCollisions = EnableCollisions;
-		simulatePositionsJob.Origin = float3.op_Implicit(_origin);
-		simulatePositionsJob.Rotation = quaternion.op_Implicit(_rotation);
-		simulatePositionsJob.Up = float3.op_Implicit(_up);
+		simulatePositionsJob.Origin = math.transform(val, float3.op_Implicit(_origin));
+		simulatePositionsJob.Rotation = math.mul(rot, quaternion.op_Implicit(_rotation));
+		simulatePositionsJob.Up = math.rotate(rot, float3.op_Implicit(_up));
 		simulatePositionsJob.CollisionProjectionYOffset = CollisionDirectionAdjustment;
 		simulatePositionsJob.CollisionFilteringScale = CollisionFilteringScale;
 		simulatePositionsJob.Radius = 10f;
 		SimulatePositionsJob simulatePositionsJob2 = simulatePositionsJob;
-		_prevRotation = _rotation;
-		_originDelta = Vector3.zero;
-		_simulationSpaceDelta = Vector3.zero;
 		UpdateTransformsJob updateTransformsJob = default(UpdateTransformsJob);
 		updateTransformsJob.Data = _boneData;
 		updateTransformsJob.State = _boneState;
 		UpdateTransformsJob updateTransformsJob2 = updateTransformsJob;
-		JobHandle val = default(JobHandle);
+		JobHandle val4 = default(JobHandle);
 		if (((TransformAccessArray)(ref _skinConstraintsTransformAccessArray)).isCreated)
 		{
-			val = IJobParallelForTransformExtensions.ScheduleReadOnly<UpdateSkinConstraintsJob>(updateSkinConstraintsJob2, _skinConstraintsTransformAccessArray, math.max(((TransformAccessArray)(ref _boneTransforms)).length / math.max(JobsUtility.JobWorkerCount, 1), 32), default(JobHandle));
+			val4 = IJobParallelForTransformExtensions.ScheduleReadOnly<UpdateSkinConstraintsJob>(updateSkinConstraintsJob2, _skinConstraintsTransformAccessArray, math.max(((TransformAccessArray)(ref _boneTransforms)).length / math.max(JobsUtility.JobWorkerCount, 1), 32), default(JobHandle));
 		}
-		JobHandle val2 = IJobParallelForTransformExtensions.ScheduleReadOnly<InitializeBoneStateJob>(initializeBoneStateJob2, _boneTransforms, math.max(((TransformAccessArray)(ref _boneTransforms)).length / math.max(JobsUtility.JobWorkerCount, 1), 32), default(JobHandle));
-		JobHandle val3 = IJobParallelForTransformExtensions.ScheduleReadOnly<InitializeSphereColliderStateJob>(initializeSphereColliderStateJob2, _sphereColliderTransforms, math.max(((TransformAccessArray)(ref _sphereColliderTransforms)).length / math.max(JobsUtility.JobWorkerCount, 1), 32), default(JobHandle));
-		JobHandle val4 = JobHandle.CombineDependencies(val, val2, val3);
-		JobHandle val5 = IJobExtensions.Schedule<SimulatePositionsJob>(simulatePositionsJob2, val4);
-		return IJobParallelForTransformExtensions.Schedule<UpdateTransformsJob>(updateTransformsJob2, _boneTransforms, val5);
+		JobHandle val5 = IJobParallelForTransformExtensions.ScheduleReadOnly<InitializeBoneStateJob>(initializeBoneStateJob2, _boneTransforms, math.max(((TransformAccessArray)(ref _boneTransforms)).length / math.max(JobsUtility.JobWorkerCount, 1), 32), default(JobHandle));
+		JobHandle val6 = IJobParallelForTransformExtensions.ScheduleReadOnly<InitializeSphereColliderStateJob>(initializeSphereColliderStateJob2, _sphereColliderTransforms, math.max(((TransformAccessArray)(ref _sphereColliderTransforms)).length / math.max(JobsUtility.JobWorkerCount, 1), 32), default(JobHandle));
+		JobHandle val7 = JobHandle.CombineDependencies(val4, val5, val6);
+		JobHandle val8 = IJobExtensions.Schedule<SimulatePositionsJob>(simulatePositionsJob2, val7);
+		return IJobParallelForTransformExtensions.Schedule<UpdateTransformsJob>(updateTransformsJob2, _boneTransforms, val8);
 	}
 
 	private void SetupData()
@@ -1243,28 +1218,37 @@ public class BurstCloth : MonoBehaviour
 		//IL_0111: Unknown result type (might be due to invalid IL or missing references)
 		//IL_0177: Unknown result type (might be due to invalid IL or missing references)
 		//IL_017c: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0283: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0288: Unknown result type (might be due to invalid IL or missing references)
-		//IL_029a: Unknown result type (might be due to invalid IL or missing references)
-		//IL_029f: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0301: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0306: Unknown result type (might be due to invalid IL or missing references)
-		//IL_030b: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0353: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0358: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0378: Unknown result type (might be due to invalid IL or missing references)
-		//IL_037d: Unknown result type (might be due to invalid IL or missing references)
-		//IL_01b9: Unknown result type (might be due to invalid IL or missing references)
-		//IL_01be: Unknown result type (might be due to invalid IL or missing references)
-		//IL_01d7: Unknown result type (might be due to invalid IL or missing references)
-		//IL_01d9: Unknown result type (might be due to invalid IL or missing references)
-		//IL_01de: Unknown result type (might be due to invalid IL or missing references)
-		//IL_01ec: Unknown result type (might be due to invalid IL or missing references)
-		//IL_01f1: Unknown result type (might be due to invalid IL or missing references)
-		//IL_01f6: Unknown result type (might be due to invalid IL or missing references)
-		//IL_01fd: Unknown result type (might be due to invalid IL or missing references)
-		//IL_01ff: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0204: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0187: Unknown result type (might be due to invalid IL or missing references)
+		//IL_018c: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0191: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0199: Unknown result type (might be due to invalid IL or missing references)
+		//IL_019e: Unknown result type (might be due to invalid IL or missing references)
+		//IL_01a3: Unknown result type (might be due to invalid IL or missing references)
+		//IL_02b0: Unknown result type (might be due to invalid IL or missing references)
+		//IL_02b5: Unknown result type (might be due to invalid IL or missing references)
+		//IL_02c7: Unknown result type (might be due to invalid IL or missing references)
+		//IL_02cc: Unknown result type (might be due to invalid IL or missing references)
+		//IL_032e: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0333: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0338: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0380: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0385: Unknown result type (might be due to invalid IL or missing references)
+		//IL_03a5: Unknown result type (might be due to invalid IL or missing references)
+		//IL_03aa: Unknown result type (might be due to invalid IL or missing references)
+		//IL_01d6: Unknown result type (might be due to invalid IL or missing references)
+		//IL_01df: Unknown result type (might be due to invalid IL or missing references)
+		//IL_01e4: Unknown result type (might be due to invalid IL or missing references)
+		//IL_01e9: Unknown result type (might be due to invalid IL or missing references)
+		//IL_01ee: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0207: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0209: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0210: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0219: Unknown result type (might be due to invalid IL or missing references)
+		//IL_021e: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0223: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0228: Unknown result type (might be due to invalid IL or missing references)
+		//IL_022f: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0231: Unknown result type (might be due to invalid IL or missing references)
 		if (!((TransformAccessArray)(ref _boneTransforms)).isCreated)
 		{
 			_boneTransforms = new TransformAccessArray(_boneCount, -1);
@@ -1297,17 +1281,19 @@ public class BurstCloth : MonoBehaviour
 		if (!_boneState.IsCreated)
 		{
 			_boneState = new NativeArray<BoneState>(_boneCount, (Allocator)4, (NativeArrayOptions)0);
+			float4x4 val = float4x4.op_Implicit(((Component)this).transform.worldToLocalMatrix);
+			Quaternion val2 = Quaternion.Inverse(((Component)this).transform.rotation);
 			int num3 = 0;
 			foreach (Chain chain2 in _chains)
 			{
 				foreach (Node node2 in chain2.Nodes)
 				{
-					Vector3 position = node2.Transform.position;
+					float3 val3 = math.transform(val, float3.op_Implicit(node2.Transform.position));
 					_boneState[num3++] = new BoneState
 					{
-						Position = float3.op_Implicit(position),
-						Rotation = quaternion.op_Implicit(node2.Transform.rotation),
-						OldPosition = float3.op_Implicit(position)
+						Position = val3,
+						Rotation = quaternion.op_Implicit(val2 * node2.Transform.rotation),
+						OldPosition = val3
 					};
 				}
 			}
@@ -1358,19 +1344,31 @@ public class BurstCloth : MonoBehaviour
 	{
 	}
 
-	private static (Vector3, float) GetBoneLocalPositionAndLength(Transform parent, Transform child)
+	private static (float3, float) GetBoneLocalPositionAndLength(in float3 bonePosition, Transform sibling, in float4x4 worldToLocal, in quaternion worldToLocalRotation)
 	{
-		//IL_001b: Unknown result type (might be due to invalid IL or missing references)
+		//IL_001a: Unknown result type (might be due to invalid IL or missing references)
 		//IL_0020: Unknown result type (might be due to invalid IL or missing references)
 		//IL_0025: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0026: Unknown result type (might be due to invalid IL or missing references)
+		//IL_002a: Unknown result type (might be due to invalid IL or missing references)
+		//IL_002f: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0031: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0037: Unknown result type (might be due to invalid IL or missing references)
+		//IL_003c: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0041: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0046: Unknown result type (might be due to invalid IL or missing references)
+		//IL_004c: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0051: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0052: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0057: Unknown result type (might be due to invalid IL or missing references)
+		//IL_005c: Unknown result type (might be due to invalid IL or missing references)
 		//IL_0009: Unknown result type (might be due to invalid IL or missing references)
-		if ((Object)(object)child == (Object)null)
+		if ((Object)(object)sibling == (Object)null)
 		{
-			return (Vector3.zero, 0f);
+			return (float3.zero, 0f);
 		}
-		Vector3 item = child.InverseTransformPoint(parent.position);
-		return (item, ((Vector3)(ref item)).magnitude);
+		float3 val = math.transform(worldToLocal, float3.op_Implicit(sibling.position));
+		float3 val2 = math.rotate(math.conjugate(math.mul(worldToLocalRotation, quaternion.op_Implicit(sibling.rotation))), bonePosition - val);
+		return (val2, math.length(val2));
 	}
 
 	private (Transform, int) GetSiblingAndIndex(int chainIndex, int depth)
@@ -1812,24 +1810,32 @@ internal struct InitializeBoneStateJob : IJobParallelForTransform
 	[NativeMatchesParallelForLength]
 	public NativeArray<BoneState> State;
 
+	public float4x4 WorldToSim;
+
+	public quaternion WorldToSimRotation;
+
 	public void Execute(int index, [ReadOnly] TransformAccess transform)
 	{
-		//IL_0041: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0046: Unknown result type (might be due to invalid IL or missing references)
 		//IL_004b: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0052: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0057: Unknown result type (might be due to invalid IL or missing references)
+		//IL_005c: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0061: Unknown result type (might be due to invalid IL or missing references)
 		//IL_0022: Unknown result type (might be due to invalid IL or missing references)
 		//IL_0027: Unknown result type (might be due to invalid IL or missing references)
-		//IL_002f: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0034: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0039: Unknown result type (might be due to invalid IL or missing references)
+		//IL_002e: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0035: Unknown result type (might be due to invalid IL or missing references)
+		//IL_003a: Unknown result type (might be due to invalid IL or missing references)
+		//IL_003f: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0044: Unknown result type (might be due to invalid IL or missing references)
 		ref BoneData @readonly = BurstUtil.GetReadonly<BoneData>(ref Data, index);
 		ref BoneState reference = ref BurstUtil.Get<BoneState>(ref State, index);
 		if (((BoneData)@readonly).Depth == 0)
 		{
 			reference.OldPosition = reference.Position;
-			reference.Position = float3.op_Implicit(((TransformAccess)(ref transform)).position);
+			reference.Position = math.transform(WorldToSim, float3.op_Implicit(((TransformAccess)(ref transform)).position));
 		}
-		reference.Rotation = quaternion.op_Implicit(((TransformAccess)(ref transform)).rotation);
+		reference.Rotation = math.mul(WorldToSimRotation, quaternion.op_Implicit(((TransformAccess)(ref transform)).rotation));
 	}
 }
 
@@ -1838,6 +1844,7 @@ using Facepunch.BurstCloth.Jobs;
 using Unity.Burst;
 using Unity.Collections;
 using Unity.Mathematics;
+using UnityEngine;
 using UnityEngine.Jobs;
 
 [BurstCompile]
@@ -1851,25 +1858,26 @@ internal struct InitializeSphereColliderStateJob : IJobParallelForTransform
 	[NativeMatchesParallelForLength]
 	public NativeArray<SphereColliderState> State;
 
+	public RigidTransform WorldToSim;
+
 	public void Execute(int index, TransformAccess transform)
 	{
-		//IL_001b: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0020: Unknown result type (might be due to invalid IL or missing references)
 		//IL_0025: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0028: Unknown result type (might be due to invalid IL or missing references)
-		//IL_002d: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0032: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0033: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0034: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0036: Unknown result type (might be due to invalid IL or missing references)
-		//IL_003b: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0040: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0045: Unknown result type (might be due to invalid IL or missing references)
+		//IL_002a: Unknown result type (might be due to invalid IL or missing references)
+		//IL_002b: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0030: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0031: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0037: Unknown result type (might be due to invalid IL or missing references)
+		//IL_003c: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0041: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0046: Unknown result type (might be due to invalid IL or missing references)
+		//IL_004b: Unknown result type (might be due to invalid IL or missing references)
 		ref SphereColliderData @readonly = BurstUtil.GetReadonly<SphereColliderData>(ref Data, index);
 		ref SphereColliderState reference = ref BurstUtil.Get<SphereColliderState>(ref State, index);
-		float3 val = float3.op_Implicit(((TransformAccess)(ref transform)).position);
-		quaternion val2 = quaternion.op_Implicit(((TransformAccess)(ref transform)).rotation);
-		reference.Position = val + math.mul(val2, @readonly.LocalPosition);
+		Vector3 val = default(Vector3);
+		Quaternion val2 = default(Quaternion);
+		((TransformAccess)(ref transform)).GetPositionAndRotation(ref val, ref val2);
+		reference.Position = math.transform(WorldToSim, float3.op_Implicit(val) + math.mul(quaternion.op_Implicit(val2), @readonly.LocalPosition));
 	}
 }
 
@@ -1930,11 +1938,7 @@ internal struct SimulatePositionsJob : IJob
 
 	public int ConstraintIterationCount;
 
-	public quaternion OriginRotationDelta;
-
-	public float3 SimulationSpaceDelta;
-
-	public float3 OriginDelta;
+	public RigidTransform StateAdjustment;
 
 	public float3 Gravity;
 
@@ -2046,45 +2050,23 @@ internal struct SimulatePositionsJob : IJob
 
 	private void AdjustSimulationSpace()
 	{
-		//IL_0021: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0027: Unknown result type (might be due to invalid IL or missing references)
-		//IL_002c: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0031: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0032: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0034: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0039: Unknown result type (might be due to invalid IL or missing references)
-		//IL_003a: Unknown result type (might be due to invalid IL or missing references)
-		//IL_003f: Unknown result type (might be due to invalid IL or missing references)
+		//IL_003e: Unknown result type (might be due to invalid IL or missing references)
 		//IL_0044: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0081: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0087: Unknown result type (might be due to invalid IL or missing references)
-		//IL_008d: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0092: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0097: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0098: Unknown result type (might be due to invalid IL or missing references)
-		//IL_009d: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00a2: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0054: Unknown result type (might be due to invalid IL or missing references)
-		//IL_005a: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0060: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0065: Unknown result type (might be due to invalid IL or missing references)
-		//IL_006a: Unknown result type (might be due to invalid IL or missing references)
-		//IL_006b: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0070: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0075: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0049: Unknown result type (might be due to invalid IL or missing references)
+		//IL_004e: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0027: Unknown result type (might be due to invalid IL or missing references)
+		//IL_002d: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0032: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0037: Unknown result type (might be due to invalid IL or missing references)
 		for (int i = 0; i < BoneData.Length; i++)
 		{
 			ref BoneData @readonly = BurstUtil.GetReadonly<BoneData>(ref BoneData, i);
 			ref BoneState reference = ref BurstUtil.Get<BoneState>(ref BoneStates, i);
-			float3 val = reference.Position - Origin;
-			float3 val2 = val - math.rotate(OriginRotationDelta, val);
 			if (((BoneData)@readonly).Depth > 0)
 			{
-				ref float3 position = ref reference.Position;
-				position += SimulationSpaceDelta + OriginDelta - val2;
+				reference.Position = math.transform(StateAdjustment, reference.Position);
 			}
-			ref float3 oldPosition = ref reference.OldPosition;
-			oldPosition += SimulationSpaceDelta + OriginDelta - val2;
+			reference.OldPosition = math.transform(StateAdjustment, reference.OldPosition);
 		}
 	}
 
@@ -2219,11 +2201,11 @@ internal struct SimulatePositionsJob : IJob
 		if (data.SkinConstraintIndex >= 0)
 		{
 			ref SkinConstraint @readonly = BurstUtil.GetReadonly<SkinConstraint>(ref SkinConstraints, data.SkinConstraintIndex);
-			float3 val3 = @readonly.WorldSkinPosition - @readonly.WorldSkinNormal * @readonly.BackstopInset;
+			float3 val3 = @readonly.SimSkinPosition - @readonly.SimSkinNormal * @readonly.BackstopInset;
 			if (math.distancesq(state.Position, val3) <= @readonly.BackstopRadius * @readonly.BackstopRadius)
 			{
 				float3 val4 = math.normalize(state.Position - val3);
-				float3 val5 = Slerp(val4, @readonly.WorldEscapeNormal, math.select(0.2f, 1f, math.dot(val4, @readonly.WorldEscapeNormal) >= 0f));
+				float3 val5 = Slerp(val4, @readonly.SimEscapeNormal, math.select(0.2f, 1f, math.dot(val4, @readonly.SimEscapeNormal) >= 0f));
 				float3 val6 = val3 + val5 * @readonly.BackstopRadius;
 				float3 val7 = state.Position - val6;
 				val += 0.5f * data.LengthRelaxation * -val7;
@@ -3027,42 +3009,48 @@ internal struct UpdateSkinConstraintsJob : IJobParallelForTransform
 	[NativeMatchesParallelForLength]
 	public NativeArray<SkinConstraint> SkinConstraints;
 
+	public RigidTransform WorldToSim;
+
 	public void Execute(int index, [ReadOnly] TransformAccess transform)
 	{
-		//IL_0019: Unknown result type (might be due to invalid IL or missing references)
-		//IL_001e: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0023: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0025: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0027: Unknown result type (might be due to invalid IL or missing references)
-		//IL_002c: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0031: Unknown result type (might be due to invalid IL or missing references)
+		//IL_001d: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0028: Unknown result type (might be due to invalid IL or missing references)
+		//IL_002d: Unknown result type (might be due to invalid IL or missing references)
 		//IL_0034: Unknown result type (might be due to invalid IL or missing references)
 		//IL_0039: Unknown result type (might be due to invalid IL or missing references)
 		//IL_003e: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0044: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0046: Unknown result type (might be due to invalid IL or missing references)
-		//IL_004b: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0050: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0053: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0058: Unknown result type (might be due to invalid IL or missing references)
-		//IL_005d: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0063: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0065: Unknown result type (might be due to invalid IL or missing references)
-		//IL_006f: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0074: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0079: Unknown result type (might be due to invalid IL or missing references)
-		//IL_007c: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0081: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0043: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0045: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0047: Unknown result type (might be due to invalid IL or missing references)
+		//IL_004c: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0051: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0054: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0059: Unknown result type (might be due to invalid IL or missing references)
+		//IL_005e: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0064: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0066: Unknown result type (might be due to invalid IL or missing references)
+		//IL_006b: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0070: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0073: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0078: Unknown result type (might be due to invalid IL or missing references)
+		//IL_007d: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0083: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0085: Unknown result type (might be due to invalid IL or missing references)
+		//IL_008f: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0094: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0099: Unknown result type (might be due to invalid IL or missing references)
+		//IL_009c: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00a1: Unknown result type (might be due to invalid IL or missing references)
 		if (((TransformAccess)(ref transform)).isValid)
 		{
 			ref SkinConstraint reference = ref BurstUtil.Get<SkinConstraint>(ref SkinConstraints, index);
-			float4x4 val = float4x4.op_Implicit(((TransformAccess)(ref transform)).localToWorldMatrix);
+			float4x4 val = math.mul(new float4x4(WorldToSim.rot, WorldToSim.pos), float4x4.op_Implicit(((TransformAccess)(ref transform)).localToWorldMatrix));
 			float3 val2 = math.rotate(val, reference.LocalSkinNormal);
-			reference.WorldSkinNormal = math.normalize(((float3)(ref val2)).xyz);
+			reference.SimSkinNormal = math.normalize(((float3)(ref val2)).xyz);
 			val2 = math.rotate(val, reference.LocalEscapeNormal);
-			reference.WorldEscapeNormal = math.normalize(((float3)(ref val2)).xyz);
+			reference.SimEscapeNormal = math.normalize(((float3)(ref val2)).xyz);
 			float4 val3 = math.mul(val, new float4(reference.LocalSkinPosition, 1f));
-			reference.WorldSkinPosition = ((float4)(ref val3)).xyz;
+			reference.SimSkinPosition = ((float4)(ref val3)).xyz;
 		}
 	}
 }

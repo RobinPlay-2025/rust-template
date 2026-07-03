@@ -19,7 +19,7 @@ using UnityEngine;
 
 public class LocalClanDatabase : Database
 {
-	private const int Version = 1;
+	private readonly int _version;
 
 	private void CreateClansTable()
 	{
@@ -113,7 +113,7 @@ public class LocalClanDatabase : Database
 
 	public List<ClanLeaderboardEntry> ListTopClans(int limit)
 	{
-		IntPtr intPtr = ((Database)this).Prepare("SELECT clan_id, name, score FROM clans ORDER BY score DESC LIMIT ?");
+		IntPtr intPtr = ((Database)this).Prepare("SELECT clan_id, name, score FROM clans WHERE deleted IS NULL ORDER BY score DESC LIMIT ?");
 		Database.Bind<int>(intPtr, 1, Mathf.Clamp(limit, 10, 100));
 		List<ClanLeaderboardEntry> list = Pool.Get<List<ClanLeaderboardEntry>>();
 		((Database)this).ExecuteAndReadQueryResults<ClanLeaderboardEntry>(intPtr, list, (Func<IntPtr, ClanLeaderboardEntry>)delegate(IntPtr stm)
@@ -519,9 +519,14 @@ public class LocalClanDatabase : Database
 		return list;
 	}
 
+	public LocalClanDatabase(int version)
+	{
+		_version = version;
+	}
+
 	public void Open(string rootFolder)
 	{
-		((Database)this).Open(Path.Combine(rootFolder, $"clans.{1}.db"), true);
+		((Database)this).Open(Path.Combine(rootFolder, $"clans.{_version}.db"), true);
 		((Database)this).Execute("PRAGMA foreign_keys = ON");
 		CreateClansTable();
 		CreateRolesTable();
@@ -854,7 +859,7 @@ public class LocalClan : IClan
 	{
 		if (_backend.MaxMemberCount > 0 && _members.Count >= _backend.MaxMemberCount)
 		{
-			return (ClanResult)17;
+			return (ClanResult)21;
 		}
 		if (!CheckRole(bySteamId, (ClanRole r) => r.CanInvite))
 		{
@@ -896,7 +901,7 @@ public class LocalClan : IClan
 	{
 		if (_backend.MaxMemberCount > 0 && _members.Count >= _backend.MaxMemberCount)
 		{
-			return (ClanResult)17;
+			return (ClanResult)21;
 		}
 		try
 		{
@@ -915,7 +920,7 @@ public class LocalClan : IClan
 			return obj2 != null && ((SqliteException)obj2).Result == 2067;
 		}).Invoke())
 		{
-			return (ClanResult)15;
+			return (ClanResult)19;
 		}
 		return (ClanResult)0;
 	}
@@ -950,7 +955,7 @@ public class LocalClan : IClan
 			}
 			if (rank == 1 && OtherLeaderCount(steamId) == 0)
 			{
-				return (ClanResult)13;
+				return (ClanResult)17;
 			}
 		}
 		if (_backend.Database.DeleteMember(ClanId, steamId))
@@ -1011,7 +1016,7 @@ public class LocalClan : IClan
 		}
 		if (rank == 1 && steamId == bySteamId && OtherLeaderCount(steamId) == 0)
 		{
-			return (ClanResult)14;
+			return (ClanResult)18;
 		}
 		if (_backend.Database.UpdateMemberRole(ClanId, steamId, newRoleId))
 		{
@@ -1074,7 +1079,7 @@ public class LocalClan : IClan
 			return obj2 != null && ((SqliteException)obj2).Result == 2067;
 		}).Invoke())
 		{
-			return (ClanResult)9;
+			return (ClanResult)13;
 		}
 		return (ClanResult)0;
 	}
@@ -1119,7 +1124,7 @@ public class LocalClan : IClan
 			return obj2 != null && ((SqliteException)obj2).Result == 2067;
 		}).Invoke())
 		{
-			return (ClanResult)9;
+			return (ClanResult)13;
 		}
 		return (ClanResult)0;
 	}
@@ -1142,7 +1147,7 @@ public class LocalClan : IClan
 		}
 		if (val.Value.Rank == 1 || val2.Value.Rank == 1)
 		{
-			return (ClanResult)11;
+			return (ClanResult)15;
 		}
 		if (_backend.Database.SwapRoleRanks(ClanId, roleIdA, roleIdB))
 		{
@@ -1166,7 +1171,7 @@ public class LocalClan : IClan
 		}
 		if (val.Value.Rank == 1)
 		{
-			return (ClanResult)12;
+			return (ClanResult)16;
 		}
 		bool flag;
 		try
@@ -1190,7 +1195,7 @@ public class LocalClan : IClan
 			return (byte)result != 0;
 		}).Invoke())
 		{
-			return (ClanResult)10;
+			return (ClanResult)14;
 		}
 		if (flag)
 		{
@@ -1257,23 +1262,23 @@ public class LocalClan : IClan
 		{
 			return (ClanResult)0;
 		}
-		string message2 = default(string);
-		if (!ClanValidator.ValidateChatMessage(message, ref message2))
+		ClanValidatorResult val = ClanValidator.ValidateChatMessage(message);
+		if (!((ClanValidatorResult)(ref val)).Success)
 		{
-			return (ClanResult)6;
+			return ClanValidator.ToClanResult(((ClanValidatorResult)(ref val)).Error);
 		}
-		ClanChatEntry val = default(ClanChatEntry);
-		val.SteamId = bySteamId;
-		val.Name = name;
-		val.Message = message2;
-		val.Time = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-		ClanChatEntry val2 = val;
+		ClanChatEntry val2 = default(ClanChatEntry);
+		val2.SteamId = bySteamId;
+		val2.Name = name;
+		val2.Message = ((ClanValidatorResult)(ref val)).Value;
+		val2.Time = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+		ClanChatEntry val3 = val2;
 		if (_chatHistory.Count >= 20)
 		{
 			_chatHistory.RemoveAt(0);
 		}
-		_chatHistory.Add(val2);
-		_backend.ClanChatMessage(ClanId, val2);
+		_chatHistory.Add(val3);
+		_backend.ClanChatMessage(ClanId, val3);
 		return (ClanResult)1;
 	}
 
@@ -1364,12 +1369,12 @@ public class LocalClanBackend : IClanBackend, IDisposable, IClanChangeSink
 
 	public readonly LocalClanDatabase Database;
 
-	public LocalClanBackend(string rootFolder, int maxMemberCount)
+	public LocalClanBackend(string rootFolder, int version, int maxMemberCount)
 	{
 		_rootFolder = rootFolder;
 		MaxMemberCount = Math.Max(maxMemberCount, 0);
 		_clans = new Dictionary<long, LocalClan>();
-		Database = new LocalClanDatabase();
+		Database = new LocalClanDatabase(version);
 	}
 
 	public async ValueTask Initialize(IClanChangeSink changeSink)
@@ -1433,7 +1438,7 @@ public class LocalClanBackend : IClanBackend, IDisposable, IClanChangeSink
 			}).Invoke())
 			{
 				((Database)Database).Rollback();
-				return ClanValueResult<IClan>.op_Implicit((ClanResult)9);
+				return ClanValueResult<IClan>.op_Implicit((ClanResult)13);
 			}
 			int num = Database.CreateRole(clanId, new ClanRole
 			{
@@ -1444,7 +1449,9 @@ public class LocalClanBackend : IClanBackend, IDisposable, IClanChangeSink
 				CanKick = true,
 				CanPromote = true,
 				CanDemote = true,
-				CanSetPlayerNotes = true
+				CanSetPlayerNotes = true,
+				CanAccessScoreEvents = true,
+				CanAccessLogs = true
 			}) ?? throw new Exception("Failed to create leader role");
 			if (num != 1)
 			{
@@ -1459,7 +1466,9 @@ public class LocalClanBackend : IClanBackend, IDisposable, IClanChangeSink
 				CanKick = false,
 				CanPromote = false,
 				CanDemote = false,
-				CanSetPlayerNotes = false
+				CanSetPlayerNotes = false,
+				CanAccessScoreEvents = true,
+				CanAccessLogs = false
 			}) ?? throw new Exception("Failed to create member role");
 			try
 			{
@@ -1476,7 +1485,7 @@ public class LocalClanBackend : IClanBackend, IDisposable, IClanChangeSink
 			}).Invoke())
 			{
 				((Database)Database).Rollback();
-				return ClanValueResult<IClan>.op_Implicit((ClanResult)15);
+				return ClanValueResult<IClan>.op_Implicit((ClanResult)19);
 			}
 			Database.AppendLog(clanId, "founded", leaderSteamId);
 			((Database)Database).Commit();

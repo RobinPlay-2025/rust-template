@@ -116,7 +116,11 @@ public enum ClanResult
 	NoClan,
 	NotFound,
 	NoPermission,
-	InvalidText,
+	InvalidText_Empty,
+	InvalidText_TooShort,
+	InvalidText_TooLong,
+	InvalidText_InvalidCharacters,
+	InvalidText_Generic,
 	InvalidLogo,
 	InvalidColor,
 	DuplicateName,
@@ -172,6 +176,8 @@ public enum ClanScoreEventType
 	RanExcavator = 8,
 	ReachedCargoShip = 9,
 	LootedEliteCrate = 10,
+	DestroyedPatrolHeli = 11,
+	SwipedRedKeycard = 12,
 	Invalid = -1
 }
 
@@ -221,59 +227,148 @@ public static class ClanUtility
 }
 
 
+public enum ClanValidatorError
+{
+	None,
+	Empty,
+	TooShort,
+	TooLong,
+	InvalidCharacters
+}
+
+
+using System;
+
+public readonly struct ClanValidatorResult
+{
+	private readonly string _value;
+
+	private readonly ClanValidatorError _error;
+
+	public bool Success => _error == ClanValidatorError.None;
+
+	public string Value
+	{
+		get
+		{
+			if (!Success)
+			{
+				throw new InvalidOperationException("ClanValidatorResult is not successful, cannot get value.");
+			}
+			return _value;
+		}
+	}
+
+	public ClanValidatorError Error
+	{
+		get
+		{
+			if (!Success)
+			{
+				return _error;
+			}
+			throw new InvalidOperationException("ClanValidatorResult is successful, cannot get error.");
+		}
+	}
+
+	private ClanValidatorResult(string value, ClanValidatorError error)
+	{
+		_value = value;
+		_error = error;
+	}
+
+	public static ClanValidatorResult Ok(string value)
+	{
+		return new ClanValidatorResult(value, ClanValidatorError.None);
+	}
+
+	public static ClanValidatorResult Fail(ClanValidatorError error)
+	{
+		return new ClanValidatorResult(null, error);
+	}
+}
+
+
+using System;
 using System.Text;
 
 public static class ClanValidator
 {
+	public const int MinNameLength = 3;
+
+	public const int MaxNameLength = 32;
+
+	public const int MaxMotdLength = 4096;
+
+	public const int MaxPlayerNoteLength = 256;
+
+	public const int MaxChatMessageLength = 128;
+
 	private static readonly StringBuilder Builder = new StringBuilder(64);
 
-	public static bool ValidateClanName(string name, out string validated)
+	public static ClanValidatorResult ValidateClanName(string name)
 	{
-		validated = Normalize(name);
-		if (!ValidateLength(validated, 3, 32) || !ValidateAlphanumericOnly(validated))
+		string text = Normalize(name);
+		if (string.IsNullOrWhiteSpace(text))
 		{
-			validated = null;
-			return false;
+			return ClanValidatorResult.Fail(ClanValidatorError.Empty);
 		}
-		return true;
+		if (text.Length < 3)
+		{
+			return ClanValidatorResult.Fail(ClanValidatorError.TooShort);
+		}
+		if (text.Length > 32)
+		{
+			return ClanValidatorResult.Fail(ClanValidatorError.TooLong);
+		}
+		if (!ValidateAlphanumericOnly(text))
+		{
+			return ClanValidatorResult.Fail(ClanValidatorError.InvalidCharacters);
+		}
+		return ClanValidatorResult.Ok(text);
 	}
 
-	public static bool ValidateRoleName(string name, out string validated)
+	public static ClanValidatorResult ValidateRoleName(string name)
 	{
-		return ValidateClanName(name, out validated);
+		return ValidateClanName(name);
 	}
 
-	public static bool ValidateMotd(string motd, out string validated)
+	public static ClanValidatorResult ValidateMotd(string motd)
 	{
-		validated = Normalize(motd, 30);
-		if (!ValidateLength(validated, 0, 4096))
+		string text = Normalize(motd, 30);
+		if (string.IsNullOrWhiteSpace(text))
 		{
-			validated = null;
-			return false;
+			return ClanValidatorResult.Fail(ClanValidatorError.Empty);
 		}
-		return true;
+		if (text.Length > 4096)
+		{
+			return ClanValidatorResult.Fail(ClanValidatorError.TooLong);
+		}
+		return ClanValidatorResult.Ok(text);
 	}
 
-	public static bool ValidatePlayerNote(string note, out string validated)
+	public static ClanValidatorResult ValidatePlayerNote(string note)
 	{
-		validated = Normalize(note, 3);
-		if (!ValidateLength(validated, 0, 256))
+		string text = Normalize(note ?? "", 3);
+		if (text.Length > 256)
 		{
-			validated = null;
-			return false;
+			return ClanValidatorResult.Fail(ClanValidatorError.TooLong);
 		}
-		return true;
+		return ClanValidatorResult.Ok(text);
 	}
 
-	public static bool ValidateChatMessage(string message, out string validated)
+	public static ClanValidatorResult ValidateChatMessage(string message)
 	{
-		validated = Normalize(message);
-		if (!ValidateLength(validated, 0, 128))
+		string text = Normalize(message ?? "");
+		if (string.IsNullOrWhiteSpace(text))
 		{
-			validated = null;
-			return false;
+			return ClanValidatorResult.Fail(ClanValidatorError.Empty);
 		}
-		return true;
+		if (text.Length > 128)
+		{
+			return ClanValidatorResult.Fail(ClanValidatorError.TooLong);
+		}
+		return ClanValidatorResult.Ok(text);
 	}
 
 	private static string Normalize(string value, int maxLines = 1)
@@ -317,19 +412,6 @@ public static class ClanValidator
 		return Builder.ToString().Normalize(NormalizationForm.FormC);
 	}
 
-	private static bool ValidateLength(string value, int min, int max)
-	{
-		if (string.IsNullOrWhiteSpace(value))
-		{
-			return false;
-		}
-		if (value.Length >= min)
-		{
-			return value.Length <= max;
-		}
-		return false;
-	}
-
 	private static bool ValidateAlphanumericOnly(string value)
 	{
 		if (value == null)
@@ -349,6 +431,19 @@ public static class ClanValidator
 			}
 		}
 		return true;
+	}
+
+	public static ClanResult ToClanResult(this ClanValidatorError error)
+	{
+		return error switch
+		{
+			ClanValidatorError.None => throw new InvalidOperationException("ClanValidatorError is successful."), 
+			ClanValidatorError.Empty => ClanResult.InvalidText_Empty, 
+			ClanValidatorError.TooShort => ClanResult.InvalidText_TooShort, 
+			ClanValidatorError.TooLong => ClanResult.InvalidText_TooLong, 
+			ClanValidatorError.InvalidCharacters => ClanResult.InvalidText_InvalidCharacters, 
+			_ => throw new ArgumentOutOfRangeException("error", error, null), 
+		};
 	}
 }
 
@@ -606,7 +701,7 @@ internal class UnitySourceGeneratedAssemblyMonoScriptTypes_v1
 			105, 110, 115, 92, 82, 117, 115, 116, 46, 67,
 			108, 97, 110, 115, 92, 67, 108, 97, 110, 85,
 			116, 105, 108, 105, 116, 121, 46, 99, 115, 0,
-			0, 0, 1, 0, 0, 0, 43, 92, 65, 115,
+			0, 0, 2, 0, 0, 0, 43, 92, 65, 115,
 			115, 101, 116, 115, 92, 80, 108, 117, 103, 105,
 			110, 115, 92, 82, 117, 115, 116, 46, 67, 108,
 			97, 110, 115, 92, 67, 108, 97, 110, 86, 97,
@@ -632,7 +727,7 @@ internal class UnitySourceGeneratedAssemblyMonoScriptTypes_v1
 			92, 73, 67, 108, 97, 110, 67, 104, 97, 110,
 			103, 101, 83, 105, 110, 107, 46, 99, 115
 		};
-		result.TypesData = new byte[315]
+		result.TypesData = new byte[340]
 		{
 			0, 0, 0, 0, 14, 124, 67, 108, 97, 110,
 			67, 104, 97, 116, 69, 110, 116, 114, 121, 0,
@@ -656,19 +751,21 @@ internal class UnitySourceGeneratedAssemblyMonoScriptTypes_v1
 			0, 16, 124, 67, 108, 97, 110, 83, 99, 111,
 			114, 101, 69, 118, 101, 110, 116, 115, 0, 0,
 			0, 0, 12, 124, 67, 108, 97, 110, 85, 116,
-			105, 108, 105, 116, 121, 0, 0, 0, 0, 14,
+			105, 108, 105, 116, 121, 0, 0, 0, 0, 20,
 			124, 67, 108, 97, 110, 86, 97, 108, 105, 100,
-			97, 116, 111, 114, 0, 0, 0, 0, 16, 124,
-			67, 108, 97, 110, 86, 97, 108, 117, 101, 82,
-			101, 115, 117, 108, 116, 0, 0, 0, 0, 6,
-			124, 73, 67, 108, 97, 110, 0, 0, 0, 0,
-			13, 124, 73, 67, 108, 97, 110, 66, 97, 99,
-			107, 101, 110, 100, 0, 0, 0, 0, 16, 124,
-			73, 67, 108, 97, 110, 67, 104, 97, 110, 103,
-			101, 83, 105, 110, 107
+			97, 116, 111, 114, 82, 101, 115, 117, 108, 116,
+			0, 0, 0, 0, 14, 124, 67, 108, 97, 110,
+			86, 97, 108, 105, 100, 97, 116, 111, 114, 0,
+			0, 0, 0, 16, 124, 67, 108, 97, 110, 86,
+			97, 108, 117, 101, 82, 101, 115, 117, 108, 116,
+			0, 0, 0, 0, 6, 124, 73, 67, 108, 97,
+			110, 0, 0, 0, 0, 13, 124, 73, 67, 108,
+			97, 110, 66, 97, 99, 107, 101, 110, 100, 0,
+			0, 0, 0, 16, 124, 73, 67, 108, 97, 110,
+			67, 104, 97, 110, 103, 101, 83, 105, 110, 107
 		};
 		result.TotalFiles = 17;
-		result.TotalTypes = 17;
+		result.TotalTypes = 18;
 		result.IsEditorOnly = false;
 		return result;
 	}

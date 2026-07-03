@@ -2,8 +2,8 @@ using System;
 using System.Runtime.CompilerServices;
 using Microsoft.CodeAnalysis;
 
-[Embedded]
 [CompilerGenerated]
+[Embedded]
 internal sealed class IsUnmanagedAttribute : Attribute
 {
 }
@@ -546,8 +546,8 @@ public class TestScenario_RocketSplashDamage : TestScenarioPrefab
 
 	public Material defaultMaterial;
 
-	[SerializeField]
 	[HideInInspector]
+	[SerializeField]
 	public int currentTestCaseIndex;
 
 	[Space]
@@ -2731,8 +2731,8 @@ public class NexusFerrySounds : MonoBehaviour, IClientComponent
 
 	private float soundCullDistanceSq;
 
-	[Header("Engine")]
 	[SerializeField]
+	[Header("Engine")]
 	private SoundDefinition engineLoopDef;
 
 	private Sound engineLoop;
@@ -3106,7 +3106,10 @@ public class BaseFirework : BaseCombatEntity, IIgniteable
 	{
 		if (!IsExhausted() && !IsLit())
 		{
-			SetFlag(Flags.OnFire, b: true);
+			using (FlagsUpdateScope flagsUpdateScope = StartSetFlags(FlagsUpdateMode.SendNetworkUpdate))
+			{
+				flagsUpdateScope.Set(Flags.OnFire, b: true);
+			}
 			EnableGlobalBroadcast(wants: true);
 			((FacepunchBehaviour)this).Invoke((Action)Begin, fuseLength);
 			pickup.enabled = false;
@@ -3116,18 +3119,23 @@ public class BaseFirework : BaseCombatEntity, IIgniteable
 
 	public virtual void Begin()
 	{
-		SetFlag(Flags.OnFire, b: false);
-		SetFlag(Flags.On, b: true, recursive: false, networkupdate: false);
-		SendNetworkUpdate_Flags();
+		using (FlagsUpdateScope flagsUpdateScope = StartSetFlags(FlagsUpdateMode.SendNetworkUpdate_Flags))
+		{
+			flagsUpdateScope.Set(Flags.OnFire, b: false);
+			flagsUpdateScope.Set(Flags.On, b: true);
+		}
 		Interface.CallHook("OnFireworkStarted", (object)this);
 		((FacepunchBehaviour)this).Invoke((Action)OnExhausted, activityLength);
 	}
 
 	public virtual void OnExhausted()
 	{
-		SetFlag(Flags.Reserved8, b: true, recursive: false, networkupdate: false);
-		SetFlag(Flags.OnFire, b: false, recursive: false, networkupdate: false);
-		SetFlag(Flags.On, b: false, recursive: false, networkupdate: false);
+		using (FlagsUpdateScope flagsUpdateScope = StartSetFlags(FlagsUpdateMode.Local))
+		{
+			flagsUpdateScope.Set(Flags.Reserved8, b: true);
+			flagsUpdateScope.Set(Flags.OnFire, b: false);
+			flagsUpdateScope.Set(Flags.On, b: false);
+		}
 		EnableGlobalBroadcast(wants: false);
 		SendNetworkUpdate_Flags();
 		Interface.CallHook("OnFireworkExhausted", (object)this);
@@ -3170,12 +3178,15 @@ public class BaseFirework : BaseCombatEntity, IIgniteable
 		{
 			if (NumActiveFireworks() >= maxActiveFireworks)
 			{
-				SetFlag(Flags.OnFire, b: true);
+				using (FlagsUpdateScope flagsUpdateScope = StartSetFlags(FlagsUpdateMode.SendNetworkUpdate))
+				{
+					flagsUpdateScope.Set(Flags.OnFire, b: true);
+				}
 				((FacepunchBehaviour)this).Invoke((Action)StaggeredTryLightFuse, 0.35f);
 				return;
 			}
 			_activeFireworks.Add(this);
-			SetFlag(Flags.OnFire, b: false, recursive: false, networkupdate: false);
+			SetFlagLocal(Flags.OnFire, b: false);
 		}
 		((FacepunchBehaviour)this).Invoke((Action)TryLightFuse, Random.Range(0.1f, 0.3f));
 	}
@@ -3327,9 +3338,9 @@ public class PatternFirework : MortarFirework, IUGCBrowserEntity
 		ShellFuseLength = FuseLength.Medium;
 	}
 
-	[RPC_Server.CallsPerSecond(5uL)]
-	[RPC_Server.IsVisible(3f)]
 	[RPC_Server]
+	[RPC_Server.IsVisible(3f)]
+	[RPC_Server.CallsPerSecond(5uL)]
 	private void StartOpenDesigner(RPCMessage rpc)
 	{
 		if (PlayerCanModify(rpc.player))
@@ -3338,10 +3349,10 @@ public class PatternFirework : MortarFirework, IUGCBrowserEntity
 		}
 	}
 
-	[RPC_Server.InputValidation(new Type[] { typeof(Design) })]
-	[RPC_Server.IsVisible(3f)]
-	[RPC_Server]
 	[RPC_Server.CallsPerSecond(5uL)]
+	[RPC_Server.IsVisible(3f)]
+	[RPC_Server.InputValidation(new Type[] { typeof(Design) })]
+	[RPC_Server]
 	private void ServerSetFireworkDesign(RPCMessage rpc)
 	{
 		//IL_00d1: Unknown result type (might be due to invalid IL or missing references)
@@ -3382,9 +3393,9 @@ public class PatternFirework : MortarFirework, IUGCBrowserEntity
 		SendNetworkUpdateImmediate();
 	}
 
-	[RPC_Server.CallsPerSecond(5uL)]
-	[RPC_Server.IsVisible(3f)]
 	[RPC_Server]
+	[RPC_Server.IsVisible(3f)]
+	[RPC_Server.CallsPerSecond(5uL)]
 	private void SetShellFuseLength(RPCMessage rpc)
 	{
 		if (PlayerCanModify(rpc.player))
@@ -3680,8 +3691,8 @@ public class PatternFireworkShell : FireworkShell
 
 	public float Scale = 5f;
 
-	[Header("Random Design")]
 	[MinMax(0f, 1f)]
+	[Header("Random Design")]
 	public MinMax RandomSaturation = new MinMax(0f, 0.5f);
 
 	[MinMax(0f, 1f)]
@@ -3820,7 +3831,17 @@ public class FogMachine : ContainerIOEntity, IAlwaysOn
 
 	private float _cacheTimeout;
 
+	private Action _startFoggingCB;
+
+	private Action EnableFogFieldCB;
+
+	private Action DisableNozzleCB;
+
+	private Action FinishFoggingCB;
+
 	private float pendingFuel;
+
+	private Action StartFoggingCB => StartFogging;
 
 	public bool IsEmitting()
 	{
@@ -3832,26 +3853,31 @@ public class FogMachine : ContainerIOEntity, IAlwaysOn
 		return HasFlag(Flags.Reserved5);
 	}
 
-	[RPC_Server.IsVisible(3f)]
 	[RPC_Server]
+	[RPC_Server.IsVisible(3f)]
 	public void SetFogOn(RPCMessage msg)
 	{
 		if (!IsEmitting() && !IsOn() && HasFuel() && msg.player.CanBuild())
 		{
-			SetFlag(Flags.On, b: true);
-			((FacepunchBehaviour)this).InvokeRepeating((Action)StartFogging, 0f, fogLength - 1f);
+			using (FlagsUpdateScope flagsUpdateScope = StartSetFlags(FlagsUpdateMode.SendNetworkUpdate))
+			{
+				flagsUpdateScope.Set(Flags.On, b: true);
+			}
+			((FacepunchBehaviour)this).InvokeRepeating(StartFoggingCB, 0f, fogLength - 1f);
 		}
 	}
 
-	[RPC_Server.IsVisible(3f)]
 	[RPC_Server]
+	[RPC_Server.IsVisible(3f)]
 	public void SetFogOff(RPCMessage msg)
 	{
-		if (IsOn() && msg.player.CanBuild())
+		if (!IsOn() || !msg.player.CanBuild())
 		{
-			((FacepunchBehaviour)this).CancelInvoke((Action)StartFogging);
-			SetFlag(Flags.On, b: false);
+			return;
 		}
+		((FacepunchBehaviour)this).CancelInvoke(StartFoggingCB);
+		using FlagsUpdateScope flagsUpdateScope = StartSetFlags(FlagsUpdateMode.SendNetworkUpdate);
+		flagsUpdateScope.Set(Flags.On, b: false);
 	}
 
 	[RPC_Server]
@@ -3859,15 +3885,19 @@ public class FogMachine : ContainerIOEntity, IAlwaysOn
 	public void SetMotionDetection(RPCMessage msg)
 	{
 		bool flag = msg.read.Bit();
-		if (msg.player.CanBuild())
+		if (!msg.player.CanBuild())
 		{
-			SetFlag(Flags.Reserved9, flag);
+			return;
+		}
+		using (FlagsUpdateScope flagsUpdateScope = StartSetFlags(FlagsUpdateMode.SendNetworkUpdate))
+		{
+			flagsUpdateScope.Set(Flags.Reserved9, flag);
 			if (flag)
 			{
-				SetFlag(Flags.On, b: false);
+				flagsUpdateScope.Set(Flags.On, b: false);
 			}
-			UpdateMotionMode();
 		}
+		UpdateMotionMode();
 	}
 
 	public void UpdateMotionMode()
@@ -3933,49 +3963,73 @@ public class FogMachine : ContainerIOEntity, IAlwaysOn
 
 	public void StartFogging()
 	{
-		if (!UseFuel(1f))
+		using (FlagsUpdateScope flagsUpdateScope = StartSetFlags(FlagsUpdateMode.SendNetworkUpdate))
 		{
-			((FacepunchBehaviour)this).CancelInvoke((Action)StartFogging);
-			SetFlag(Flags.On, b: false);
-			return;
+			if (!UseFuel(1f))
+			{
+				((FacepunchBehaviour)this).CancelInvoke(StartFoggingCB);
+				flagsUpdateScope.Set(Flags.On, b: false);
+				return;
+			}
+			flagsUpdateScope.Set(Flags.Reserved6, b: true);
 		}
-		SetFlag(Flags.Reserved6, b: true);
-		((FacepunchBehaviour)this).Invoke((Action)EnableFogField, 1f);
-		((FacepunchBehaviour)this).Invoke((Action)DisableNozzle, nozzleBlastDuration);
-		((FacepunchBehaviour)this).Invoke((Action)FinishFogging, fogLength);
+		if (EnableFogFieldCB == null)
+		{
+			EnableFogFieldCB = EnableFogField;
+		}
+		((FacepunchBehaviour)this).Invoke(EnableFogFieldCB, 1f);
+		if (DisableNozzleCB == null)
+		{
+			DisableNozzleCB = DisableNozzle;
+		}
+		((FacepunchBehaviour)this).Invoke(DisableNozzleCB, nozzleBlastDuration);
+		if (FinishFoggingCB == null)
+		{
+			FinishFoggingCB = FinishFogging;
+		}
+		((FacepunchBehaviour)this).Invoke(FinishFoggingCB, fogLength);
 	}
 
 	public virtual void EnableFogField()
 	{
-		SetFlag(Flags.Reserved10, b: true);
+		using FlagsUpdateScope flagsUpdateScope = StartSetFlags(FlagsUpdateMode.SendNetworkUpdate);
+		flagsUpdateScope.Set(Flags.Reserved10, b: true);
 	}
 
 	public void DisableNozzle()
 	{
-		SetFlag(Flags.Reserved6, b: false);
+		using FlagsUpdateScope flagsUpdateScope = StartSetFlags(FlagsUpdateMode.SendNetworkUpdate);
+		flagsUpdateScope.Set(Flags.Reserved6, b: false);
 	}
 
 	public virtual void FinishFogging()
 	{
-		SetFlag(Flags.Reserved10, b: false);
+		using FlagsUpdateScope flagsUpdateScope = StartSetFlags(FlagsUpdateMode.SendNetworkUpdate);
+		flagsUpdateScope.Set(Flags.Reserved10, b: false);
 	}
 
 	public override void PostServerLoad()
 	{
 		base.PostServerLoad();
-		SetFlag(Flags.Reserved10, b: false);
-		SetFlag(Flags.Reserved6, b: false);
-		SetFlag(Flags.Reserved5, HasFuel());
+		using (FlagsUpdateScope flagsUpdateScope = StartSetFlags(FlagsUpdateMode.SendNetworkUpdate))
+		{
+			flagsUpdateScope.Set(Flags.Reserved10, b: false);
+			flagsUpdateScope.Set(Flags.Reserved6, b: false);
+			flagsUpdateScope.Set(Flags.Reserved5, HasFuel());
+		}
 		if (IsOn())
 		{
-			((FacepunchBehaviour)this).InvokeRepeating((Action)StartFogging, 0f, fogLength - 1f);
+			((FacepunchBehaviour)this).InvokeRepeating(StartFoggingCB, 0f, fogLength - 1f);
 		}
 		UpdateMotionMode();
 	}
 
 	public override void PlayerStoppedLooting(BasePlayer player)
 	{
-		SetFlag(Flags.Reserved5, HasFuel());
+		using (FlagsUpdateScope flagsUpdateScope = StartSetFlags(FlagsUpdateMode.SendNetworkUpdate))
+		{
+			flagsUpdateScope.Set(Flags.Reserved5, HasFuel());
+		}
 		base.PlayerStoppedLooting(player);
 	}
 
@@ -4044,18 +4098,19 @@ public class FogMachine : ContainerIOEntity, IAlwaysOn
 			flag = false;
 			break;
 		}
+		using FlagsUpdateScope flagsUpdateScope = StartSetFlags(FlagsUpdateMode.SendNetworkUpdate);
 		if (flag)
 		{
 			if (!IsEmitting() && !IsOn() && HasFuel())
 			{
-				SetFlag(Flags.On, b: true);
-				((FacepunchBehaviour)this).InvokeRepeating((Action)StartFogging, 0f, fogLength - 1f);
+				flagsUpdateScope.Set(Flags.On, b: true);
+				((FacepunchBehaviour)this).InvokeRepeating(StartFoggingCB, 0f, fogLength - 1f);
 			}
 		}
 		else if (IsOn())
 		{
-			((FacepunchBehaviour)this).CancelInvoke((Action)StartFogging);
-			SetFlag(Flags.On, b: false);
+			((FacepunchBehaviour)this).CancelInvoke(StartFoggingCB);
+			flagsUpdateScope.Set(Flags.On, b: false);
 		}
 	}
 
@@ -4075,24 +4130,28 @@ public class FogMachine : ContainerIOEntity, IAlwaysOn
 
 	public void SetAlwaysOn(bool flag)
 	{
-		SetFlag(Flags.Reserved11, flag);
+		using (FlagsUpdateScope flagsUpdateScope = StartSetFlags(FlagsUpdateMode.SendNetworkUpdate))
+		{
+			flagsUpdateScope.Set(Flags.Reserved11, flag);
+		}
 		AlwaysOnToggled(flag);
 	}
 
 	public void AlwaysOnToggled(bool flag)
 	{
+		using FlagsUpdateScope flagsUpdateScope = StartSetFlags(FlagsUpdateMode.SendNetworkUpdate);
 		if (flag)
 		{
 			if (!IsEmitting() && !IsOn() && HasFuel())
 			{
-				SetFlag(Flags.On, b: true);
-				((FacepunchBehaviour)this).InvokeRepeating((Action)StartFogging, 0f, fogLength - 1f);
+				flagsUpdateScope.Set(Flags.On, b: true);
+				((FacepunchBehaviour)this).InvokeRepeating(StartFoggingCB, 0f, fogLength - 1f);
 			}
 		}
 		else if (IsOn())
 		{
-			((FacepunchBehaviour)this).CancelInvoke((Action)StartFogging);
-			SetFlag(Flags.On, b: false);
+			((FacepunchBehaviour)this).CancelInvoke(StartFoggingCB);
+			flagsUpdateScope.Set(Flags.On, b: false);
 		}
 	}
 
@@ -4294,25 +4353,27 @@ public class StrobeLight : IOEntity
 
 	public float lifeTimeSeconds = 21600f;
 
-	public const Flags Flag_Slow = Flags.Reserved6;
+	public const Flags Flag_Slow = Flags.Reserved9;
 
-	public const Flags Flag_Med = Flags.Reserved7;
+	public const Flags Flag_Med = Flags.Reserved10;
 
-	public const Flags Flag_Fast = Flags.Reserved8;
+	public const Flags Flag_Fast = Flags.Reserved11;
 
 	private int currentSpeed = 1;
 
+	private Action SelfDamageCB;
+
 	public float GetFrequency()
 	{
-		if (HasFlag(Flags.Reserved6))
+		if (HasFlag(Flags.Reserved9))
 		{
 			return speedSlow;
 		}
-		if (HasFlag(Flags.Reserved7))
+		if (HasFlag(Flags.Reserved10))
 		{
 			return speedMed;
 		}
-		if (HasFlag(Flags.Reserved8))
+		if (HasFlag(Flags.Reserved11))
 		{
 			return speedFast;
 		}
@@ -4332,41 +4393,49 @@ public class StrobeLight : IOEntity
 		ServerEnableStrobing(wantsOn);
 		if (wantsOn)
 		{
-			UpdateSpeedFlags();
+			UpdateSpeedFlags(sendNetworkUpdate: true);
 		}
 	}
 
-	[RPC_Server.IsVisible(3f)]
 	[RPC_Server]
+	[RPC_Server.IsVisible(3f)]
 	public void SetStrobeSpeed(RPCMessage msg)
 	{
 		int num = msg.read.Int32();
 		currentSpeed = num;
-		UpdateSpeedFlags();
+		UpdateSpeedFlags(sendNetworkUpdate: true);
 	}
 
-	public void UpdateSpeedFlags()
+	public void UpdateSpeedFlags(bool sendNetworkUpdate)
 	{
-		SetFlag(Flags.Reserved6, currentSpeed == 1);
-		SetFlag(Flags.Reserved7, currentSpeed == 2);
-		SetFlag(Flags.Reserved8, currentSpeed == 3);
+		using FlagsUpdateScope flagsUpdateScope = StartSetFlags(sendNetworkUpdate ? FlagsUpdateMode.SendNetworkUpdate : FlagsUpdateMode.Local);
+		flagsUpdateScope.Set(Flags.Reserved9, currentSpeed == 1);
+		flagsUpdateScope.Set(Flags.Reserved10, currentSpeed == 2);
+		flagsUpdateScope.Set(Flags.Reserved11, currentSpeed == 3);
 	}
 
 	public void ServerEnableStrobing(bool wantsOn)
 	{
-		SetFlag(Flags.Reserved6, b: false);
-		SetFlag(Flags.Reserved7, b: false);
-		SetFlag(Flags.Reserved8, b: false);
-		SetFlag(Flags.On, wantsOn);
+		using (FlagsUpdateScope flagsUpdateScope = StartSetFlags(FlagsUpdateMode.Local))
+		{
+			flagsUpdateScope.Set(Flags.Reserved9, b: false);
+			flagsUpdateScope.Set(Flags.Reserved10, b: false);
+			flagsUpdateScope.Set(Flags.Reserved11, b: false);
+			flagsUpdateScope.Set(Flags.On, wantsOn);
+			UpdateSpeedFlags(sendNetworkUpdate: false);
+		}
 		SendNetworkUpdateImmediate();
-		UpdateSpeedFlags();
+		if (SelfDamageCB == null)
+		{
+			SelfDamageCB = SelfDamage;
+		}
 		if (wantsOn)
 		{
-			((FacepunchBehaviour)this).InvokeRandomized((Action)SelfDamage, 0f, 10f, 0.1f);
+			((FacepunchBehaviour)this).InvokeRandomized(SelfDamageCB, 0f, 10f, 0.1f);
 		}
 		else
 		{
-			((FacepunchBehaviour)this).CancelInvoke((Action)SelfDamage);
+			((FacepunchBehaviour)this).CancelInvoke(SelfDamageCB);
 		}
 	}
 
@@ -4553,8 +4622,10 @@ public class CoalingTower : IOEntity, INotifyEntityTrigger
 
 	private TrainCarUnloadable tcUnloadingNow;
 
-	[Header("Coaling Tower")]
+	private Action CheckWagonLineUpCB;
+
 	[SerializeField]
+	[Header("Coaling Tower")]
 	private BoxCollider unloadingBounds;
 
 	[SerializeField]
@@ -4750,11 +4821,14 @@ public class CoalingTower : IOEntity, INotifyEntityTrigger
 	public override void PostServerLoad()
 	{
 		base.PostServerLoad();
-		SetFlag(Flags.Reserved2, b: false, recursive: false, networkupdate: false);
-		SetFlag(Flags.Reserved1, b: false, recursive: false, networkupdate: false);
-		SetFlag(Flags.Busy, b: false, recursive: false, networkupdate: false);
-		SetFlag(Flags.Reserved3, b: false, recursive: false, networkupdate: false);
-		SetFlag(Flags.Reserved4, b: false, recursive: false, networkupdate: false);
+		using (FlagsUpdateScope flagsUpdateScope = StartSetFlags(FlagsUpdateMode.Local))
+		{
+			flagsUpdateScope.Set(Flags.Reserved2, b: false);
+			flagsUpdateScope.Set(Flags.Reserved1, b: false);
+			flagsUpdateScope.Set(Flags.Busy, b: false);
+			flagsUpdateScope.Set(Flags.Reserved3, b: false);
+			flagsUpdateScope.Set(Flags.Reserved4, b: false);
+		}
 		SendNetworkUpdate();
 	}
 
@@ -4819,13 +4893,17 @@ public class CoalingTower : IOEntity, INotifyEntityTrigger
 			}
 			bool num = activeUnloadableRef.IsValid(serverside: true);
 			CheckWagonLinedUp(networkUpdate: false);
+			if (CheckWagonLineUpCB == null)
+			{
+				CheckWagonLineUpCB = CheckWagonLinedUp;
+			}
 			if (num)
 			{
-				((FacepunchBehaviour)this).InvokeRandomized((Action)CheckWagonLinedUp, 0.15f, 0.15f, 0.015f);
+				((FacepunchBehaviour)this).InvokeRandomized(CheckWagonLineUpCB, 0.15f, 0.15f, 0.015f);
 			}
 			else
 			{
-				((FacepunchBehaviour)this).CancelInvoke((Action)CheckWagonLinedUp);
+				((FacepunchBehaviour)this).CancelInvoke(CheckWagonLineUpCB);
 			}
 			SendNetworkUpdate();
 		}
@@ -4849,7 +4927,8 @@ public class CoalingTower : IOEntity, INotifyEntityTrigger
 		{
 			b = activeUnloadable.IsLinedUpToUnload(unloadingBounds);
 		}
-		SetFlag(Flags.Reserved2, b, recursive: false, networkUpdate);
+		using FlagsUpdateScope flagsUpdateScope = StartSetFlags(networkUpdate ? FlagsUpdateMode.SendNetworkUpdate : FlagsUpdateMode.Local);
+		flagsUpdateScope.Set(Flags.Reserved2, b);
 	}
 
 	private bool TryUnloadActiveWagon(out ActionAttemptStatus attemptStatus)
@@ -4865,7 +4944,10 @@ public class CoalingTower : IOEntity, INotifyEntityTrigger
 		{
 			return false;
 		}
-		SetFlag(Flags.Busy, b: true);
+		using (FlagsUpdateScope flagsUpdateScope = StartSetFlags(FlagsUpdateMode.SendNetworkUpdate))
+		{
+			flagsUpdateScope.Set(Flags.Busy, b: true);
+		}
 		((FacepunchBehaviour)this).Invoke((Action)WagonBeginUnloadAnim, vacuumStartDelay);
 		return true;
 	}
@@ -4873,15 +4955,19 @@ public class CoalingTower : IOEntity, INotifyEntityTrigger
 	private void WagonBeginUnloadAnim()
 	{
 		TrainCarUnloadable activeUnloadable = GetActiveUnloadable();
-		if ((Object)(object)activeUnloadable == (Object)null)
+		TrainWagonLootData.LootOption lootOption = null;
+		using (FlagsUpdateScope flagsUpdateScope = StartSetFlags(FlagsUpdateMode.SendNetworkUpdate))
 		{
-			SetFlag(Flags.Busy, b: false);
-			return;
-		}
-		if (!activeUnloadable.TryGetLootType(out var lootOption))
-		{
-			SetFlag(Flags.Busy, b: false);
-			return;
+			if ((Object)(object)activeUnloadable == (Object)null)
+			{
+				flagsUpdateScope.Set(Flags.Busy, b: false);
+				return;
+			}
+			if (!activeUnloadable.TryGetLootType(out lootOption))
+			{
+				flagsUpdateScope.Set(Flags.Busy, b: false);
+				return;
+			}
 		}
 		TrainWagonLootData.instance.TryGetIndexFromLoot(lootOption, out var index);
 		LootTypeIndex.Value = index;
@@ -4982,7 +5068,7 @@ public class CoalingTower : IOEntity, INotifyEntityTrigger
 			tcUnloadingNow.EndEmptyProcess();
 			tcUnloadingNow = null;
 		}
-		SetFlag(Flags.Busy, b: false, recursive: false, networkupdate: false);
+		SetFlagLocal(Flags.Busy, b: false);
 		SendNetworkUpdate();
 		if (status != 0)
 		{
@@ -5050,8 +5136,11 @@ public class CoalingTower : IOEntity, INotifyEntityTrigger
 
 	private void ShuntEnded(ActionAttemptStatus status)
 	{
-		SetFlag(Flags.Reserved3, b: false);
-		SetFlag(Flags.Reserved4, b: false);
+		using (FlagsUpdateScope flagsUpdateScope = StartSetFlags(FlagsUpdateMode.SendNetworkUpdate))
+		{
+			flagsUpdateScope.Set(Flags.Reserved3, b: false);
+			flagsUpdateScope.Set(Flags.Reserved4, b: false);
+		}
 		if (status != 0)
 		{
 			ClientRPC(RpcTarget.NetworkGroup("IssueDuringShunt"));
@@ -5074,9 +5163,13 @@ public class CoalingTower : IOEntity, INotifyEntityTrigger
 	{
 		if (TryShuntTrain(next: true, out var attemptStatus))
 		{
-			SetFlag(Flags.Reserved3, b: true);
+			using (FlagsUpdateScope flagsUpdateScope = StartSetFlags(FlagsUpdateMode.SendNetworkUpdate))
+			{
+				flagsUpdateScope.Set(Flags.Reserved3, b: true);
+				return;
+			}
 		}
-		else if ((Object)(object)msg.player != (Object)null)
+		if ((Object)(object)msg.player != (Object)null)
 		{
 			ClientRPC(RpcTarget.Player("ActionFailed", msg.player), (byte)attemptStatus, arg2: true);
 		}
@@ -5088,9 +5181,13 @@ public class CoalingTower : IOEntity, INotifyEntityTrigger
 	{
 		if (TryShuntTrain(next: false, out var attemptStatus))
 		{
-			SetFlag(Flags.Reserved4, b: true);
+			using (FlagsUpdateScope flagsUpdateScope = StartSetFlags(FlagsUpdateMode.SendNetworkUpdate))
+			{
+				flagsUpdateScope.Set(Flags.Reserved4, b: true);
+				return;
+			}
 		}
-		else if ((Object)(object)msg.player != (Object)null)
+		if ((Object)(object)msg.player != (Object)null)
 		{
 			ClientRPC(RpcTarget.Player("ActionFailed", msg.player), (byte)attemptStatus, arg2: true);
 		}
@@ -6127,9 +6224,10 @@ public class CargoShip : BaseEntity, ILargeVehicleForProjectiles
 
 	public void OnArrivedAtHarbor()
 	{
-		//IL_0035: Unknown result type (might be due to invalid IL or missing references)
-		//IL_003a: Unknown result type (might be due to invalid IL or missing references)
-		SetFlag(Flags.Reserved1, b: true);
+		//IL_003d: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0042: Unknown result type (might be due to invalid IL or missing references)
+		using FlagsUpdateScope flagsUpdateScope = StartSetFlags(FlagsUpdateMode.SendNetworkUpdate);
+		flagsUpdateScope.Set(Flags.Reserved1, b: true);
 		List<Transform> list = Pool.Get<List<Transform>>();
 		float num = Random.Range(dock_time * 0.05f, dock_time * 0.1f);
 		Enumerator<HarborCraneContainerPickup> enumerator = HarborCraneContainerPickup.AllCranes.GetEnumerator();
@@ -6170,11 +6268,11 @@ public class CargoShip : BaseEntity, ILargeVehicleForProjectiles
 		}
 		if (harborIndex == 0)
 		{
-			SetFlag(Flags.Reserved3, b: true);
+			flagsUpdateScope.Set(Flags.Reserved3, b: true);
 		}
 		else if (harborIndex == 1)
 		{
-			SetFlag(Flags.Reserved4, b: true);
+			flagsUpdateScope.Set(Flags.Reserved4, b: true);
 		}
 		((FacepunchBehaviour)this).Invoke((Action)LeaveHarbor, dock_time);
 		Interface.CallHook("OnCargoShipHarborArrived", (object)this);
@@ -6468,17 +6566,21 @@ public class CargoShip : BaseEntity, ILargeVehicleForProjectiles
 
 	public void StartEgress()
 	{
-		if (!isDoingHarborApproach && !egressing)
+		if (isDoingHarborApproach || egressing)
 		{
-			egressing = true;
-			if (Interface.CallHook("OnCargoShipEgress", (object)this) == null)
+			return;
+		}
+		egressing = true;
+		if (Interface.CallHook("OnCargoShipEgress", (object)this) == null)
+		{
+			((FacepunchBehaviour)this).CancelInvoke((Action)PlayHorn);
+			radiation.SetActive(true);
+			using (FlagsUpdateScope flagsUpdateScope = StartSetFlags(FlagsUpdateMode.SendNetworkUpdate))
 			{
-				((FacepunchBehaviour)this).CancelInvoke((Action)PlayHorn);
-				radiation.SetActive(true);
-				SetFlag(Flags.Reserved8, b: true);
-				((FacepunchBehaviour)this).InvokeRepeating((Action)UpdateRadiation, 10f, 1f);
-				((FacepunchBehaviour)this).Invoke((Action)DelayedDestroy, 60f * egress_duration_minutes);
+				flagsUpdateScope.Set(Flags.Reserved8, b: true);
 			}
+			((FacepunchBehaviour)this).InvokeRepeating((Action)UpdateRadiation, 10f, 1f);
+			((FacepunchBehaviour)this).Invoke((Action)DelayedDestroy, 60f * egress_duration_minutes);
 		}
 	}
 
@@ -7009,8 +7111,11 @@ public class CargoShip : BaseEntity, ILargeVehicleForProjectiles
 			Debug.Log((object)"Cargo is leaving harbor.");
 		}
 		PlayHorn();
-		SetFlag(Flags.Reserved1, b: false);
-		SetFlag(Flags.Reserved2, b: true);
+		using (FlagsUpdateScope flagsUpdateScope = StartSetFlags(FlagsUpdateMode.SendNetworkUpdate))
+		{
+			flagsUpdateScope.Set(Flags.Reserved1, b: false);
+			flagsUpdateScope.Set(Flags.Reserved2, b: true);
+		}
 		currentHarborApproachNode++;
 		Interface.CallHook("OnCargoShipHarborLeave", (object)this);
 	}
@@ -7359,7 +7464,8 @@ public class TriggerVehiclePush : TriggerBase, IServerComponent
 		//IL_01bf: Unknown result type (might be due to invalid IL or missing references)
 		//IL_01c7: Unknown result type (might be due to invalid IL or missing references)
 		//IL_01ce: Unknown result type (might be due to invalid IL or missing references)
-		//IL_01d3: Unknown result type (might be due to invalid IL or missing references)
+		//IL_01d9: Unknown result type (might be due to invalid IL or missing references)
+		//IL_01de: Unknown result type (might be due to invalid IL or missing references)
 		//IL_0167: Unknown result type (might be due to invalid IL or missing references)
 		//IL_0169: Unknown result type (might be due to invalid IL or missing references)
 		//IL_016e: Unknown result type (might be due to invalid IL or missing references)
@@ -7368,10 +7474,11 @@ public class TriggerVehiclePush : TriggerBase, IServerComponent
 		//IL_017d: Unknown result type (might be due to invalid IL or missing references)
 		//IL_0180: Unknown result type (might be due to invalid IL or missing references)
 		//IL_0185: Unknown result type (might be due to invalid IL or missing references)
-		//IL_01e5: Unknown result type (might be due to invalid IL or missing references)
-		//IL_01ec: Unknown result type (might be due to invalid IL or missing references)
-		//IL_01f3: Unknown result type (might be due to invalid IL or missing references)
-		//IL_01f8: Unknown result type (might be due to invalid IL or missing references)
+		//IL_01f0: Unknown result type (might be due to invalid IL or missing references)
+		//IL_01f7: Unknown result type (might be due to invalid IL or missing references)
+		//IL_01fe: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0209: Unknown result type (might be due to invalid IL or missing references)
+		//IL_020e: Unknown result type (might be due to invalid IL or missing references)
 		//IL_01ad: Unknown result type (might be due to invalid IL or missing references)
 		//IL_01b2: Unknown result type (might be due to invalid IL or missing references)
 		//IL_01b7: Unknown result type (might be due to invalid IL or missing references)
@@ -7410,10 +7517,10 @@ public class TriggerVehiclePush : TriggerBase, IServerComponent
 					Vector3 val4 = ((Component)this).transform.InverseTransformDirection(val3);
 					val3 = ((!(Vector3.Angle(val4, axisToSnapTo) < Vector3.Angle(val4, -axisToSnapTo))) ? (-((Component)this).transform.TransformDirection(axisToSnapTo)) : ((Component)this).transform.TransformDirection(axisToSnapTo));
 				}
-				val.AddForceAtPosition(val3 * maxPushVelocity * num3, val2, (ForceMode)5);
+				val.AddForceAtPosition(val3 * maxPushVelocity * num3 * val.mass, val2, (ForceMode)0);
 				if (num4 > 0f)
 				{
-					val.AddForceAtPosition(val3 * 1f * num4, val2, (ForceMode)2);
+					val.AddForceAtPosition(val3 * 1f * num4 * val.mass, val2, (ForceMode)1);
 				}
 			}
 		}
@@ -7474,12 +7581,12 @@ using UnityEngine;
 
 public class RHIBVisuals : FacepunchBehaviour, INotifyLOD, IClientComponent
 {
-	[SerializeField]
 	[Header("RHIB")]
+	[SerializeField]
 	private RHIB _owner;
 
-	[SerializeField]
 	[Header("References")]
+	[SerializeField]
 	private Transform _compass;
 
 	[Header("References - Screens")]

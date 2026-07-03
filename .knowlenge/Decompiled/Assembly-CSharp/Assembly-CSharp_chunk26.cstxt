@@ -448,9 +448,15 @@ public class State_ScientistRush : State_MoveToTarget
 		//IL_002a: Unknown result type (might be due to invalid IL or missing references)
 		//IL_002f: Unknown result type (might be due to invalid IL or missing references)
 		//IL_0036: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0061: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0066: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0064: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0069: Unknown result type (might be due to invalid IL or missing references)
+		//IL_006f: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0074: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0079: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0081: Unknown result type (might be due to invalid IL or missing references)
 		//IL_004c: Unknown result type (might be due to invalid IL or missing references)
+		//IL_008f: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0094: Unknown result type (might be due to invalid IL or missing references)
 		destination = default(Vector3);
 		if (!base.Senses.FindTargetLKP(out var lkp, applyHeightOffset: false, predict: true))
 		{
@@ -459,6 +465,12 @@ public class State_ScientistRush : State_MoveToTarget
 		Matrix4x4 worldToNavMeshSpace = Owner.WorldToNavMeshSpace;
 		Vector3 positionNS = ((Matrix4x4)(ref worldToNavMeshSpace)).MultiplyPoint(lkp);
 		if (!base.Agent.SamplePosition(positionNS, out var hitNS, 3.5f) && !base.Agent.SamplePosition(positionNS, out hitNS, 20f))
+		{
+			return false;
+		}
+		Matrix4x4 navMeshToWorldSpace = Owner.NavMeshToWorldSpace;
+		Vector3 position = ((Matrix4x4)(ref navMeshToWorldSpace)).MultiplyPoint(((NavMeshHit)(ref hitNS)).position);
+		if (base.Agent.IsInWater(position))
 		{
 			return false;
 		}
@@ -1971,8 +1983,8 @@ using Rust;
 using Rust.Ai.Gen2;
 using UnityEngine;
 
-[SoftRequireComponent(typeof(BlackboardComponent), typeof(NpcBarkManager))]
 [SoftRequireComponent(typeof(NpcZoneComponent), typeof(NPCEncounterTimer), typeof(NpcShootingComponent))]
+[SoftRequireComponent(typeof(BlackboardComponent), typeof(NpcBarkManager))]
 [SoftRequireComponent(typeof(RustNavMeshAgent), typeof(RootMotionPlayer), typeof(SenseComponent))]
 public class Scientist2FSM_Heavy : FSMComponent
 {
@@ -2121,9 +2133,9 @@ public class Scientist2FSM_Heavy : FSMComponent
 using Rust.Ai.Gen2;
 using UnityEngine;
 
-[SoftRequireComponent(typeof(RustNavMeshAgent), typeof(RootMotionPlayer), typeof(SenseComponent))]
 [SoftRequireComponent(typeof(BlackboardComponent), typeof(NpcBarkManager))]
 [SoftRequireComponent(typeof(NpcZoneComponent), typeof(NPCEncounterTimer), typeof(NpcShootingComponent))]
+[SoftRequireComponent(typeof(RustNavMeshAgent), typeof(RootMotionPlayer), typeof(SenseComponent))]
 public class Scientist2FSM_Shotgun : FSMComponent
 {
 	public State_PatrolIdle idle = new State_PatrolIdle();
@@ -2847,7 +2859,6 @@ using System;
 using Rust;
 using Rust.Ai.Gen2;
 using UnityEngine;
-using UnityEngine.AI;
 
 [Serializable]
 public class State_AttackUnreachableWarped : FSMStateBase
@@ -2937,7 +2948,6 @@ public class State_AttackUnreachableWarped : FSMStateBase
 		didHit = false;
 		elapsedTime = 0f;
 		targetLock = base.Senses.LockCurrentTarget();
-		((Behaviour)((Component)Owner).GetComponent<NavMeshAgent>()).enabled = false;
 		animState = RootMotionPlayer.PlayServerState.TakeFromPool(animClip, ((Component)Owner).transform);
 		animState.warps = warps;
 		animState.constrainToNavmesh = false;
@@ -3084,7 +3094,6 @@ public class State_AttackUnreachableWarped : FSMStateBase
 	public override void OnStateExit()
 	{
 		base.AnimPlayer.StopServerAndReturnToPool(ref animState);
-		((Behaviour)((Component)Owner).GetComponent<NavMeshAgent>()).enabled = true;
 		base.Senses.UnlockTarget(ref targetLock);
 		base.Agent.Unpause(this);
 		if (phase != Phase.PostJumpBack)
@@ -3147,7 +3156,10 @@ public class State_DragCorpse : FSMStateBase
 			return EFSMStateStatus.Failure;
 		}
 		corpse = food2;
-		corpse.SetFlag(BaseEntity.Flags.Reserved3, b: true);
+		using (BaseEntity.FlagsUpdateScope flagsUpdateScope = corpse.StartSetFlags(BaseEntity.FlagsUpdateMode.SendNetworkUpdate))
+		{
+			flagsUpdateScope.Set(BaseEntity.Flags.Reserved3, b: true);
+		}
 		((FacepunchBehaviour)Owner).InvokeRepeatingFixedTime(UpdateCorpsePositionAction);
 		animState = base.AnimPlayer.PlayServerAndTakeFromPool(Animation);
 		return base.OnStateEnter(payload);
@@ -3224,7 +3236,8 @@ public class State_DragCorpse : FSMStateBase
 		if (corpse.IsValid())
 		{
 			SingletonComponent<NpcFoodManager>.Instance.Add(corpse);
-			corpse.SetFlag(BaseEntity.Flags.Reserved3, b: false);
+			using BaseEntity.FlagsUpdateScope flagsUpdateScope = corpse.StartSetFlags(BaseEntity.FlagsUpdateMode.SendNetworkUpdate);
+			flagsUpdateScope.Set(BaseEntity.Flags.Reserved3, b: false);
 		}
 		corpse = null;
 		((FacepunchBehaviour)Owner).CancelInvokeFixedTime(UpdateCorpsePositionAction);
@@ -5118,7 +5131,6 @@ using System;
 using Rust;
 using Rust.Ai.Gen2;
 using UnityEngine;
-using UnityEngine.AI;
 
 [Serializable]
 public class State_AttackUnreachable : FSMStateBase
@@ -5203,7 +5215,6 @@ public class State_AttackUnreachable : FSMStateBase
 		elapsedTime = 0f;
 		targetLock = base.Senses.LockCurrentTarget();
 		animState = base.AnimPlayer.PlayServerAndTakeFromPool(animClip.inPlaceAnimation);
-		((Behaviour)((Component)Owner).GetComponent<NavMeshAgent>()).enabled = false;
 		SetPhase(Phase.PreJump);
 		return base.OnStateEnter(payload);
 	}
@@ -5394,7 +5405,6 @@ public class State_AttackUnreachable : FSMStateBase
 	public override void OnStateExit()
 	{
 		base.AnimPlayer.StopServerAndReturnToPool(ref animState);
-		((Behaviour)((Component)Owner).GetComponent<NavMeshAgent>()).enabled = true;
 		base.Senses.UnlockTarget(ref targetLock);
 		base.Agent.Unpause(this);
 		if (phase != Phase.PostJumpBack)
@@ -5564,8 +5574,8 @@ using Facepunch;
 using Rust.Ai.Gen2;
 using UnityEngine;
 
-[SoftRequireComponent(typeof(BlackboardComponent), typeof(NPCEncounterTimer))]
 [SoftRequireComponent(typeof(RustNavMeshAgent), typeof(RootMotionPlayer), typeof(SenseComponent))]
+[SoftRequireComponent(typeof(BlackboardComponent), typeof(NPCEncounterTimer))]
 public class FSMComponent : EntityComponent<BaseEntity>
 {
 	public class TickFSMWorkQueue : PersistentObjectWorkQueue<FSMComponent>
@@ -8860,8 +8870,8 @@ public class LimitedTurnNavAgent : EntityComponent<BaseEntity>
 	[SerializeField]
 	private SteeringMode steeringMode = SteeringMode.LimitedTurnRate;
 
-	[SerializeField]
 	[Header("Speed")]
+	[SerializeField]
 	private float sneakSpeed = 0.6f;
 
 	[SerializeField]
@@ -8952,7 +8962,8 @@ public class LimitedTurnNavAgent : EntityComponent<BaseEntity>
 		}
 		private set
 		{
-			base.baseEntity.SetFlag(BaseEntity.Flags.Reserved1, value);
+			using BaseEntity.FlagsUpdateScope flagsUpdateScope = base.baseEntity.StartSetFlags(BaseEntity.FlagsUpdateMode.SendNetworkUpdate);
+			flagsUpdateScope.Set(BaseEntity.Flags.Reserved1, value);
 		}
 	}
 
@@ -8964,7 +8975,8 @@ public class LimitedTurnNavAgent : EntityComponent<BaseEntity>
 		}
 		set
 		{
-			base.baseEntity.SetFlag(BaseEntity.Flags.Reserved2, value);
+			using BaseEntity.FlagsUpdateScope flagsUpdateScope = base.baseEntity.StartSetFlags(BaseEntity.FlagsUpdateMode.SendNetworkUpdate);
+			flagsUpdateScope.Set(BaseEntity.Flags.Reserved2, value);
 		}
 	}
 
@@ -9913,8 +9925,8 @@ public class RustNavMeshAgent : EntityComponent<BaseEntity>, IServerComponent
 
 	private SenseComponent senses;
 
-	[SerializeField]
 	[Header("Base fields")]
+	[SerializeField]
 	private int _agentTypeID;
 
 	[SerializeField]
@@ -10539,7 +10551,8 @@ public class RustNavMeshAgent : EntityComponent<BaseEntity>, IServerComponent
 		}
 		set
 		{
-			base.baseEntity.SetFlag(BaseEntity.Flags.Reserved2, value);
+			using BaseEntity.FlagsUpdateScope flagsUpdateScope = base.baseEntity.StartSetFlags(BaseEntity.FlagsUpdateMode.SendNetworkUpdate);
+			flagsUpdateScope.Set(BaseEntity.Flags.Reserved2, value);
 		}
 	}
 
@@ -10547,13 +10560,19 @@ public class RustNavMeshAgent : EntityComponent<BaseEntity>, IServerComponent
 	{
 		get
 		{
+			bool wasPaused = pausingSources.Count > 0;
 			foreach (object pausingSource in pausingSources)
 			{
 				if (pausingSource.IsUnityNull())
 				{
+					if (AI.logIssues)
+					{
+						RustNavigation.LogError("Removing null pausing source from " + ((Object)base.baseEntity).name + ".");
+					}
 					pausingSources.Remove(pausingSource);
 				}
 			}
+			OnChange(wasPaused);
 			return pausingSources.Count > 0;
 		}
 	}
@@ -10568,13 +10587,18 @@ public class RustNavMeshAgent : EntityComponent<BaseEntity>, IServerComponent
 		}
 		set
 		{
-			base.baseEntity.SetFlag(BaseEntity.Flags.Reserved1, value);
+			using BaseEntity.FlagsUpdateScope flagsUpdateScope = base.baseEntity.StartSetFlags(BaseEntity.FlagsUpdateMode.SendNetworkUpdate);
+			flagsUpdateScope.Set(BaseEntity.Flags.Reserved1, value);
 		}
 	}
 
 	private bool TryGetAgent(out NavMeshAgent agent)
 	{
 		agent = null;
+		if (!RustNavigation.EnsureUnityNavmesh())
+		{
+			return false;
+		}
 		if ((Object)(object)_agent == (Object)null)
 		{
 			_agent = ((Component)this).gameObject.GetComponent<NavMeshAgent>();
@@ -10910,50 +10934,49 @@ public class RustNavMeshAgent : EntityComponent<BaseEntity>, IServerComponent
 
 	private void Tick(float deltaTime)
 	{
-		//IL_02aa: Unknown result type (might be due to invalid IL or missing references)
-		//IL_02af: Unknown result type (might be due to invalid IL or missing references)
-		//IL_010d: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0113: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0118: Unknown result type (might be due to invalid IL or missing references)
-		//IL_011d: Unknown result type (might be due to invalid IL or missing references)
-		//IL_007b: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0086: Unknown result type (might be due to invalid IL or missing references)
-		//IL_008b: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0098: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00c6: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00cb: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00cf: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00d4: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00d9: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00de: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00e3: Unknown result type (might be due to invalid IL or missing references)
-		//IL_01e2: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0187: Unknown result type (might be due to invalid IL or missing references)
-		//IL_018c: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0232: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0272: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0277: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0105: Unknown result type (might be due to invalid IL or missing references)
+		//IL_010b: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0110: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0115: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0073: Unknown result type (might be due to invalid IL or missing references)
+		//IL_007e: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0083: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0090: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00be: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00c3: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00c7: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00cc: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00d1: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00d6: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00db: Unknown result type (might be due to invalid IL or missing references)
+		//IL_01aa: Unknown result type (might be due to invalid IL or missing references)
+		//IL_01fa: Unknown result type (might be due to invalid IL or missing references)
+		//IL_01ff: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0181: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0186: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0200: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0202: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0207: Unknown result type (might be due to invalid IL or missing references)
+		//IL_020c: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0210: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0217: Unknown result type (might be due to invalid IL or missing references)
 		//IL_0237: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0238: Unknown result type (might be due to invalid IL or missing references)
-		//IL_023a: Unknown result type (might be due to invalid IL or missing references)
-		//IL_023f: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0244: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0248: Unknown result type (might be due to invalid IL or missing references)
+		//IL_023c: Unknown result type (might be due to invalid IL or missing references)
+		//IL_023e: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0247: Unknown result type (might be due to invalid IL or missing references)
+		//IL_024c: Unknown result type (might be due to invalid IL or missing references)
 		//IL_024f: Unknown result type (might be due to invalid IL or missing references)
-		//IL_026f: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0274: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0276: Unknown result type (might be due to invalid IL or missing references)
-		//IL_027f: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0284: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0287: Unknown result type (might be due to invalid IL or missing references)
-		//IL_028f: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0292: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0297: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0257: Unknown result type (might be due to invalid IL or missing references)
+		//IL_025a: Unknown result type (might be due to invalid IL or missing references)
+		//IL_025f: Unknown result type (might be due to invalid IL or missing references)
 		try
 		{
 			TimeWarning val = TimeWarning.New("RustNavMeshAgent.Tick", 0);
 			try
 			{
-				TryGetAgent(out var agent);
-				if (AI.useUnityNavmesh && (Object)(object)agent != (Object)null)
+				if (AI.useUnityNavmesh && TryGetAgent(out var agent))
 				{
 					if (letUnityMoveAgentIfPossible)
 					{
@@ -10990,19 +11013,19 @@ public class RustNavMeshAgent : EntityComponent<BaseEntity>, IServerComponent
 				Vector3 val3;
 				if (AI.useUnityNavmesh)
 				{
-					if ((Object)(object)agent == (Object)null)
+					if (!TryGetAgent(out var agent2))
 					{
 						return;
 					}
-					val3 = agent.steeringTarget;
+					val3 = agent2.steeringTarget;
+					if (remainingDistance <= num2)
+					{
+						ResetPath();
+						return;
+					}
 				}
 				else
 				{
-					if (curWaypointIndex.HasValue)
-					{
-						curWaypointIndex.Value.ToString();
-					}
-					CurPathNS.corners.Count.ToString("F2");
 					bool reachedEnd = false;
 					if (!NavMeshHelpers.FindNextWayPointIndex(CurPathNS.corners, _nextPositionNS, curWaypointIndex.Value, out var newWaypointIndex, out reachedEnd, num2) || reachedEnd)
 					{
@@ -11184,34 +11207,34 @@ public class RustNavMeshAgent : EntityComponent<BaseEntity>, IServerComponent
 		//IL_0055: Unknown result type (might be due to invalid IL or missing references)
 		//IL_0056: Unknown result type (might be due to invalid IL or missing references)
 		//IL_005b: Unknown result type (might be due to invalid IL or missing references)
-		//IL_009f: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00a0: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00a1: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00a2: Unknown result type (might be due to invalid IL or missing references)
-		//IL_007c: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0084: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0089: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00ae: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00af: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00b0: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00b1: Unknown result type (might be due to invalid IL or missing references)
 		//IL_0039: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00e7: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00e8: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00f4: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00f5: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00fa: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00d6: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00d7: Unknown result type (might be due to invalid IL or missing references)
 		//IL_00d8: Unknown result type (might be due to invalid IL or missing references)
 		//IL_00d9: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00e5: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00e6: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00eb: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00c7: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00c8: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00c9: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00ca: Unknown result type (might be due to invalid IL or missing references)
-		//IL_011d: Unknown result type (might be due to invalid IL or missing references)
-		//IL_011e: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0165: Unknown result type (might be due to invalid IL or missing references)
-		//IL_016a: Unknown result type (might be due to invalid IL or missing references)
-		//IL_016c: Unknown result type (might be due to invalid IL or missing references)
-		//IL_017d: Unknown result type (might be due to invalid IL or missing references)
-		//IL_014b: Unknown result type (might be due to invalid IL or missing references)
-		//IL_014d: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0135: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0136: Unknown result type (might be due to invalid IL or missing references)
-		//IL_013b: Unknown result type (might be due to invalid IL or missing references)
+		//IL_008b: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0093: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0098: Unknown result type (might be due to invalid IL or missing references)
+		//IL_012c: Unknown result type (might be due to invalid IL or missing references)
+		//IL_012d: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0174: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0179: Unknown result type (might be due to invalid IL or missing references)
+		//IL_017b: Unknown result type (might be due to invalid IL or missing references)
+		//IL_018c: Unknown result type (might be due to invalid IL or missing references)
+		//IL_015a: Unknown result type (might be due to invalid IL or missing references)
+		//IL_015c: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0144: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0145: Unknown result type (might be due to invalid IL or missing references)
+		//IL_014a: Unknown result type (might be due to invalid IL or missing references)
 		TimeWarning val = TimeWarning.New("RustNavMeshAgent.Move", 0);
 		try
 		{
@@ -11230,7 +11253,7 @@ public class RustNavMeshAgent : EntityComponent<BaseEntity>, IServerComponent
 			Vector3 movedPos = _nextPositionNS;
 			if (AI.useUnityNavmesh)
 			{
-				if (!TryGetAgent(out var agent2))
+				if (!TryGetAgent(out var agent2) || !TryEnableAgent(agent2))
 				{
 					return;
 				}
@@ -11429,12 +11452,44 @@ public class RustNavMeshAgent : EntityComponent<BaseEntity>, IServerComponent
 
 	public bool Pause(object source)
 	{
-		return pausingSources.Add(source);
+		bool wasPaused = pausingSources.Count > 0;
+		bool result = pausingSources.Add(source);
+		OnChange(wasPaused);
+		return result;
 	}
 
 	public bool Unpause(object source)
 	{
-		return pausingSources.Remove(source);
+		bool wasPaused = pausingSources.Count > 0;
+		bool result = pausingSources.Remove(source);
+		OnChange(wasPaused);
+		return result;
+	}
+
+	private void OnChange(bool wasPaused)
+	{
+		//IL_0047: Unknown result type (might be due to invalid IL or missing references)
+		//IL_004c: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0055: Unknown result type (might be due to invalid IL or missing references)
+		//IL_005a: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0085: Unknown result type (might be due to invalid IL or missing references)
+		if (!wasPaused && pausingSources.Count > 0)
+		{
+			ResetPath();
+			if (AI.useUnityNavmesh && TryGetAgent(out var agent))
+			{
+				((Behaviour)agent).enabled = false;
+			}
+		}
+		else if (wasPaused && pausingSources.Count == 0)
+		{
+			Matrix4x4 worldToNavMeshSpace = base.baseEntity.WorldToNavMeshSpace;
+			bool flag = Warp(((Matrix4x4)(ref worldToNavMeshSpace)).MultiplyPoint3x4(((Component)this).transform.position));
+			if (AI.logIssues && !flag)
+			{
+				Debug.LogError((object)$"Failed to reproject {((Object)base.baseEntity).name} to current position {((Component)this).transform.position} after unpausing.", (Object)(object)this);
+			}
+		}
 	}
 
 	private static float GetBrakingDistance(float speed, float brakingDeceleration)
@@ -14024,37 +14079,42 @@ public class SenseComponent : EntityComponent<BaseEntity>, IServerComponent
 				PooledList<BaseEntity> val5 = Pool.Get<PooledList<BaseEntity>>();
 				try
 				{
-					foreach (var (baseEntity2, visibilityStatus2) in entitiesWeAreAwareOf)
+					((List<BaseEntity>)(object)val5).AddRange((IEnumerable<BaseEntity>)entitiesWeAreAwareOf.Keys);
+					foreach (BaseEntity item2 in (List<BaseEntity>)(object)val5)
 					{
-						if (!CanTarget(baseEntity2))
+						if (!entitiesWeAreAwareOf.TryGetValue(item2, out var value))
 						{
-							((List<BaseEntity>)(object)val5).Add(baseEntity2);
+							continue;
 						}
-						else if (!visibilityStatus2.IsVisible && visibilityStatus2.timeNotVisible > timeToForgetSightings.Value)
+						if (!CanTarget(item2))
 						{
-							((List<BaseEntity>)(object)val5).Add(baseEntity2);
+							if (Target.IsValid() && (Object)(object)Target == (Object)(object)item2)
+							{
+								ClearTarget(forget: false);
+							}
+							Forget(item2);
 						}
-						else if (!entitiesUpdatedThisFrame.Contains(baseEntity2))
+						else if (!value.IsVisible && value.timeNotVisible > timeToForgetSightings.Value)
+						{
+							if (Target.IsValid() && (Object)(object)Target == (Object)(object)item2)
+							{
+								ClearTarget(forget: false);
+							}
+							Forget(item2);
+						}
+						else if (!entitiesUpdatedThisFrame.Contains(item2))
 						{
 							if (IsInCombat)
 							{
-								UpdateEntityVisibility(baseEntity2, deltaTime);
+								UpdateEntityVisibility(item2, deltaTime);
 							}
-							else if (visibilityStatus2.IsVisible)
+							else if (value.IsVisible)
 							{
-								entitiesWeAreAwareOf[baseEntity2].UpdateVisibility(newVisibility: false, deltaTime, 0f, null, null);
+								entitiesWeAreAwareOf[item2].UpdateVisibility(newVisibility: false, deltaTime, 0f, null, null);
 							}
 						}
 					}
 					entitiesUpdatedThisFrame.Clear();
-					foreach (BaseEntity item2 in (List<BaseEntity>)(object)val5)
-					{
-						if (Target.IsValid() && (Object)(object)Target == (Object)(object)item2)
-						{
-							ClearTarget(forget: false);
-						}
-						Forget(item2);
-					}
 				}
 				finally
 				{
@@ -15322,7 +15382,8 @@ public class BackgroundTileBuilder : IDisposable
 			CreateCompactHeightFieldError,
 			CreatePolymeshError,
 			CreateDetailPolymeshError,
-			CreateAndAddNavDataError
+			CreateAndAddNavDataError,
+			ValidationError
 		}
 
 		public readonly int tx;
@@ -15865,6 +15926,11 @@ public class BackgroundTileBuilder : IDisposable
 			{
 				return new TileBuildResult(in buildRequest, TileBuildResult.ResultCode.CreateAndAddNavDataError);
 			}
+			if (AI.checkTileValid && !RecastWrapper.ValidateTileData(intPtr5, dataSize))
+			{
+				RecastWrapper.FreeTileData(intPtr5);
+				return new TileBuildResult(in buildRequest, TileBuildResult.ResultCode.ValidationError);
+			}
 			return new TileBuildResult(in buildRequest, intPtr5, dataSize);
 		}
 		finally
@@ -16110,7 +16176,8 @@ private struct TileBuildResult
 		CreateCompactHeightFieldError,
 		CreatePolymeshError,
 		CreateDetailPolymeshError,
-		CreateAndAddNavDataError
+		CreateAndAddNavDataError,
+		ValidationError
 	}
 
 	public readonly int tx;
@@ -16162,7 +16229,8 @@ public enum ResultCode
 	CreateCompactHeightFieldError,
 	CreatePolymeshError,
 	CreateDetailPolymeshError,
-	CreateAndAddNavDataError
+	CreateAndAddNavDataError,
+	ValidationError
 }
 
 
@@ -17191,12 +17259,12 @@ public struct NavMeshBuildParams
 	[Min(0f)]
 	public float cellSize;
 
-	[Min(0f)]
 	[Tooltip("The y-axis cell size to use for fields. [Limit: > 0] [Units: wu]")]
+	[Min(0f)]
 	public float cellHeight;
 
-	[Min(0f)]
 	[Tooltip("Agent height. Needs to be a multiple of cellHeight")]
+	[Min(0f)]
 	public float agentHeight;
 
 	[Tooltip("Agent radius. Needs to be a multiple of walkableRadius")]
@@ -17211,8 +17279,8 @@ public struct NavMeshBuildParams
 	[Range(0f, 90f)]
 	public float agentMaxSlope;
 
-	[Range(16f, 1024f)]
 	[Tooltip("The width/height size of tile's on the xz-plane. [Limit: >= 0] [Units: vx]")]
+	[Range(16f, 1024f)]
 	public float tileSize;
 
 	[Tooltip("The type of partitioning used for NavMesh generation")]
@@ -17476,18 +17544,22 @@ public static class RecastWrapper
 	private const string DLLName = "RustNative";
 
 	[DllImport("RustNative")]
+	[return: MarshalAs(UnmanagedType.U1)]
 	public static extern bool GetTilePolys(IntPtr navWrapper, int tx, int ty, [In][Out] Vector3[] outVertices, int maxPolys, out int outPolyCount);
 
 	[DllImport("RustNative")]
 	public static extern void DestroyNavMesh(IntPtr navMesh);
 
 	[DllImport("RustNative")]
+	[return: MarshalAs(UnmanagedType.U1)]
 	public static extern bool SamplePosition(IntPtr navMesh, in Vector3 position, in Vector3 extents, out Vector3 nearestPosition);
 
 	[DllImport("RustNative")]
+	[return: MarshalAs(UnmanagedType.U1)]
 	public static extern bool Raycast(IntPtr navMesh, in Vector3 startPos, in Vector3 endPos, out Vector3 hitLocation, out Vector3 hitNormal);
 
 	[DllImport("RustNative")]
+	[return: MarshalAs(UnmanagedType.U1)]
 	public static extern bool Move(IntPtr navMesh, in Vector3 startPos, in Vector3 endPos, out Vector3 movedPos);
 
 	[DllImport("RustNative")]
@@ -17500,18 +17572,22 @@ public static class RecastWrapper
 	public static extern IntPtr CreateEmptyNavMesh(in NavMeshBuildParams buildParams, in Vector3 bmin, in Vector3 bmax);
 
 	[DllImport("RustNative")]
+	[return: MarshalAs(UnmanagedType.U1)]
 	public static extern bool AddTileToNavMesh(IntPtr navMeshWrapper, in NavMeshBuildParams buildParams, IntPtr verts, int vertCount, IntPtr tris, int triCount, int tx, int ty);
 
 	[DllImport("RustNative")]
+	[return: MarshalAs(UnmanagedType.U1)]
 	public static extern bool RemoveTileFromNavMesh(IntPtr navMeshWrapper, int tx, int ty);
 
 	[DllImport("RustNative")]
 	public static extern IntPtr AllocateTileData(int dataSize);
 
 	[DllImport("RustNative")]
+	[return: MarshalAs(UnmanagedType.U1)]
 	public static extern bool FreeTileData(IntPtr tileData);
 
 	[DllImport("RustNative")]
+	[return: MarshalAs(UnmanagedType.U1)]
 	public static extern bool SaveAll(string path, IntPtr navMeshWrapper);
 
 	[DllImport("RustNative")]
@@ -17521,6 +17597,7 @@ public static class RecastWrapper
 	public static extern IntPtr PrebuildTile(IntPtr navMeshWrapper, in NavMeshBuildParams buildParams, IntPtr verts, int vertCount, IntPtr tris, int triCount, int tx, int ty, out int dataSize);
 
 	[DllImport("RustNative")]
+	[return: MarshalAs(UnmanagedType.U1)]
 	public static extern bool AddPrebuiltTileToNavMesh(IntPtr navMeshWrapper, int tx, int ty, IntPtr tileData, int dataSize);
 
 	[DllImport("RustNative")]
@@ -17530,6 +17607,7 @@ public static class RecastWrapper
 	public static extern IntPtr CreateChunkyMesh(IntPtr verts, IntPtr tris, int triCount, int trisPerChunk);
 
 	[DllImport("RustNative")]
+	[return: MarshalAs(UnmanagedType.U1)]
 	public static extern bool FreeChunkyMesh(IntPtr chunkyMesh);
 
 	[DllImport("RustNative")]
@@ -17539,28 +17617,40 @@ public static class RecastWrapper
 	public static extern IntPtr CreateHeightFieldRaw(in NavMeshBuildParams buildParams, IntPtr verts, int nverts, IntPtr tris, int triCount, in Vector3 bmin, in Vector3 bmax);
 
 	[DllImport("RustNative")]
+	[return: MarshalAs(UnmanagedType.U1)]
 	public static extern bool FreeHeightField(IntPtr heightfield);
 
 	[DllImport("RustNative")]
 	public static extern IntPtr CreateCompactHeightField(in NavMeshBuildParams buildParams, IntPtr heightField);
 
 	[DllImport("RustNative")]
+	[return: MarshalAs(UnmanagedType.U1)]
 	public static extern bool FreeCompactHeightField(IntPtr compactHeightfield);
 
 	[DllImport("RustNative")]
 	public static extern IntPtr CreatePolymesh(in NavMeshBuildParams buildParams, IntPtr compactHeightField);
 
 	[DllImport("RustNative")]
+	[return: MarshalAs(UnmanagedType.U1)]
 	public static extern bool FreePolymesh(IntPtr polymesh);
 
 	[DllImport("RustNative")]
 	public static extern IntPtr CreateDetailPolymesh(in NavMeshBuildParams buildParams, IntPtr polyMesh, IntPtr compactHeightField);
 
 	[DllImport("RustNative")]
+	[return: MarshalAs(UnmanagedType.U1)]
 	public static extern bool FreeDetailPolymesh(IntPtr detailPolyMesh);
 
 	[DllImport("RustNative")]
 	public static extern IntPtr CreateNavData(in NavMeshBuildParams buildParams, int tx, int ty, IntPtr polyMesh, IntPtr detailMesh, out int dataSize);
+
+	[DllImport("RustNative")]
+	[return: MarshalAs(UnmanagedType.U1)]
+	public static extern bool ValidateTileData(IntPtr data, int dataSize);
+
+	[DllImport("RustNative")]
+	[return: MarshalAs(UnmanagedType.U1)]
+	public static extern bool ValidateNavMesh(IntPtr navWrapper);
 }
 
 
@@ -17578,7 +17668,7 @@ using Rust.Ai;
 using Rust.Ai.Gen2.Nav;
 using UnityEngine;
 
-public class RustNavigation : MonoBehaviour, IServerComponent
+public class RustNavigation : FacepunchBehaviour, IServerComponent
 {
 	private const string LOG_PREFIX = "[RustNav] ";
 
@@ -17646,12 +17736,21 @@ public class RustNavigation : MonoBehaviour, IServerComponent
 		return !AI.useUnityNavmesh;
 	}
 
+	public static bool EnsureUnityNavmesh()
+	{
+		if (!AI.useUnityNavmesh)
+		{
+			LogError("Trying to use unity navmesh despite -useNewNavmesh being set on server boot.");
+		}
+		return AI.useUnityNavmesh;
+	}
+
 	private void Awake()
 	{
 		if ((Object)(object)Instance == (Object)null)
 		{
 			Instance = this;
-			if (!AI.useUnityNavmesh && RustNav.enableVerboseLogs)
+			if (!AI.useUnityNavmesh)
 			{
 				RecastWrapper.SetLogCallback(LogMessage);
 			}
@@ -17660,6 +17759,22 @@ public class RustNavigation : MonoBehaviour, IServerComponent
 		{
 			LogWarning("Multiple RustNavigation instances detected. Destroying...");
 			Object.Destroy((Object)(object)((Component)this).gameObject);
+		}
+	}
+
+	private void ValidateNavmeshes()
+	{
+		Log("Navmesh tile validation is enabled. This may impact performance.");
+		if (DefaultNavmesh != null && DefaultNavmesh.NavMeshHandle != IntPtr.Zero)
+		{
+			RecastWrapper.ValidateNavMesh(DefaultNavmesh.NavMeshHandle);
+		}
+		foreach (IndependantNavmesh navmesh in Navmeshes)
+		{
+			if ((Object)(object)navmesh != (Object)null && navmesh.Navmesh != null && navmesh.Navmesh.NavMeshHandle != IntPtr.Zero)
+			{
+				RecastWrapper.ValidateNavMesh(navmesh.Navmesh.NavMeshHandle);
+			}
 		}
 	}
 
@@ -17775,6 +17890,10 @@ public class RustNavigation : MonoBehaviour, IServerComponent
 			{
 				return false;
 			}
+			if (DefaultNavmesh == null)
+			{
+				return false;
+			}
 			Log("Saving navmesh to path: " + path + "...");
 			string directoryName = Path.GetDirectoryName(path);
 			if (!string.IsNullOrEmpty(directoryName) && !Directory.Exists(directoryName))
@@ -17828,6 +17947,7 @@ public class RustNavigation : MonoBehaviour, IServerComponent
 				}
 				DefaultNavmesh = rustNavmesh;
 			}
+			ValidateNavmeshes();
 			return true;
 		}
 		finally
@@ -17946,11 +18066,15 @@ public class RustNavmesh : IDisposable
 
 	public Tile[] tiles;
 
-	private IntPtr NavMeshHandle = IntPtr.Zero;
+	public IntPtr NavMeshHandle = IntPtr.Zero;
 
 	private Vector2Int tileNum;
 
 	private BackgroundTileBuilder tileBuilder;
+
+	private static readonly int HeaderSize = Marshal.SizeOf<NavMeshSetHeader>();
+
+	private static readonly int TileHeaderSize = Marshal.SizeOf<NavMeshTileHeader>();
 
 	public bool IsValid()
 	{
@@ -18382,7 +18506,7 @@ public class RustNavmesh : IDisposable
 		return true;
 	}
 
-	public bool Save(BinaryWriter writer)
+	public unsafe bool Save(BinaryWriter writer)
 	{
 		//IL_00fe: Unknown result type (might be due to invalid IL or missing references)
 		//IL_0103: Unknown result type (might be due to invalid IL or missing references)
@@ -18395,7 +18519,7 @@ public class RustNavmesh : IDisposable
 			{
 				return false;
 			}
-			Stopwatch stopwatch = Stopwatch.StartNew();
+			long timestamp = Stopwatch.GetTimestamp();
 			if (!IsValid())
 			{
 				RustNavigation.Log("Navmesh not built, nothing to save.");
@@ -18421,9 +18545,9 @@ public class RustNavmesh : IDisposable
 				navMeshSetHeader.currentNavmeshBounds = CurrentNavmeshBounds;
 				navMeshSetHeader.tileNum = tileNum;
 				NavMeshSetHeader value = navMeshSetHeader;
-				byte[] array2 = new byte[Marshal.SizeOf<NavMeshSetHeader>()];
-				MemoryMarshal.Write(array2, in value);
-				writer.Write(array2);
+				Span<byte> span = stackalloc byte[HeaderSize];
+				MemoryMarshal.Write(span, in value);
+				writer.Write(span);
 				int num2 = 0;
 				array = tiles;
 				foreach (Tile tile2 in array)
@@ -18437,12 +18561,10 @@ public class RustNavmesh : IDisposable
 							navMeshTileHeader.ty = tile2.ty;
 							navMeshTileHeader.dataSize = tile2.dataSize;
 							NavMeshTileHeader value2 = navMeshTileHeader;
-							byte[] array3 = new byte[Marshal.SizeOf<NavMeshTileHeader>()];
-							MemoryMarshal.Write(array3, in value2);
-							writer.Write(array3);
-							byte[] array4 = new byte[tile2.dataSize];
-							Marshal.Copy(tile2.tileBytes, array4, 0, tile2.dataSize);
-							writer.Write(array4);
+							Span<byte> span2 = stackalloc byte[TileHeaderSize];
+							MemoryMarshal.Write(span2, in value2);
+							writer.Write(span2);
+							writer.BaseStream.Write(new ReadOnlySpan<byte>((void*)tile2.tileBytes, tile2.dataSize));
 							num2++;
 						}
 						catch (Exception ex)
@@ -18467,8 +18589,8 @@ public class RustNavmesh : IDisposable
 						writer.Write(value3);
 						writer.Write(value4);
 					}
-					stopwatch.Stop();
-					RustNavigation.Log($"Successfully saved navmesh with {num2} tiles in {stopwatch.Elapsed.TotalMilliseconds} ms");
+					double num3 = (double)(Stopwatch.GetTimestamp() - timestamp) * 1000.0 / (double)Stopwatch.Frequency;
+					RustNavigation.Log($"Successfully saved navmesh with {num2} tiles in {num3} ms");
 					return true;
 				}
 				finally
@@ -18488,11 +18610,11 @@ public class RustNavmesh : IDisposable
 		}
 	}
 
-	public static RustNavmesh Load(BinaryReader reader, BackgroundTileBuilder tileBuilder, bool synchronous = false)
+	public unsafe static RustNavmesh Load(BinaryReader reader, BackgroundTileBuilder tileBuilder, bool synchronous = false)
 	{
-		//IL_0105: Unknown result type (might be due to invalid IL or missing references)
-		//IL_010a: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0169: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0131: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0136: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0195: Unknown result type (might be due to invalid IL or missing references)
 		TimeWarning val = TimeWarning.New("RustNavmesh.Load", 0);
 		try
 		{
@@ -18500,16 +18622,22 @@ public class RustNavmesh : IDisposable
 			{
 				return null;
 			}
-			Stopwatch stopwatch = Stopwatch.StartNew();
+			long timestamp = Stopwatch.GetTimestamp();
 			RustNavmesh rustNavmesh = null;
 			try
 			{
-				if (reader.BaseStream.Length < Marshal.SizeOf<NavMeshSetHeader>())
+				if (reader.BaseStream.Length < HeaderSize)
 				{
 					RustNavigation.LogError("File too small to contain valid header");
 					return null;
 				}
-				NavMeshSetHeader navMeshSetHeader = MemoryMarshal.Read<NavMeshSetHeader>(reader.ReadBytes(Marshal.SizeOf<NavMeshSetHeader>()));
+				Span<byte> span = stackalloc byte[HeaderSize];
+				if (reader.Read(span) != HeaderSize)
+				{
+					RustNavigation.LogError("Failed to read navmesh header");
+					return null;
+				}
+				NavMeshSetHeader navMeshSetHeader = MemoryMarshal.Read<NavMeshSetHeader>(span);
 				if (navMeshSetHeader.magic != 1297302868)
 				{
 					RustNavigation.LogError($"Invalid file format. Expected magic: {1297302868:X8}, got: {navMeshSetHeader.magic:X8}");
@@ -18541,13 +18669,20 @@ public class RustNavmesh : IDisposable
 				int numTiles = navMeshSetHeader.numTiles;
 				for (int i = 0; i < navMeshSetHeader.numTiles; i++)
 				{
-					if (reader.BaseStream.Position + Marshal.SizeOf<NavMeshTileHeader>() > reader.BaseStream.Length)
+					if (reader.BaseStream.Position + TileHeaderSize > reader.BaseStream.Length)
 					{
 						RustNavigation.LogError($"Unexpected end of file while reading tile {i} header");
 						rustNavmesh.Dispose();
 						return null;
 					}
-					NavMeshTileHeader navMeshTileHeader = MemoryMarshal.Read<NavMeshTileHeader>(reader.ReadBytes(Marshal.SizeOf<NavMeshTileHeader>()));
+					Span<byte> span2 = stackalloc byte[TileHeaderSize];
+					if (reader.Read(span2) != TileHeaderSize)
+					{
+						RustNavigation.LogError($"Unexpected end of file while reading tile {i} header");
+						rustNavmesh.Dispose();
+						return null;
+					}
+					NavMeshTileHeader navMeshTileHeader = MemoryMarshal.Read<NavMeshTileHeader>(span2);
 					if (navMeshTileHeader.dataSize <= 0)
 					{
 						RustNavigation.LogError($"Invalid tile data size: {navMeshTileHeader.dataSize} for tile {navMeshTileHeader.tx},{navMeshTileHeader.ty}");
@@ -18566,13 +18701,6 @@ public class RustNavmesh : IDisposable
 						rustNavmesh.Dispose();
 						return null;
 					}
-					byte[] array = reader.ReadBytes(navMeshTileHeader.dataSize);
-					if (array.Length != navMeshTileHeader.dataSize)
-					{
-						RustNavigation.LogError($"Failed to read complete tile data for {navMeshTileHeader.tx},{navMeshTileHeader.ty}");
-						rustNavmesh.Dispose();
-						return null;
-					}
 					IntPtr intPtr = IntPtr.Zero;
 					try
 					{
@@ -18583,7 +18711,13 @@ public class RustNavmesh : IDisposable
 							rustNavmesh.Dispose();
 							return null;
 						}
-						Marshal.Copy(array, 0, intPtr, navMeshTileHeader.dataSize);
+						Span<byte> buffer = new Span<byte>((void*)intPtr, navMeshTileHeader.dataSize);
+						if (reader.Read(buffer) != navMeshTileHeader.dataSize)
+						{
+							RustNavigation.LogError($"Unexpected end of file while reading tile {navMeshTileHeader.tx},{navMeshTileHeader.ty} data");
+							rustNavmesh.Dispose();
+							return null;
+						}
 						if (!rustNavmesh.AddTile(navMeshTileHeader.tx, navMeshTileHeader.ty, intPtr, navMeshTileHeader.dataSize))
 						{
 							RustNavigation.LogError($"Failed to add tile {navMeshTileHeader.tx},{navMeshTileHeader.ty} to navmesh");
@@ -18626,8 +18760,8 @@ public class RustNavmesh : IDisposable
 					rustNavmesh.Dispose();
 					return null;
 				}
-				stopwatch.Stop();
-				RustNavigation.Log($"Successfully loaded navmesh with {num} tiles in {stopwatch.Elapsed.TotalMilliseconds} ms");
+				double num3 = (double)(Stopwatch.GetTimestamp() - timestamp) * 1000.0 / (double)Stopwatch.Frequency;
+				RustNavigation.Log($"Successfully loaded navmesh with {num} tiles in {num3} ms");
 				return rustNavmesh;
 			}
 			catch (Exception ex2)
@@ -19822,6 +19956,7 @@ internal class __JobReflectionRegistrationOutput__1221673671587648887
 			IJobExtensions.EarlyJobInit<CheckAnyBoolInGroupJob>();
 			IJobExtensions.EarlyJobInit<CheckAnyEnvironmentTypeInGroupJob>();
 			IJobExtensions.EarlyJobInit<ScatterToAndJob>();
+			IJobExtensions.EarlyJobInit<DiffVec3Indirect>();
 			IJobExtensions.EarlyJobInit<RaycastSamplePositionsJob>();
 			IJobExtensions.EarlyJobInit<RaycastBufferSetupJob>();
 			IJobParallelForExtensions.EarlyJobInit<RaycastRaySetupJob>();
@@ -19891,7 +20026,7 @@ internal class __JobReflectionRegistrationOutput__1221673671587648887
 			IJobParallelForExtensions.EarlyJobInit<GetTopologyRadiusNormalizedJobIndirect>();
 			IJobExtensions.EarlyJobInit<GetTopologyByIndexJob>();
 			IJobExtensions.EarlyJobInit<GetTopologyByUVJobIndirect>();
-			IJobExtensions.EarlyJobInit<GetHeightsFastJobIndirect>();
+			IJobExtensions.EarlyJobInit<GetHeightsByUVJobIndirect>();
 			IJobParallelForExtensions.EarlyJobInit<GetHeightsJob>();
 			IJobExtensions.EarlyJobInit<TerrainHeightMapJobs.GetHeightsJobIndirect>();
 			IJobExtensions.EarlyJobInit<GetNormalsJobIndirect>();
@@ -19907,6 +20042,7 @@ internal class __JobReflectionRegistrationOutput__1221673671587648887
 			IJobForExtensions.EarlyJobInit<CalculateSubGridSamplePointsJob>();
 			IJobExtensions.EarlyJobInit<GatherMaxWaterLevelsJob>();
 			IJobExtensions.EarlyJobInit<ToUVJobIndirect>();
+			IJobExtensions.EarlyJobInit<FilterPositionsJobIndirect>();
 			IJobExtensions.EarlyJobInit<GatherWavesIndicesJobIndirect>();
 			IJobExtensions.EarlyJobInit<ApplyMaxHeightsJobIndirect>();
 			IJobExtensions.EarlyJobInit<SelectMaxWaterLevelJobIndirect>();
@@ -19967,6 +20103,7 @@ internal class __JobReflectionRegistrationOutput__1221673671587648887
 			IJobExtensions.EarlyJobInit<Rust.Water5.GetHeightsJobIndirect>();
 			IJobExtensions.EarlyJobInit<FillJob<int>>();
 			IJobExtensions.EarlyJobInit<FillJobUnsafe<BasePlayer.EACTickState>>();
+			IJobExtensions.EarlyJobInit<CopyIndirect<Vector3>>();
 			IJobExtensions.EarlyJobInit<GatherJob<OverlapCapsuleCommand>>();
 			IJobExtensions.EarlyJobInit<ScatterToJob<bool>>();
 			IJobExtensions.EarlyJobInit<FillJob<bool>>();
@@ -19974,6 +20111,8 @@ internal class __JobReflectionRegistrationOutput__1221673671587648887
 			IJobForExtensions.EarlyJobInit<SortHitsJob<RaycastHitComparer>>();
 			IJobExtensions.EarlyJobInit<FillJob<Vector3>>();
 			IJobExtensions.EarlyJobInit<FillJob<WaterLevel.WaterInfo>>();
+			IJobExtensions.EarlyJobInit<FillJobIndirect<float>>();
+			IJobExtensions.EarlyJobInit<FillJobIndirect<int>>();
 			IJobExtensions.EarlyJobInit<GatherJob<Vector3>>();
 			IJobExtensions.EarlyJobInit<GatherJob<float>>();
 			IJobExtensions.EarlyJobInit<CopyArrayJob<float>>();
