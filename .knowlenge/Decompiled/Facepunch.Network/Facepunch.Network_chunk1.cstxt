@@ -2,8 +2,8 @@ using System;
 using System.Runtime.CompilerServices;
 using Microsoft.CodeAnalysis;
 
-[Embedded]
 [CompilerGenerated]
+[Embedded]
 internal sealed class IsUnmanagedAttribute : Attribute
 {
 }
@@ -26,9 +26,9 @@ using System.CodeDom.Compiler;
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
 
+[CompilerGenerated]
 [EditorBrowsable(EditorBrowsableState.Never)]
 [GeneratedCode("Unity.MonoScriptGenerator.MonoScriptInfoGenerator", null)]
-[CompilerGenerated]
 internal class UnitySourceGeneratedAssemblyMonoScriptTypes_v1
 {
 	private struct MonoScriptData
@@ -5402,6 +5402,10 @@ public static class RustRelay
 
 	public static readonly ArrayPool<byte> PacketArrayPool;
 
+	private static readonly TimeSpan ApiTimeout;
+
+	private static readonly TimeSpan UploadTimeout;
+
 	private static readonly Stopwatch SendTimer;
 
 	public static string RelayWipeId { get; set; }
@@ -5467,6 +5471,8 @@ public static class RustRelay
 		_encryptionCiphertextBuffer = new byte[4194320];
 		Config = new RustRelayConfig();
 		PacketArrayPool = new ArrayPool<byte>(Math.Max(4194304, 12));
+		ApiTimeout = TimeSpan.FromSeconds(10.0);
+		UploadTimeout = TimeSpan.FromMinutes(2.0);
 		SendTimer = new Stopwatch();
 		_localPrivateKey = CreatePrivateKey();
 		_localPublicKey = _localPrivateKey.GeneratePublicKey().GetEncoded();
@@ -5477,7 +5483,20 @@ public static class RustRelay
 			IsBackground = true,
 			Name = "RustRelaySend"
 		};
-		Client.Timeout = TimeSpan.FromSeconds(10.0);
+		Client.Timeout = Timeout.InfiniteTimeSpan;
+	}
+
+	private static async Task<HttpResponseMessage> SendWithTimeoutAsync(HttpRequestMessage request, TimeSpan timeout)
+	{
+		using CancellationTokenSource cts = new CancellationTokenSource(timeout);
+		try
+		{
+			return await ((HttpMessageInvoker)Client).SendAsync(request, cts.Token).ConfigureAwait(continueOnCapturedContext: false);
+		}
+		catch (OperationCanceledException) when (cts.IsCancellationRequested)
+		{
+			throw new TimeoutException($"Relay request to {request.RequestUri} timed out after {timeout.TotalSeconds:0}s");
+		}
 	}
 
 	public static void InitUrls()
@@ -5977,7 +5996,7 @@ public static class RustRelay
 					Content = (HttpContent)(object)content
 				};
 				AddRelayHeaders(val);
-				await Client.SendAsync(val).ConfigureAwait(continueOnCapturedContext: false);
+				await SendWithTimeoutAsync(val, ApiTimeout).ConfigureAwait(continueOnCapturedContext: false);
 			}
 			finally
 			{
@@ -6022,7 +6041,7 @@ public static class RustRelay
 					Content = (HttpContent)(object)content
 				};
 				AddRelayHeaders(val);
-				await Client.SendAsync(val).ConfigureAwait(continueOnCapturedContext: false);
+				await SendWithTimeoutAsync(val, ApiTimeout).ConfigureAwait(continueOnCapturedContext: false);
 			}
 			finally
 			{
@@ -6083,7 +6102,7 @@ public static class RustRelay
 							Content = (HttpContent)(object)content
 						};
 						AddRelayHeaders(val);
-						HttpResponseMessage val2 = await Client.SendAsync(val).ConfigureAwait(continueOnCapturedContext: false);
+						HttpResponseMessage val2 = await SendWithTimeoutAsync(val, UploadTimeout).ConfigureAwait(continueOnCapturedContext: false);
 						if (!val2.IsSuccessStatusCode)
 						{
 							Failover($"Map snapshot upload failed: {(int)val2.StatusCode} {val2.ReasonPhrase}");
@@ -6157,7 +6176,7 @@ public static class RustRelay
 					Content = (HttpContent)(object)content
 				};
 				AddRelayHeaders(val);
-				HttpResponseMessage val2 = await Client.SendAsync(val).ConfigureAwait(continueOnCapturedContext: false);
+				HttpResponseMessage val2 = await SendWithTimeoutAsync(val, UploadTimeout).ConfigureAwait(continueOnCapturedContext: false);
 				if (!val2.IsSuccessStatusCode)
 				{
 					Failover($"Snapshot upload failed: {(int)val2.StatusCode} {val2.ReasonPhrase}");
@@ -6503,7 +6522,7 @@ public static class RustRelay
 			{
 				request.Content = (HttpContent)(object)content;
 				AddRelayHeaders(request);
-				HttpResponseMessage response = await Client.SendAsync(request).ConfigureAwait(continueOnCapturedContext: false);
+				HttpResponseMessage response = await SendWithTimeoutAsync(request, ApiTimeout).ConfigureAwait(continueOnCapturedContext: false);
 				try
 				{
 					response.EnsureSuccessStatusCode();

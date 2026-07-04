@@ -101,6 +101,8 @@ public class VendingMachine : ContainerIOEntity, IUGCBrowserEntity, IFoodSpoilMo
 	[Header("Drone Prediction")]
 	public DeliveryDroneConfig predictionConfig;
 
+	private HashSet<BasePlayer> purchasingPlayers = new HashSet<BasePlayer>();
+
 	private Action fullUpdateCached;
 
 	private ulong nameLastEditedBy;
@@ -1061,8 +1063,8 @@ public class VendingMachine : ContainerIOEntity, IUGCBrowserEntity, IFoodSpoilMo
 		}
 	}
 
-	[RPC_Server.CallsPerSecond(5uL)]
 	[RPC_Server.IsVisible(3f)]
+	[RPC_Server.CallsPerSecond(5uL)]
 	[RPC_Server]
 	public void SV_RequestPurchaseData(RPCMessage msg)
 	{
@@ -1654,6 +1656,7 @@ public class VendingMachine : ContainerIOEntity, IUGCBrowserEntity, IFoodSpoilMo
 		{
 			ClearPendingOrder();
 		}
+		purchasingPlayers.Remove(player);
 	}
 
 	public virtual void InstallDefaultSellOrders()
@@ -1706,9 +1709,9 @@ public class VendingMachine : ContainerIOEntity, IUGCBrowserEntity, IFoodSpoilMo
 		ClientRPC(RpcTarget.NetworkGroup("CLIENT_CancelVendingSounds"));
 	}
 
+	[RPC_Server]
 	[RPC_Server.MaxDistance(9f)]
 	[RPC_Server.CallsPerSecond(5uL)]
-	[RPC_Server]
 	public void BuyItemRentableShop(RPCMessage rpc)
 	{
 		if (GetParentEntity() is RentableShop)
@@ -1768,8 +1771,8 @@ public class VendingMachine : ContainerIOEntity, IUGCBrowserEntity, IFoodSpoilMo
 		Decay.RadialDecayTouch(((Component)this).transform.position, 40f, 2097408);
 	}
 
-	[RPC_Server]
 	[RPC_Server.IsVisible(3f)]
+	[RPC_Server]
 	public void TransactionStart(RPCMessage rpc)
 	{
 	}
@@ -2116,10 +2119,10 @@ public class VendingMachine : ContainerIOEntity, IUGCBrowserEntity, IFoodSpoilMo
 		return false;
 	}
 
-	public void OpenShop(BasePlayer ply)
+	public void OpenShop(BasePlayer ply, string panelName)
 	{
 		SendSellOrders(ply);
-		PlayerOpenLoot(ply, customerPanel);
+		PlayerOpenLoot(ply, panelName);
 	}
 
 	[RPC_Server.MaxDistance(3f)]
@@ -2128,7 +2131,7 @@ public class VendingMachine : ContainerIOEntity, IUGCBrowserEntity, IFoodSpoilMo
 	{
 		if (OccupiedCheck(msg.player))
 		{
-			OpenShop(msg.player);
+			OpenShop(msg.player, customerPanel);
 		}
 	}
 
@@ -2138,7 +2141,7 @@ public class VendingMachine : ContainerIOEntity, IUGCBrowserEntity, IFoodSpoilMo
 	{
 		if (OccupiedCheck(msg.player) && Interface.CallHook("OnVendingShopOpen", (object)this, (object)msg.player) == null)
 		{
-			OpenShop(msg.player);
+			OpenShop(msg.player, customerPanel);
 			Interface.CallHook("OnVendingShopOpened", (object)this, (object)msg.player);
 		}
 	}
@@ -2150,7 +2153,7 @@ public class VendingMachine : ContainerIOEntity, IUGCBrowserEntity, IFoodSpoilMo
 		BasePlayer player = msg.player;
 		if (CanPlayerAdmin(player))
 		{
-			OpenShop(player);
+			OpenShop(player, "notCustomerPanel");
 			ClientRPC(RpcTarget.Player("CLIENT_OpenAdminMenu", player));
 			Interface.CallHook("OnOpenVendingAdmin", (object)this, (object)player);
 		}
@@ -2174,6 +2177,10 @@ public class VendingMachine : ContainerIOEntity, IUGCBrowserEntity, IFoodSpoilMo
 			return (bool)obj;
 		}
 		BasePlayer basePlayer = item.GetRootContainer()?.GetOwnerPlayer();
+		if (purchasingPlayers.Contains(basePlayer))
+		{
+			return false;
+		}
 		if (transactionActive || industrialItemIncoming)
 		{
 			return true;
@@ -2196,6 +2203,15 @@ public class VendingMachine : ContainerIOEntity, IUGCBrowserEntity, IFoodSpoilMo
 	public virtual PlayerInventory.CanMoveFromResponse CanMoveFrom(BasePlayer player, Item item)
 	{
 		return new PlayerInventory.CanMoveFromResponse(CanPlayerAdmin(player), NotAdministratingError);
+	}
+
+	public override bool PlayerOpenLoot(BasePlayer player, string panelToOpen = "", bool doPositionChecks = true)
+	{
+		if (panelToOpen == customerPanel)
+		{
+			purchasingPlayers.Add(player);
+		}
+		return base.PlayerOpenLoot(player, panelToOpen, doPositionChecks);
 	}
 
 	public override bool CanOpenLootPanel(BasePlayer player, string panelName)
@@ -2223,8 +2239,8 @@ public class VendingMachine : ContainerIOEntity, IUGCBrowserEntity, IFoodSpoilMo
 		return ((Component)this).transform.TransformPoint(localDropPosition);
 	}
 
-	[RPC_Server.IsVisible(3f)]
 	[RPC_Server]
+	[RPC_Server.IsVisible(3f)]
 	public void RPC_DeleteSellOrder(RPCMessage msg)
 	{
 		BasePlayer player = msg.player;
@@ -2304,8 +2320,8 @@ public class VendingMachine : ContainerIOEntity, IUGCBrowserEntity, IFoodSpoilMo
 		}
 	}
 
-	[RPC_Server.IsVisible(3f)]
 	[RPC_Server]
+	[RPC_Server.IsVisible(3f)]
 	public void RPC_AddSellOrder(RPCMessage msg)
 	{
 		BasePlayer player = msg.player;
@@ -3419,8 +3435,8 @@ public class VineMountable : BaseMountable
 		}
 	}
 
-	[RPC_Server.IsVisible(3f)]
 	[RPC_Server]
+	[RPC_Server.IsVisible(3f)]
 	private void SV_Descend(RPCMessage msg)
 	{
 		if (!IsMounted() && Server.allowVineSwinging)
@@ -3925,9 +3941,9 @@ public class WallpaperPlanner : Planner
 		list.amount.Add((int)placementPrice.amount);
 	}
 
-	[RPC_Server.CallsPerSecond(3uL)]
 	[RPC_Server]
 	[RPC_Server.IsActiveItem]
+	[RPC_Server.CallsPerSecond(3uL)]
 	[RPC_Server.FromOwner]
 	private void SERVER_ChangeWallpaperToolSkin(RPCMessage msg)
 	{
@@ -3955,8 +3971,8 @@ public class WallpaperPlanner : Planner
 		}
 	}
 
-	[RPC_Server.CallsPerSecond(10uL)]
 	[RPC_Server]
+	[RPC_Server.CallsPerSecond(10uL)]
 	[RPC_Server.FromOwner]
 	public void SERVER_SwitchMode(RPCMessage msg)
 	{
@@ -4202,8 +4218,8 @@ public class WantedPoster : DecayEntity, ISignage, IUGCBrowserEntity, ILOD, ISer
 	}
 
 	[RPC_Server]
-	[RPC_Server.IsVisible(3f)]
 	[RPC_Server.CallsPerSecond(5uL)]
+	[RPC_Server.IsVisible(3f)]
 	private void UpdatePoster(RPCMessage msg)
 	{
 		//IL_008b: Unknown result type (might be due to invalid IL or missing references)
@@ -4242,9 +4258,9 @@ public class WantedPoster : DecayEntity, ISignage, IUGCBrowserEntity, ILOD, ISer
 		SendNetworkUpdate();
 	}
 
-	[RPC_Server.CallsPerSecond(5uL)]
 	[RPC_Server]
 	[RPC_Server.IsVisible(3f)]
+	[RPC_Server.CallsPerSecond(5uL)]
 	private void ClearPlayer(RPCMessage msg)
 	{
 		//IL_005d: Unknown result type (might be due to invalid IL or missing references)
@@ -5506,9 +5522,9 @@ public class WeaponRack : StorageContainer
 		}
 	}
 
-	[RPC_Server.MaxDistance(2f)]
-	[RPC_Server.IsVisible(3f)]
 	[RPC_Server]
+	[RPC_Server.IsVisible(3f)]
+	[RPC_Server.MaxDistance(2f)]
 	private void ReqSwapWeapon(RPCMessage msg)
 	{
 		int num = msg.read.Int32();
@@ -5557,8 +5573,8 @@ public class WeaponRack : StorageContainer
 		}
 	}
 
-	[RPC_Server.MaxDistance(2f)]
 	[RPC_Server.IsVisible(3f)]
+	[RPC_Server.MaxDistance(2f)]
 	[RPC_Server]
 	private void ReqTakeWeapon(RPCMessage msg)
 	{
@@ -5625,9 +5641,9 @@ public class WeaponRack : StorageContainer
 		Interface.CallHook("OnRackedWeaponTaken", (object)slot, (object)player, (object)this);
 	}
 
+	[RPC_Server.IsVisible(3f)]
 	[RPC_Server.MaxDistance(2f)]
 	[RPC_Server]
-	[RPC_Server.IsVisible(3f)]
 	private void ReqTakeAll(RPCMessage msg)
 	{
 		int num = msg.read.Int32();
@@ -5660,9 +5676,9 @@ public class WeaponRack : StorageContainer
 		SendNetworkUpdateImmediate();
 	}
 
+	[RPC_Server.MaxDistance(2f)]
 	[RPC_Server]
 	[RPC_Server.IsVisible(3f)]
-	[RPC_Server.MaxDistance(2f)]
 	private void ReqUnloadWeapon(RPCMessage msg)
 	{
 		int num = msg.read.Int32();
@@ -5704,8 +5720,8 @@ public class WeaponRack : StorageContainer
 		}
 	}
 
-	[RPC_Server]
 	[RPC_Server.IsVisible(3f)]
+	[RPC_Server]
 	[RPC_Server.MaxDistance(2f)]
 	private void ReqMountWeapon(RPCMessage msg)
 	{
@@ -5737,9 +5753,9 @@ public class WeaponRack : StorageContainer
 		}
 	}
 
-	[RPC_Server.MaxDistance(2f)]
-	[RPC_Server.IsVisible(3f)]
 	[RPC_Server]
+	[RPC_Server.IsVisible(3f)]
+	[RPC_Server.MaxDistance(2f)]
 	private void ReqMountBackSlot(RPCMessage msg)
 	{
 		if (base.inventory.itemList.Count != base.inventory.capacity)
@@ -7246,8 +7262,8 @@ public class WipeLaptopEntity : BaseEntity
 		base.Load(info);
 	}
 
-	[RPC_Server]
 	[RPC_Server.IsVisible(5f)]
+	[RPC_Server]
 	public void ArmLaptop(RPCMessage msg)
 	{
 		if (msg.read.Int32() == 3 && !IsArmed())
@@ -7260,8 +7276,8 @@ public class WipeLaptopEntity : BaseEntity
 	{
 	}
 
-	[RPC_Server]
 	[RPC_Server.IsVisible(5f)]
+	[RPC_Server]
 	public void DefuseLaptop(RPCMessage msg)
 	{
 		if (msg.read.Int32() == 3 && IsArmed())
@@ -7729,9 +7745,9 @@ public class WireTool : HeldEntity
 		return 200f;
 	}
 
-	[RPC_Server.FromOwner]
-	[RPC_Server.IsActiveItem]
 	[RPC_Server]
+	[RPC_Server.IsActiveItem]
+	[RPC_Server.FromOwner]
 	[RPC_Server.CallsPerSecond(5uL)]
 	public void RPC_WireStarted(RPCMessage msg)
 	{
@@ -7762,11 +7778,11 @@ public class WireTool : HeldEntity
 		}
 	}
 
-	[RPC_Server.IsActiveItem]
 	[RPC_Server.FromOwner]
-	[RPC_Server]
-	[RPC_Server.InputValidation(new Type[] { typeof(WireConnectionMessage) })]
 	[RPC_Server.CallsPerSecond(5uL)]
+	[RPC_Server.InputValidation(new Type[] { typeof(WireConnectionMessage) })]
+	[RPC_Server]
+	[RPC_Server.IsActiveItem]
 	public void RPC_MakeConnection(RPCMessage rpc)
 	{
 		//IL_003a: Unknown result type (might be due to invalid IL or missing references)
@@ -7892,10 +7908,10 @@ public class WireTool : HeldEntity
 		return true;
 	}
 
-	[RPC_Server]
-	[RPC_Server.CallsPerSecond(5uL)]
 	[RPC_Server.IsActiveItem]
+	[RPC_Server.CallsPerSecond(5uL)]
 	[RPC_Server.FromOwner]
+	[RPC_Server]
 	public void RPC_RequestClear(RPCMessage msg)
 	{
 		//IL_001c: Unknown result type (might be due to invalid IL or missing references)
@@ -8055,8 +8071,8 @@ public class WireTool : HeldEntity
 	}
 
 	[RPC_Server.FromOwner]
-	[RPC_Server.CallsPerSecond(5uL)]
 	[RPC_Server]
+	[RPC_Server.CallsPerSecond(5uL)]
 	[RPC_Server.IsActiveItem]
 	public void RPC_CancelPendingWire(RPCMessage msg)
 	{
@@ -8067,9 +8083,9 @@ public class WireTool : HeldEntity
 	}
 
 	[RPC_Server]
-	[RPC_Server.IsActiveItem]
 	[RPC_Server.FromOwner]
 	[RPC_Server.CallsPerSecond(5uL)]
+	[RPC_Server.IsActiveItem]
 	public void RPC_RequestChangeColor(RPCMessage msg)
 	{
 		//IL_000d: Unknown result type (might be due to invalid IL or missing references)
@@ -8566,8 +8582,8 @@ public class Workbench : StorageContainer
 	[Tooltip("Editor-only transform holding visual placement points. Should be removed at runtime.")]
 	public Transform upgradeVisualPlacement;
 
-	[Tooltip("Active when no upgrades are installed at all. Disabled when any upgrade is present.")]
 	[Header("Filler Visuals")]
+	[Tooltip("Active when no upgrades are installed at all. Disabled when any upgrade is present.")]
 	public Transform fullFillerVisual;
 
 	[Tooltip("Individual filler transforms that are hidden when their associated upgrade is installed.")]
@@ -9412,8 +9428,8 @@ public class Workbench : StorageContainer
 		return base.PlayerOpenLoot(player, panelToOpen, doPositionChecks);
 	}
 
-	[RPC_Server]
 	[RPC_Server.IsVisible(3f)]
+	[RPC_Server]
 	public void RPC_OpenUpgradeInventory(RPCMessage msg)
 	{
 		if (isLootable && !Static)
@@ -9551,8 +9567,8 @@ public class Workbench : StorageContainer
 		return blueprintBaseDef;
 	}
 
-	[RPC_Server]
 	[RPC_Server.IsVisible(3f)]
+	[RPC_Server]
 	public void RPC_BeginExperiment(RPCMessage msg)
 	{
 		//IL_01b0: Unknown result type (might be due to invalid IL or missing references)
@@ -10163,8 +10179,8 @@ public class WorldItem : BaseEntity, PlayerInventory.ICanMoveFrom
 		}
 	}
 
-	[RPC_Server.IsVisible(3f)]
 	[RPC_Server]
+	[RPC_Server.IsVisible(3f)]
 	public void Pickup(RPCMessage msg)
 	{
 		if (msg.player.CanInteract() && this.item != null && allowPickup && Interface.CallHook("OnItemPickup", (object)this.item, (object)msg.player, (object)this) == null && CanOpenInSafeZone(msg.player))
@@ -10885,8 +10901,8 @@ public class ZiplineLaunchPoint : BaseEntity
 		return false;
 	}
 
-	[RPC_Server]
 	[RPC_Server.IsVisible(3f)]
+	[RPC_Server]
 	[RPC_Server.CallsPerSecond(2uL)]
 	public void MountPlayer(RPCMessage msg)
 	{
@@ -18935,7 +18951,7 @@ public class InvisibleVendingMachine : NPCVendingMachine
 		KeeperLookAt(((Component)player).transform.position);
 		NotifyShopkeeper(NPCShopKeeper.ShopkeeperEvent.Talk);
 		hasCurrentPlayerPurchasedSomething = false;
-		return base.PlayerOpenLoot(player, panelToOpen);
+		return base.PlayerOpenLoot(player, panelToOpen, doPositionChecks: true);
 	}
 
 	public override void PlayerStoppedLooting(BasePlayer player)
@@ -19093,8 +19109,8 @@ public class NPCVendingOrder : ScriptableObject
 		[Tooltip("Maximum price for the currency item")]
 		public int maxPrice;
 
-		[Range(0f, 1f)]
 		[Tooltip("Chance for a very low price to occur (0 to 1)")]
+		[Range(0f, 1f)]
 		public float veryLowPriceChance;
 
 		[Tooltip("Minimum very low price")]
@@ -19225,8 +19241,8 @@ public struct EntryRandom
 	[Tooltip("Maximum price for the currency item")]
 	public int maxPrice;
 
-	[Range(0f, 1f)]
 	[Tooltip("Chance for a very low price to occur (0 to 1)")]
+	[Range(0f, 1f)]
 	public float veryLowPriceChance;
 
 	[Tooltip("Minimum very low price")]
@@ -20400,8 +20416,8 @@ public class UI_VendingMachineAdminDialog : UIDialog
 	[SerializeField]
 	private GameObjectRef statsPanelRef;
 
-	[Space]
 	[SerializeField]
+	[Space]
 	private UI_FakeInventory fakeInventory;
 
 	[SerializeField]
@@ -20423,8 +20439,8 @@ public class UI_VendingMachineAdminDialog : UIDialog
 	[SerializeField]
 	private FlexTransition transition;
 
-	[SerializeField]
 	[Space]
+	[SerializeField]
 	private UI_TagToggle droneAccessTag;
 
 	[SerializeField]
@@ -29647,8 +29663,8 @@ public class ProceduralDynamicDungeon : BaseEntity
 		}
 	}
 
-	[ExecuteInEditMode]
 	[ContextMenu("Test Grid")]
+	[ExecuteInEditMode]
 	public void GenerateGrid()
 	{
 		//IL_0006: Unknown result type (might be due to invalid IL or missing references)
