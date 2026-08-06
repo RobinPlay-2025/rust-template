@@ -53,6 +53,8 @@ public class WorkshopSkin : MonoBehaviour
 
 	private Skin AppliedSkin;
 
+	internal static bool AsyncBundleQueueBlocked => Global.IsAsyncBundleQueueBlocked?.Invoke() ?? false;
+
 	public static float UnloadDelay
 	{
 		get
@@ -315,13 +317,21 @@ public class WorkshopSkin : MonoBehaviour
 		if ((Object)(object)val == (Object)null)
 		{
 			AssetBundleCreateRequest val2 = bundleRequests[index];
-			if (val2 == null)
+			if (val2 == null && AsyncBundleQueueBlocked)
 			{
 				string text = Path.Combine(Application.installPath, $"Bundles/textures/textures.{index}.bundle");
-				val2 = (bundleRequests[index] = AssetBundle.LoadFromFileAsync(text));
+				val = (bundles[index] = AssetBundle.LoadFromFile(text));
 			}
-			yield return val2;
-			val = (bundles[index] = bundleRequests[index].assetBundle);
+			else
+			{
+				if (val2 == null)
+				{
+					string text2 = Path.Combine(Application.installPath, $"Bundles/textures/textures.{index}.bundle");
+					val2 = (bundleRequests[index] = AssetBundle.LoadFromFileAsync(text2));
+				}
+				yield return val2;
+				val = (bundles[index] = bundleRequests[index].assetBundle);
+			}
 		}
 		IWorkshopContent item = ItemCache[workshopId];
 		bool flag = item.IsInstalled;
@@ -609,11 +619,18 @@ public class Skin
 		if ((Object)(object)bundle != (Object)null)
 		{
 			manifestName = "Assets/Skins/" + workshopId + "/manifest.txt";
-			AssetBundleRequest textRequest = bundle.LoadAssetAsync<TextAsset>(manifestName);
-			yield return textRequest;
-			ref TextAsset reference = ref manifestAsset;
-			Object asset = textRequest.asset;
-			reference = (TextAsset)(object)((asset is TextAsset) ? asset : null);
+			if (WorkshopSkin.AsyncBundleQueueBlocked)
+			{
+				manifestAsset = bundle.LoadAsset<TextAsset>(manifestName);
+			}
+			else
+			{
+				AssetBundleRequest textRequest = bundle.LoadAssetAsync<TextAsset>(manifestName);
+				yield return textRequest;
+				ref TextAsset reference = ref manifestAsset;
+				Object asset = textRequest.asset;
+				reference = (TextAsset)(object)((asset is TextAsset) ? asset : null);
+			}
 			if ((Object)(object)manifestAsset != (Object)null)
 			{
 				manifestContent = manifestAsset.text;
@@ -640,10 +657,18 @@ public class Skin
 		if ((Object)(object)bundle != (Object)null)
 		{
 			iconName = "Assets/Skins/" + workshopId + "/icon.png";
-			AssetBundleRequest textRequest = bundle.LoadAssetAsync<Sprite>(iconName);
-			yield return textRequest;
-			Object asset2 = textRequest.asset;
-			Sprite val = (Sprite)(object)((asset2 is Sprite) ? asset2 : null);
+			Sprite val;
+			if (WorkshopSkin.AsyncBundleQueueBlocked)
+			{
+				val = bundle.LoadAsset<Sprite>(iconName);
+			}
+			else
+			{
+				AssetBundleRequest textRequest = bundle.LoadAssetAsync<Sprite>(iconName);
+				yield return textRequest;
+				Object asset2 = textRequest.asset;
+				val = (Sprite)(object)((asset2 is Sprite) ? asset2 : null);
+			}
 			if ((Object)(object)val != (Object)null)
 			{
 				sprite = val;
@@ -798,11 +823,19 @@ public class Skin
 				if ((Object)(object)bundle != (Object)null)
 				{
 					textureName = "Assets/Skins/" + workshopId + "/" + mat.Value;
-					AssetBundleRequest textureRequest = bundle.LoadAssetAsync<Texture2D>(textureName);
-					yield return textureRequest;
-					Object asset = textureRequest.asset;
-					val = (Texture2D)(object)((asset is Texture2D) ? asset : null);
-					flag = true;
+					if (WorkshopSkin.AsyncBundleQueueBlocked)
+					{
+						val = bundle.LoadAsset<Texture2D>(textureName);
+						flag = true;
+					}
+					else
+					{
+						AssetBundleRequest textureRequest = bundle.LoadAssetAsync<Texture2D>(textureName);
+						yield return textureRequest;
+						Object asset = textureRequest.asset;
+						val = (Texture2D)(object)((asset is Texture2D) ? asset : null);
+						flag = true;
+					}
 				}
 				if ((Object)(object)val == (Object)null && directory != null)
 				{
@@ -3369,6 +3402,10 @@ internal class WorkshopPlayerPreview : MonoBehaviour
 		{
 			Cleanup();
 		}
+	}
+
+	private void Update()
+	{
 	}
 }
 
