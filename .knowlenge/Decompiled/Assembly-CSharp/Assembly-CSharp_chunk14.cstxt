@@ -1698,8 +1698,8 @@ public class SnowmobileAudio : GroundVehicleAudio
 	[SerializeField]
 	private EngineAudioSet engineAudioSet;
 
-	[Header("Skis")]
 	[SerializeField]
+	[Header("Skis")]
 	private AnimationCurve skiGainCurve;
 
 	[SerializeField]
@@ -1814,8 +1814,8 @@ using UnityEngine;
 
 public class SoccerBall : BaseCombatEntity
 {
-	[SerializeField]
 	[Header("Soccer Ball")]
+	[SerializeField]
 	private Rigidbody rigidBody;
 
 	[SerializeField]
@@ -2166,8 +2166,8 @@ public class SubmarineAudio : MonoBehaviour
 	[SerializeField]
 	private SoundDefinition waterSubmergeSoundDef;
 
-	[SerializeField]
 	[Header("Interior")]
+	[SerializeField]
 	private SoundDefinition activeLoopDef;
 
 	[SerializeField]
@@ -4435,8 +4435,8 @@ using UnityEngine;
 
 public class LocomotiveExtraVisuals : MonoBehaviour
 {
-	[SerializeField]
 	[Header("Gauges")]
+	[SerializeField]
 	private TrainEngine trainEngine;
 
 	[SerializeField]
@@ -4466,8 +4466,8 @@ public class LocomotiveExtraVisuals : MonoBehaviour
 	[SerializeField]
 	private float speedoMax = 80f;
 
-	[Header("Fans")]
 	[SerializeField]
+	[Header("Fans")]
 	private Transform[] engineFans;
 }
 
@@ -5041,8 +5041,8 @@ public class TrainEngineAudio : TrainCarAudio
 	[SerializeField]
 	private Transform hornSoundPosition;
 
-	[SerializeField]
 	[Header("Engine")]
+	[SerializeField]
 	private SoundDefinition engineStartSound;
 
 	[SerializeField]
@@ -6048,8 +6048,8 @@ public class TrainWagonLootData : ScriptableObject
 	[SerializeField]
 	private LootOption[] oreOptions;
 
-	[ReadOnly]
 	[SerializeField]
+	[ReadOnly]
 	private LootOption lootWagonContent;
 
 	[SerializeField]
@@ -8101,8 +8101,8 @@ using UnityEngine;
 
 public class ChargeUpIOEntity : IOEntity
 {
-	[Tooltip("This amount will be added to the charge meter every second.")]
 	[Header("ChargeUp IO")]
+	[Tooltip("This amount will be added to the charge meter every second.")]
 	public int powerConsumptionWhileCharging = 1;
 
 	public float chargeRequiredToBecomeActive = 10f;
@@ -8121,8 +8121,8 @@ public class ChargeUpIOEntity : IOEntity
 
 	public bool RequireInputToTrigger;
 
-	[Header("Charging Sounds")]
 	[Tooltip("If this entity has no sound, disable this to save on resources")]
+	[Header("Charging Sounds")]
 	public bool doSounds = true;
 
 	public SoundDefinition startChargingSound;
@@ -10212,31 +10212,79 @@ public class PowergridManager : PointEntity<PowergridManager>
 		}
 	}
 
-	private static bool Server_TryFindForceFastDeteriorationFuse(out Item lowestConditionFuse)
+	private static bool Server_IsActiveFuse(InsertedFuseEntry entry)
 	{
-		float num = Mathf.Clamp01(Powergrid.fuseFastDeteriorationThreshold);
-		lowestConditionFuse = null;
-		float num2 = float.MaxValue;
+		if ((Object)(object)entry.FuseBox != (Object)null && !entry.FuseBox.IsDestroyed && entry.Fuse != null)
+		{
+			return entry.Fuse.hasCondition;
+		}
+		return false;
+	}
+
+	public static void Server_GatherInsertedFuses(List<Item> fuses)
+	{
 		int i = 0;
 		for (int count = insertedFuses.Count; i < count; i++)
 		{
-			InsertedFuseEntry insertedFuseEntry = insertedFuses[i];
-			if (!((Object)(object)insertedFuseEntry.FuseBox == (Object)null) && !insertedFuseEntry.FuseBox.IsDestroyed && insertedFuseEntry.Fuse.hasCondition)
+			InsertedFuseEntry entry = insertedFuses[i];
+			if (Server_IsActiveFuse(entry))
 			{
-				float conditionNormalized = insertedFuseEntry.Fuse.conditionNormalized;
-				if (conditionNormalized <= num)
+				fuses.Add(entry.Fuse);
+			}
+		}
+	}
+
+	public static void Server_GatherFullDecayFuses(List<Item> fullDecayFuses)
+	{
+		int fuseFullDecayCount = Powergrid.fuseFullDecayCount;
+		if (fuseFullDecayCount <= 0)
+		{
+			return;
+		}
+		int i = 0;
+		for (int count = insertedFuses.Count; i < count; i++)
+		{
+			InsertedFuseEntry entry = insertedFuses[i];
+			if (!Server_IsActiveFuse(entry))
+			{
+				continue;
+			}
+			float condition = entry.Fuse.condition;
+			int num = fullDecayFuses.Count;
+			for (int j = 0; j < fullDecayFuses.Count; j++)
+			{
+				if (condition < fullDecayFuses[j].condition)
 				{
-					lowestConditionFuse = null;
-					return false;
+					num = j;
+					break;
 				}
-				if (conditionNormalized < num2)
+			}
+			if (num < fuseFullDecayCount)
+			{
+				fullDecayFuses.Insert(num, entry.Fuse);
+				if (fullDecayFuses.Count > fuseFullDecayCount)
 				{
-					num2 = conditionNormalized;
-					lowestConditionFuse = insertedFuseEntry.Fuse;
+					fullDecayFuses.RemoveAt(fullDecayFuses.Count - 1);
 				}
 			}
 		}
-		return lowestConditionFuse != null;
+	}
+
+	public static float Server_GetSlowDecayRateScale(Item fuse)
+	{
+		float num = Mathf.Max(Powergrid.fuseSlowDecayFractionMin, 0f);
+		float num2 = Mathf.Max(Powergrid.fuseSlowDecayFractionMax, num);
+		if (num2 <= 0f)
+		{
+			return 0f;
+		}
+		if (num >= num2)
+		{
+			return num;
+		}
+		ulong value = fuse.uid.Value;
+		uint num3 = (uint)(value ^ (value >> 32));
+		return Mathf.Lerp(num, num2, SeedRandom.Wanghash01(ref num3));
 	}
 
 	private void ServerFuseDeteriorationTick()
@@ -10251,21 +10299,26 @@ public class PowergridManager : PointEntity<PowergridManager>
 			{
 				return;
 			}
-			Item item = null;
-			if (Powergrid.fuseFastDeteriorateLowest && Server_TryFindForceFastDeteriorationFuse(out var lowestConditionFuse))
+			PooledList<Item> val2 = Pool.Get<PooledList<Item>>();
+			try
 			{
-				item = lowestConditionFuse;
-			}
-			for (int num = insertedFuses.Count - 1; num >= 0; num--)
-			{
-				if (num < insertedFuses.Count)
+				Server_GatherFullDecayFuses((List<Item>)(object)val2);
+				for (int num = insertedFuses.Count - 1; num >= 0; num--)
 				{
-					InsertedFuseEntry insertedFuseEntry = insertedFuses[num];
-					if (!((Object)(object)insertedFuseEntry.FuseBox == (Object)null) && !insertedFuseEntry.FuseBox.IsDestroyed && insertedFuseEntry.Fuse.hasCondition)
+					if (num < insertedFuses.Count)
 					{
-						insertedFuseEntry.FuseBox.Server_DeteriorateFuse(insertedFuseEntry.Fuse, deltaTime, insertedFuseEntry.Fuse == item);
+						InsertedFuseEntry entry = insertedFuses[num];
+						if (Server_IsActiveFuse(entry))
+						{
+							float decayRateScale = (((List<Item>)(object)val2).Contains(entry.Fuse) ? 1f : Server_GetSlowDecayRateScale(entry.Fuse));
+							entry.FuseBox.Server_DeteriorateFuse(entry.Fuse, deltaTime, decayRateScale);
+						}
 					}
 				}
+			}
+			finally
+			{
+				((IDisposable)val2)?.Dispose();
 			}
 		}
 		finally
@@ -10772,6 +10825,8 @@ public class PowerlinePowergridAccessPointSpawn : MonoBehaviour
 }
 
 
+using System;
+using System.Collections.Generic;
 using System.Text;
 using Facepunch;
 using UnityEngine;
@@ -10786,28 +10841,29 @@ public class Powergrid : ConsoleSystem
 	[ReplicatedVar]
 	public static int greenRecyclerFullEfficiencyStage = -1;
 
-	[Help("Pretend there are this many additional heavy fuses currently plugged into the power plant. Can input negative numbers to negate the effect of any currently plugged in fuses.")]
 	[ServerVar]
+	[Help("Pretend there are this many additional heavy fuses currently plugged into the power plant. Can input negative numbers to negate the effect of any currently plugged in fuses.")]
 	public static int simulatePowerPlantFuses = 0;
 
-	[ServerVar]
-	[Help("How long heavy fuses last for when plugged into the power plant. If <= 0 then fuses will last forever. This is the total time a fuse takes to go from full condition to broken, regardless of fuseFastDeteriorationThreshold / fuseFastDeteriorationScale.")]
+	[ServerVar(Help = "How long a heavy fuse plugged into the power plant lasts while it is decaying at the full rate (how long the worst fuses in the power plant survive for). If <= 0 then fuses last forever.", Saved = true)]
 	public static float fuseLifespanSeconds = 9600f;
 
 	private const float defaultFuseLifespanSeconds = 9600f;
 
-	[ServerVar(Help = "Normalized condition (0-1) at which heavy fuses plugged into the power plant start deteriorating faster. At or below this threshold the deterioration rate is multiplied by fuseFastDeteriorationScale. Set to 0 to disable accelerated deterioration.", Saved = true)]
-	public static float fuseFastDeteriorationThreshold = 0.3f;
+	[ServerVar(Help = "How many of the worst condition heavy fuses in the power plant decay at the full rate (burning out after fuseLifespanSeconds). Every other inserted fuse decays slowly instead. If 0 no fuse ever decays at the full rate.", Saved = true)]
+	public static int fuseFullDecayCount = 3;
 
-	private const float defaultFuseFastDeteriorationThreshold = 0.3f;
+	private const int defaultFuseFullDecayCount = 3;
 
-	[ServerVar(Help = "How much faster heavy fuses plugged into the power plant deteriorate once their normalized condition is at or below fuseFastDeteriorationThreshold.", Saved = true)]
-	public static float fuseFastDeteriorationScale = 3f;
+	[ServerVar(Help = "Minimum fraction (0-1) of the full decay rate applied to heavy fuses that aren't one of the worst fuseFullDecayCount. Each fuse rolls its own fraction between fuseSlowDecayFractionMin and fuseSlowDecayFractionMax and keeps it for its lifetime.", Saved = true)]
+	public static float fuseSlowDecayFractionMin = 0.08f;
 
-	private const float defaultFuseFastDeteriorationScale = 3f;
+	private const float defaultFuseSlowDecayFractionMin = 0.08f;
 
-	[ServerVar(Help = "If enabled, whenever no heavy fuse in the power plant is below fuseFastDeteriorationThreshold, the single lowest condition fuse deteriorates at the fast rate anyway.", Saved = true)]
-	public static bool fuseFastDeteriorateLowest = true;
+	[ServerVar(Help = "Maximum fraction (0-1) of the full decay rate applied to heavy fuses that aren't one of the worst fuseFullDecayCount. See fuseSlowDecayFractionMin.", Saved = true)]
+	public static float fuseSlowDecayFractionMax = 0.12f;
+
+	private const float defaultFuseSlowDecayFractionMax = 0.12f;
 
 	[ServerVar(Help = "Max time per frame (ms) to spend notifying powergrid entities of a stage change.", Saved = true)]
 	public static float stageChangeWorkQueueBudget = 0.1f;
@@ -10833,9 +10889,9 @@ public class Powergrid : ConsoleSystem
 		stringBuilder.AppendLine(string.Format("{0}: {1}", "enabled", enabled));
 		stringBuilder.AppendLine(string.Format("{0}: {1}", "simulatePowerPlantFuses", simulatePowerPlantFuses));
 		stringBuilder.AppendLine(string.Format("{0}: {1}", "fuseLifespanSeconds", fuseLifespanSeconds));
-		stringBuilder.AppendLine(string.Format("{0}: {1}", "fuseFastDeteriorationThreshold", fuseFastDeteriorationThreshold));
-		stringBuilder.AppendLine(string.Format("{0}: {1}", "fuseFastDeteriorationScale", fuseFastDeteriorationScale));
-		stringBuilder.AppendLine(string.Format("{0}: {1}", "fuseFastDeteriorateLowest", fuseFastDeteriorateLowest));
+		stringBuilder.AppendLine(string.Format("{0}: {1}", "fuseFullDecayCount", fuseFullDecayCount));
+		stringBuilder.AppendLine(string.Format("{0}: {1}", "fuseSlowDecayFractionMin", fuseSlowDecayFractionMin));
+		stringBuilder.AppendLine(string.Format("{0}: {1}", "fuseSlowDecayFractionMax", fuseSlowDecayFractionMax));
 		stringBuilder.AppendLine(string.Format("{0}: {1}", "greenRecyclerFullEfficiencyStage", greenRecyclerFullEfficiencyStage));
 		stringBuilder.AppendLine(string.Format("{0}: {1}", "stageChangeWorkQueueBudget", stageChangeWorkQueueBudget));
 		stringBuilder.AppendLine(string.Format("{0}: {1}", "stageChangeWorkQueueDelayBetweenJobs", stageChangeWorkQueueDelayBetweenJobs));
@@ -10856,6 +10912,61 @@ public class Powergrid : ConsoleSystem
 		stringBuilder.AppendLine($"Number of Powergrid connected entities: {PowergridManager.GetNoOfPowergridEntities()}");
 		arg.ReplyWith(stringBuilder.ToString());
 		Pool.FreeUnmanaged(ref stringBuilder);
+	}
+
+	[ServerVar]
+	public static void fuseStatus(Arg arg)
+	{
+		//IL_007d: Unknown result type (might be due to invalid IL or missing references)
+		if ((Object)(object)PointEntity<PowergridManager>.ServerInstance == (Object)null)
+		{
+			arg.ReplyWith("Failed to retrieve server instance for PowergridManager");
+			return;
+		}
+		PooledList<Item> val = Pool.Get<PooledList<Item>>();
+		try
+		{
+			PowergridManager.Server_GatherInsertedFuses((List<Item>)(object)val);
+			if (((List<Item>)(object)val).Count > 0)
+			{
+				StringBuilder stringBuilder = Pool.Get<StringBuilder>();
+				PooledList<Item> val2 = Pool.Get<PooledList<Item>>();
+				try
+				{
+					PowergridManager.Server_GatherFullDecayFuses((List<Item>)(object)val2);
+					int i = 0;
+					for (int count = ((List<Item>)(object)val).Count; i < count; i++)
+					{
+						Item item = ((List<Item>)(object)val)[i];
+						float num = (((List<Item>)(object)val2).Contains(item) ? 1f : PowergridManager.Server_GetSlowDecayRateScale(item));
+						stringBuilder.Append($"  Fuse {item.uid}: condition {item.conditionNormalized:P0}");
+						stringBuilder.Append($", decay rate {num:P0}");
+						if (fuseLifespanSeconds > 0f && num > 0f)
+						{
+							float num2 = item.conditionNormalized * fuseLifespanSeconds / num;
+							stringBuilder.Append($", ~{TimeSpan.FromSeconds(num2):d\\.hh\\:mm\\:ss} left at this rate");
+						}
+						else
+						{
+							stringBuilder.Append(", never burns out at this rate");
+						}
+						stringBuilder.AppendLine();
+					}
+					arg.ReplyWith(stringBuilder.ToString());
+					Pool.FreeUnmanaged(ref stringBuilder);
+					return;
+				}
+				finally
+				{
+					((IDisposable)val2)?.Dispose();
+				}
+			}
+			arg.ReplyWith("No fuses inserted");
+		}
+		finally
+		{
+			((IDisposable)val)?.Dispose();
+		}
 	}
 }
 
@@ -16893,8 +17004,8 @@ public class Climate : SingletonComponent<Climate>
 		[Horizontal(4, -1)]
 		public Float4 FogAmbientIntensity = Float4.One();
 
-		[Range(0f, 1f)]
 		[Horizontal(4, -1)]
+		[Range(0f, 1f)]
 		public Float4 FogAmbientSaturation = Float4.One();
 
 		[Horizontal(4, -1)]
@@ -17579,8 +17690,8 @@ public class ClimateParameters
 	[Horizontal(4, -1)]
 	public Float4 FogAmbientIntensity = Float4.One();
 
-	[Range(0f, 1f)]
 	[Horizontal(4, -1)]
+	[Range(0f, 1f)]
 	public Float4 FogAmbientSaturation = Float4.One();
 
 	[Horizontal(4, -1)]
@@ -19445,8 +19556,8 @@ public class EffectRecycle : BaseMonoBehaviour, IClientComponent, IRagdollInhert
 		DetachWaitDestroy
 	}
 
-	[ReadOnly]
 	[FormerlySerializedAs("lifeTime")]
+	[ReadOnly]
 	public float detachTime;
 
 	[ReadOnly]
@@ -19782,8 +19893,8 @@ public class EnvironmentVolume : MonoBehaviour, IPrefabPreProcess
 	[field: Tooltip("Controls the falloff amount of the positive axes of spatially aware volumes.")]
 	public Vector3 FalloffPositive { get; private set; } = Vector3.zero;
 
-	[field: SerializeField]
 	[field: Tooltip("Controls the falloff amount of the negative axes of spatially aware volumes.")]
+	[field: SerializeField]
 	public Vector3 FalloffNegative { get; private set; } = Vector3.zero;
 
 	[field: SerializeField]
@@ -20208,9 +20319,9 @@ using UnityEngine;
 public static class EnvironmentVolumeMath
 {
 	[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-	internal delegate void CalculateTransformationBoundsBurst_00005EEA$PostfixBurstDelegate(in float4x4 transformationMatrix, in bool capsule, out Bounds bounds);
+	internal delegate void CalculateTransformationBoundsBurst_00005EEF$PostfixBurstDelegate(in float4x4 transformationMatrix, in bool capsule, out Bounds bounds);
 
-	internal static class CalculateTransformationBoundsBurst_00005EEA$BurstDirectCall
+	internal static class CalculateTransformationBoundsBurst_00005EEF$BurstDirectCall
 	{
 		private static IntPtr Pointer;
 
@@ -20221,7 +20332,7 @@ public static class EnvironmentVolumeMath
 			//IL_001b: Unknown result type (might be due to invalid IL or missing references)
 			if (Pointer == (IntPtr)0)
 			{
-				Pointer = BurstCompiler.CompileFunctionPointer<CalculateTransformationBoundsBurst_00005EEA$PostfixBurstDelegate>((CalculateTransformationBoundsBurst_00005EEA$PostfixBurstDelegate)CalculateTransformationBoundsBurst).Value;
+				Pointer = BurstCompiler.CompileFunctionPointer<CalculateTransformationBoundsBurst_00005EEF$PostfixBurstDelegate>((CalculateTransformationBoundsBurst_00005EEF$PostfixBurstDelegate)CalculateTransformationBoundsBurst).Value;
 			}
 			P_0 = Pointer;
 		}
@@ -20249,9 +20360,9 @@ public static class EnvironmentVolumeMath
 	}
 
 	[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-	internal delegate void MultiplyPoint3X4_00005EEB$PostfixBurstDelegate(in float4x4 transformationMatrix, in float3 point, out float3 result);
+	internal delegate void MultiplyPoint3X4_00005EF0$PostfixBurstDelegate(in float4x4 transformationMatrix, in float3 point, out float3 result);
 
-	internal static class MultiplyPoint3X4_00005EEB$BurstDirectCall
+	internal static class MultiplyPoint3X4_00005EF0$BurstDirectCall
 	{
 		private static IntPtr Pointer;
 
@@ -20262,7 +20373,7 @@ public static class EnvironmentVolumeMath
 			//IL_001b: Unknown result type (might be due to invalid IL or missing references)
 			if (Pointer == (IntPtr)0)
 			{
-				Pointer = BurstCompiler.CompileFunctionPointer<MultiplyPoint3X4_00005EEB$PostfixBurstDelegate>((MultiplyPoint3X4_00005EEB$PostfixBurstDelegate)MultiplyPoint3X4).Value;
+				Pointer = BurstCompiler.CompileFunctionPointer<MultiplyPoint3X4_00005EF0$PostfixBurstDelegate>((MultiplyPoint3X4_00005EF0$PostfixBurstDelegate)MultiplyPoint3X4).Value;
 			}
 			P_0 = Pointer;
 		}
@@ -20290,9 +20401,9 @@ public static class EnvironmentVolumeMath
 	}
 
 	[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-	internal delegate void UpdateVolumeTransformationAndBoundsBurst_00005EEC$PostfixBurstDelegate(in float3 size, in float3 center, in float4x4 localToWorldMatrix, in bool isCapsule, out float4x4 volumeTransformation, out float4x4 volumeTransformationInverse, out float3 volumePosition, out Bounds volumeBounds);
+	internal delegate void UpdateVolumeTransformationAndBoundsBurst_00005EF1$PostfixBurstDelegate(in float3 size, in float3 center, in float4x4 localToWorldMatrix, in bool isCapsule, out float4x4 volumeTransformation, out float4x4 volumeTransformationInverse, out float3 volumePosition, out Bounds volumeBounds);
 
-	internal static class UpdateVolumeTransformationAndBoundsBurst_00005EEC$BurstDirectCall
+	internal static class UpdateVolumeTransformationAndBoundsBurst_00005EF1$BurstDirectCall
 	{
 		private static IntPtr Pointer;
 
@@ -20303,7 +20414,7 @@ public static class EnvironmentVolumeMath
 			//IL_001b: Unknown result type (might be due to invalid IL or missing references)
 			if (Pointer == (IntPtr)0)
 			{
-				Pointer = BurstCompiler.CompileFunctionPointer<UpdateVolumeTransformationAndBoundsBurst_00005EEC$PostfixBurstDelegate>((UpdateVolumeTransformationAndBoundsBurst_00005EEC$PostfixBurstDelegate)UpdateVolumeTransformationAndBoundsBurst).Value;
+				Pointer = BurstCompiler.CompileFunctionPointer<UpdateVolumeTransformationAndBoundsBurst_00005EF1$PostfixBurstDelegate>((UpdateVolumeTransformationAndBoundsBurst_00005EF1$PostfixBurstDelegate)UpdateVolumeTransformationAndBoundsBurst).Value;
 			}
 			P_0 = Pointer;
 		}
@@ -20331,24 +20442,24 @@ public static class EnvironmentVolumeMath
 	}
 
 	[BurstCompile]
-	[MonoPInvokeCallback(typeof(CalculateTransformationBoundsBurst_00005EEA$PostfixBurstDelegate))]
+	[MonoPInvokeCallback(typeof(CalculateTransformationBoundsBurst_00005EEF$PostfixBurstDelegate))]
 	private static void CalculateTransformationBoundsBurst(in float4x4 transformationMatrix, in bool capsule, out Bounds bounds)
 	{
-		CalculateTransformationBoundsBurst_00005EEA$BurstDirectCall.Invoke(in transformationMatrix, in capsule, out bounds);
+		CalculateTransformationBoundsBurst_00005EEF$BurstDirectCall.Invoke(in transformationMatrix, in capsule, out bounds);
 	}
 
-	[MonoPInvokeCallback(typeof(MultiplyPoint3X4_00005EEB$PostfixBurstDelegate))]
 	[BurstCompile]
+	[MonoPInvokeCallback(typeof(MultiplyPoint3X4_00005EF0$PostfixBurstDelegate))]
 	private static void MultiplyPoint3X4(in float4x4 transformationMatrix, in float3 point, out float3 result)
 	{
-		MultiplyPoint3X4_00005EEB$BurstDirectCall.Invoke(in transformationMatrix, in point, out result);
+		MultiplyPoint3X4_00005EF0$BurstDirectCall.Invoke(in transformationMatrix, in point, out result);
 	}
 
-	[MonoPInvokeCallback(typeof(UpdateVolumeTransformationAndBoundsBurst_00005EEC$PostfixBurstDelegate))]
 	[BurstCompile]
+	[MonoPInvokeCallback(typeof(UpdateVolumeTransformationAndBoundsBurst_00005EF1$PostfixBurstDelegate))]
 	public static void UpdateVolumeTransformationAndBoundsBurst(in float3 size, in float3 center, in float4x4 localToWorldMatrix, in bool isCapsule, out float4x4 volumeTransformation, out float4x4 volumeTransformationInverse, out float3 volumePosition, out Bounds volumeBounds)
 	{
-		UpdateVolumeTransformationAndBoundsBurst_00005EEC$BurstDirectCall.Invoke(in size, in center, in localToWorldMatrix, in isCapsule, out volumeTransformation, out volumeTransformationInverse, out volumePosition, out volumeBounds);
+		UpdateVolumeTransformationAndBoundsBurst_00005EF1$BurstDirectCall.Invoke(in size, in center, in localToWorldMatrix, in isCapsule, out volumeTransformation, out volumeTransformationInverse, out volumePosition, out volumeBounds);
 	}
 
 	[MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -20468,7 +20579,7 @@ using Unity.Mathematics;
 using UnityEngine;
 
 [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-internal delegate void CalculateTransformationBoundsBurst_00005EEA$PostfixBurstDelegate(in float4x4 transformationMatrix, in bool capsule, out Bounds bounds);
+internal delegate void CalculateTransformationBoundsBurst_00005EEF$PostfixBurstDelegate(in float4x4 transformationMatrix, in bool capsule, out Bounds bounds);
 
 
 using System;
@@ -20476,7 +20587,7 @@ using Unity.Burst;
 using Unity.Mathematics;
 using UnityEngine;
 
-internal static class CalculateTransformationBoundsBurst_00005EEA$BurstDirectCall
+internal static class CalculateTransformationBoundsBurst_00005EEF$BurstDirectCall
 {
 	private static IntPtr Pointer;
 
@@ -20487,7 +20598,7 @@ internal static class CalculateTransformationBoundsBurst_00005EEA$BurstDirectCal
 		//IL_001b: Unknown result type (might be due to invalid IL or missing references)
 		if (Pointer == (IntPtr)0)
 		{
-			Pointer = BurstCompiler.CompileFunctionPointer<CalculateTransformationBoundsBurst_00005EEA$PostfixBurstDelegate>((CalculateTransformationBoundsBurst_00005EEA$PostfixBurstDelegate)CalculateTransformationBoundsBurst).Value;
+			Pointer = BurstCompiler.CompileFunctionPointer<CalculateTransformationBoundsBurst_00005EEF$PostfixBurstDelegate>((CalculateTransformationBoundsBurst_00005EEF$PostfixBurstDelegate)CalculateTransformationBoundsBurst).Value;
 		}
 		P_0 = Pointer;
 	}
@@ -20519,14 +20630,14 @@ using System.Runtime.InteropServices;
 using Unity.Mathematics;
 
 [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-internal delegate void MultiplyPoint3X4_00005EEB$PostfixBurstDelegate(in float4x4 transformationMatrix, in float3 point, out float3 result);
+internal delegate void MultiplyPoint3X4_00005EF0$PostfixBurstDelegate(in float4x4 transformationMatrix, in float3 point, out float3 result);
 
 
 using System;
 using Unity.Burst;
 using Unity.Mathematics;
 
-internal static class MultiplyPoint3X4_00005EEB$BurstDirectCall
+internal static class MultiplyPoint3X4_00005EF0$BurstDirectCall
 {
 	private static IntPtr Pointer;
 
@@ -20537,7 +20648,7 @@ internal static class MultiplyPoint3X4_00005EEB$BurstDirectCall
 		//IL_001b: Unknown result type (might be due to invalid IL or missing references)
 		if (Pointer == (IntPtr)0)
 		{
-			Pointer = BurstCompiler.CompileFunctionPointer<MultiplyPoint3X4_00005EEB$PostfixBurstDelegate>((MultiplyPoint3X4_00005EEB$PostfixBurstDelegate)MultiplyPoint3X4).Value;
+			Pointer = BurstCompiler.CompileFunctionPointer<MultiplyPoint3X4_00005EF0$PostfixBurstDelegate>((MultiplyPoint3X4_00005EF0$PostfixBurstDelegate)MultiplyPoint3X4).Value;
 		}
 		P_0 = Pointer;
 	}
@@ -20570,7 +20681,7 @@ using Unity.Mathematics;
 using UnityEngine;
 
 [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-internal delegate void UpdateVolumeTransformationAndBoundsBurst_00005EEC$PostfixBurstDelegate(in float3 size, in float3 center, in float4x4 localToWorldMatrix, in bool isCapsule, out float4x4 volumeTransformation, out float4x4 volumeTransformationInverse, out float3 volumePosition, out Bounds volumeBounds);
+internal delegate void UpdateVolumeTransformationAndBoundsBurst_00005EF1$PostfixBurstDelegate(in float3 size, in float3 center, in float4x4 localToWorldMatrix, in bool isCapsule, out float4x4 volumeTransformation, out float4x4 volumeTransformationInverse, out float3 volumePosition, out Bounds volumeBounds);
 
 
 using System;
@@ -20578,7 +20689,7 @@ using Unity.Burst;
 using Unity.Mathematics;
 using UnityEngine;
 
-internal static class UpdateVolumeTransformationAndBoundsBurst_00005EEC$BurstDirectCall
+internal static class UpdateVolumeTransformationAndBoundsBurst_00005EF1$BurstDirectCall
 {
 	private static IntPtr Pointer;
 
@@ -20589,7 +20700,7 @@ internal static class UpdateVolumeTransformationAndBoundsBurst_00005EEC$BurstDir
 		//IL_001b: Unknown result type (might be due to invalid IL or missing references)
 		if (Pointer == (IntPtr)0)
 		{
-			Pointer = BurstCompiler.CompileFunctionPointer<UpdateVolumeTransformationAndBoundsBurst_00005EEC$PostfixBurstDelegate>((UpdateVolumeTransformationAndBoundsBurst_00005EEC$PostfixBurstDelegate)UpdateVolumeTransformationAndBoundsBurst).Value;
+			Pointer = BurstCompiler.CompileFunctionPointer<UpdateVolumeTransformationAndBoundsBurst_00005EF1$PostfixBurstDelegate>((UpdateVolumeTransformationAndBoundsBurst_00005EF1$PostfixBurstDelegate)UpdateVolumeTransformationAndBoundsBurst).Value;
 		}
 		P_0 = Pointer;
 	}
@@ -20836,14 +20947,14 @@ public class FoliagePlacement : ScriptableObject
 	[Header("Randomization")]
 	public float RandomScaling = 0.2f;
 
-	[Header("Placement Range")]
 	[MinMax(0f, 1f)]
+	[Header("Placement Range")]
 	public MinMax Range = new MinMax(0f, 1f);
 
 	public float RangeFade = 0.1f;
 
-	[Range(0f, 1f)]
 	[Header("LOD")]
+	[Range(0f, 1f)]
 	public float DistanceDensity;
 
 	[Range(1f, 2f)]
@@ -24297,8 +24408,8 @@ using UnityEngine;
 
 public class RendererBatch : MonoBehaviour, IClientComponent, ICustomMaterialReplacer, IWorkshopPreview
 {
-	[SerializeField]
 	[HideInInspector]
+	[SerializeField]
 	public int MaxVertexCountOverride;
 
 	[SerializeField]
@@ -24352,8 +24463,8 @@ public class CopyLODValues : MonoBehaviour, IEditorComponent
 	[SerializeField]
 	private LODGroup destination;
 
-	[Tooltip("Is false, exact values are copied. If true, values are scaled based on LODGroup size, so the changeover point will match.")]
 	[SerializeField]
+	[Tooltip("Is false, exact values are copied. If true, values are scaled based on LODGroup size, so the changeover point will match.")]
 	private bool scale = true;
 
 	public bool CanCopy()
@@ -28894,10 +29005,10 @@ using UnityEngine.Serialization;
 [CreateAssetMenu(menuName = "Rust/Density Spawn Population")]
 public class DensitySpawnPopulation : SpawnPopulationBase
 {
-	[Header("Spawn Info")]
+	[FormerlySerializedAs("TargetDensity")]
 	[SerializeField]
 	[Tooltip("Usually per square km")]
-	[FormerlySerializedAs("TargetDensity")]
+	[Header("Spawn Info")]
 	public float _targetDensity = 1f;
 
 	public int ClusterSizeMin = 1;
@@ -30009,9 +30120,9 @@ public abstract class BaseSpawnPoint : MonoBehaviour, IServerComponent
 
 	public SpawnPointType spawnPointType;
 
-	[SerializeField]
 	[Range(1f, 25f)]
 	[Tooltip("Min distance between the spawn area and any human players")]
+	[SerializeField]
 	protected float playerCheckMargin = 2f;
 
 	public static Dictionary<SpawnPointType, List<BaseSpawnPoint>> spawnPoints = new Dictionary<SpawnPointType, List<BaseSpawnPoint>>();
@@ -30669,8 +30780,8 @@ using UnityEngine;
 public class RadialSpawnPoint : BaseSpawnPoint
 {
 	[Header("Position Settings")]
-	[SerializeField]
 	[Tooltip("Circle to spawn within")]
+	[SerializeField]
 	public float radius = 10f;
 
 	[SerializeField]
@@ -30697,8 +30808,8 @@ public class RadialSpawnPoint : BaseSpawnPoint
 	[SerializeField]
 	private bool yRotationEnabled = true;
 
-	[SerializeField]
 	[Range(-180f, 180f)]
+	[SerializeField]
 	private float yRotationMin = -180f;
 
 	[SerializeField]
