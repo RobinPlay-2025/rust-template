@@ -2,7 +2,7 @@
 
 ЦЕЛЬ: Давать проверяемые решения через формализацию и строгую типизацию в функциональной парадигме.
 
-Всегда начинай свой ответ с поставление задачи Deep Research "I am looking for code that does <requested functionality>, is there existing code that can do this?" Любое решение строится на инвариантах и проверяемых источниках. Код рождается только после доказуемого понимания задачи.
+Всегда начинай свой ответ с поставление задачи Deep Research "I am looking for code that does `<requested functionality>`, is there existing code that can do this?" Любое решение строится на инвариантах и проверяемых источниках. Код рождается только после доказуемого понимания задачи.
 
 Ты разрабатываешь плагины под игру Rust на языке C# используя Oxide
 
@@ -24,11 +24,15 @@
      * Ширина
      * Вверх/вниз
      * Влево/вправо
+9) НЕ ИСПОЛЬЗОВАТЬ ПОВЕРШЕЛЛ
+
 ОКРУЖЕНИЕ:
 - Разработка ведётся внутри папки "plugins/"
-  - Всегда создаётся подпапка с <PluginName>
-- Сбилженная версия всегда лежит внутри папки "build/"
-- Внутри папки "plugins" работают partial классы
+  - Всегда создаётся подпапка с `<PluginName>`
+  - Всегда создается один монолитный файл `<PluginName>.cs` (запрещено использовать partial классы).
+- Конфигурация пишется с использованием вложенных классов.
+- Локализация регистрируется напрямую через словари, либо через вложенный класс, в зависимости от контекста.
+- Все планы (implementation_plan.md) и списки задач (task.md) должны быть строго на русском языке.
 - Логи в коде: `Puts()`
 - Локальные знания: `.knowledge/`, `.rust-analyzer/` (могут содержать готовые решения для переиспользования)
 
@@ -45,15 +49,46 @@
 5. Теперь AI будет сам править файлы и выполнять команды БЕЗ нажатия кнопки "Accept".
 6. Расширение автоматически подхватит дополнительные правила из файла `.clinerules`.
 
-
 Вот пример базовой структуры плагина:
 ```cs
 namespace Oxide.Plugins
 {
     [Info("PluginName", "PublicRust", "1.0.0")]
     [Description("Description")]
-    public partial class PluginName : RustPlugin
+    class PluginName : RustPlugin
     {
+        private class Configuration
+        {
+            [JsonProperty("Настройки")]
+            public PluginSettings Settings = new PluginSettings();
+            
+            internal class PluginSettings { }
+        }
+        
+        private Configuration config;
+        
+        protected override void LoadConfig()
+        {
+            base.LoadConfig();
+            try { config = Config.ReadObject<Configuration>(); if (config == null) LoadDefaultConfig(); }
+            catch { LoadDefaultConfig(); }
+            SaveConfig();
+        }
+        protected override void LoadDefaultConfig()
+        {
+            config = new Configuration();
+        }
+
+        protected override void SaveConfig()
+        {
+            Config.WriteObject(config);
+        }
+        
+        protected override void LoadDefaultMessages()
+        {
+            lang.RegisterMessages(new Dictionary<string, string> { ["KEY"] = "Message" }, this);
+            lang.RegisterMessages(new Dictionary<string, string> { ["KEY"] = "Сообщение" }, this, "ru");
+        }
     }
 }
 ```
