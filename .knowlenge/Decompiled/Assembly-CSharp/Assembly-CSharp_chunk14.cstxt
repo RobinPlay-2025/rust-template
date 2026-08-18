@@ -1,3 +1,667 @@
+using System;
+using System.Collections.Generic;
+using Facepunch;
+using Oxide.Core;
+using ProtoBuf;
+using Rust.Modular;
+using UnityEngine;
+
+public abstract class BaseModularVehicle : GroundVehicle, PlayerInventory.ICanMoveFrom, IPrefabPreProcess
+{
+	public bool inEditableLocation;
+
+	public bool prevEditable;
+
+	public bool immuneToDecay;
+
+	public Vector3 realLocalCOM;
+
+	public Item AssociatedItemInstance;
+
+	private bool disablePhysics;
+
+	[Header("Modular Vehicle")]
+	[SerializeField]
+	public List<ModularVehicleSocket> moduleSockets;
+
+	[SerializeField]
+	public Transform centreOfMassTransform;
+
+	[SerializeField]
+	public Transform waterSample;
+
+	[SerializeField]
+	public LODGroup lodGroup;
+
+	public GameObjectRef keyEnterDialog;
+
+	private float _mass = -1f;
+
+	public const Flags FLAG_KINEMATIC = Flags.Reserved6;
+
+	public Dictionary<BaseVehicleModule, Action> moduleAddActions = new Dictionary<BaseVehicleModule, Action>();
+
+	public ModularVehicleInventory Inventory { get; set; }
+
+	public Vector3 CentreOfMass => centreOfMassTransform.localPosition;
+
+	public int NumAttachedModules => AttachedModuleEntities.Count;
+
+	public bool HasAnyModules => AttachedModuleEntities.Count > 0;
+
+	public List<BaseVehicleModule> AttachedModuleEntities { get; } = new List<BaseVehicleModule>();
+
+	public int TotalSockets => moduleSockets.Count;
+
+	public int NumFreeSockets
+	{
+		get
+		{
+			int num = 0;
+			for (int i = 0; i < NumAttachedModules; i++)
+			{
+				num += AttachedModuleEntities[i].GetNumSocketsTaken();
+			}
+			return TotalSockets - num;
+		}
+	}
+
+	private float Mass
+	{
+		get
+		{
+			if (base.isServer)
+			{
+				return rigidBody.mass;
+			}
+			return _mass;
+		}
+	}
+
+	public float TotalMass { get; set; }
+
+	public bool IsKinematic => HasFlag(Flags.Reserved6);
+
+	public virtual bool IsLockable => false;
+
+	public bool HasInited { get; private set; }
+
+	public ItemDefinition AssociatedItemDef => repair.itemTarget;
+
+	public bool IsEditableNow
+	{
+		get
+		{
+			if (base.isServer)
+			{
+				if (inEditableLocation)
+				{
+					return CouldBeEdited();
+				}
+				return false;
+			}
+			return false;
+		}
+	}
+
+	public override void ServerInit()
+	{
+		base.ServerInit();
+		if (!disablePhysics)
+		{
+			rigidBody.isKinematic = false;
+		}
+		prevEditable = IsEditableNow;
+		if (Inventory == null)
+		{
+			Inventory = new ModularVehicleInventory(this, AssociatedItemDef, giveUID: true);
+		}
+	}
+
+	public override void PreServerLoad()
+	{
+		base.PreServerLoad();
+		if (Inventory == null)
+		{
+			Inventory = new ModularVehicleInventory(this, AssociatedItemDef, giveUID: false);
+		}
+	}
+
+	public override void PostServerLoad()
+	{
+		//IL_0014: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0019: Unknown result type (might be due to invalid IL or missing references)
+		base.PostServerLoad();
+		if (Inventory != null)
+		{
+			ItemContainerId uID = Inventory.UID;
+			if (!((ItemContainerId)(ref uID)).IsValid)
+			{
+				Inventory.GiveUIDs();
+			}
+		}
+		using FlagsUpdateScope flagsUpdateScope = StartSetFlags(FlagsUpdateMode.SendNetworkUpdate);
+		flagsUpdateScope.Set(Flags.Open, b: false);
+	}
+
+	public override void DoServerDestroy()
+	{
+		base.DoServerDestroy();
+		if (Inventory != null)
+		{
+			Inventory.Dispose();
+			Inventory = null;
+		}
+	}
+
+	public override float AntiHackVelocity()
+	{
+		return Mathf.Max(GetMaxForwardSpeed() * 1.3f, 30f);
+	}
+
+	public abstract bool IsComplete();
+
+	public bool CouldBeEdited()
+	{
+		if (!AnyMounted())
+		{
+			return !IsDead();
+		}
+		return false;
+	}
+
+	public void DisablePhysics()
+	{
+		disablePhysics = true;
+		rigidBody.isKinematic = true;
+	}
+
+	public void EnablePhysics()
+	{
+		disablePhysics = false;
+		rigidBody.isKinematic = false;
+	}
+
+	public override void VehicleFixedUpdate()
+	{
+		TimeWarning val = TimeWarning.New("BaseModularVehicle.VehicleFixedUpdate", 0);
+		try
+		{
+			base.VehicleFixedUpdate();
+			if (IsEditableNow != prevEditable)
+			{
+				SendNetworkUpdate();
+				prevEditable = IsEditableNow;
+			}
+			using FlagsUpdateScope flagsUpdateScope = StartSetFlags(FlagsUpdateMode.SendNetworkUpdate);
+			flagsUpdateScope.Set(Flags.Reserved6, rigidBody.isKinematic);
+		}
+		finally
+		{
+			((IDisposable)val)?.Dispose();
+		}
+	}
+
+	public override bool MountEligable(BasePlayer player)
+	{
+		//IL_001e: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0023: Unknown result type (might be due to invalid IL or missing references)
+		if (!base.MountEligable(player))
+		{
+			return false;
+		}
+		if (IsDead())
+		{
+			return false;
+		}
+		if (HasDriver())
+		{
+			Vector3 velocity = base.Velocity;
+			if (((Vector3)(ref velocity)).magnitude >= 2f)
+			{
+				return false;
+			}
+		}
+		return true;
+	}
+
+	public override void Save(SaveInfo info)
+	{
+		base.Save(info);
+		info.msg.modularVehicle = Pool.Get<ModularVehicle>();
+		info.msg.modularVehicle.editable = IsEditableNow;
+	}
+
+	public PlayerInventory.CanMoveFromResponse CanMoveFrom(BasePlayer player, Item item)
+	{
+		if ((Object)(object)((Component)item.info).GetComponent<ItemModVehicleChassis>() != (Object)null)
+		{
+			return PlayerInventory.CanMoveFromResponse.Failure(ItemModVehicleChassis.CantMoveChassisError);
+		}
+		BaseVehicleModule moduleForItem = GetModuleForItem(item);
+		if ((Object)(object)moduleForItem != (Object)null)
+		{
+			object obj = Interface.CallHook("OnVehicleModuleMove", (object)moduleForItem, (object)this, (object)player);
+			if (obj is PlayerInventory.CanMoveFromResponse)
+			{
+				return (PlayerInventory.CanMoveFromResponse)obj;
+			}
+			return new PlayerInventory.CanMoveFromResponse(moduleForItem.CanBeMovedNow(), moduleForItem.CannotBeMovedNowReason());
+		}
+		return PlayerInventory.CanMoveFromResponse.Success();
+	}
+
+	protected abstract Vector3 GetCOMMultiplier();
+
+	public virtual void ModuleHurt(BaseVehicleModule hurtModule, HitInfo info)
+	{
+		DoExplosionForce(info);
+	}
+
+	public abstract void ModuleReachedZeroHealth();
+
+	public bool TryAddModule(Item moduleItem, int socketIndex)
+	{
+		if (!ModuleCanBeAdded(moduleItem, socketIndex, out var failureReason))
+		{
+			Debug.LogError((object)(((object)this).GetType().Name + ": Can't add module: " + failureReason));
+			return false;
+		}
+		bool num = Inventory.TryAddModuleItem(moduleItem, socketIndex);
+		if (!num)
+		{
+			Debug.LogError((object)(((object)this).GetType().Name + ": Couldn't add new item!"));
+		}
+		return num;
+	}
+
+	public bool TryAddModule(Item moduleItem)
+	{
+		ItemModVehicleModule component = ((Component)moduleItem.info).GetComponent<ItemModVehicleModule>();
+		if ((Object)(object)component == (Object)null)
+		{
+			return false;
+		}
+		int socketsTaken = component.socketsTaken;
+		int num = Inventory.TryGetFreeSocket(socketsTaken);
+		if (num < 0)
+		{
+			return false;
+		}
+		return TryAddModule(moduleItem, num);
+	}
+
+	public bool ModuleCanBeAdded(Item moduleItem, int socketIndex, out string failureReason)
+	{
+		if (!base.isServer)
+		{
+			failureReason = "Can only add modules on server";
+			return false;
+		}
+		if (moduleItem == null)
+		{
+			failureReason = "Module item is null";
+			return false;
+		}
+		if (moduleItem.info.category != ItemCategory.Component)
+		{
+			failureReason = "Not a component type item";
+			return false;
+		}
+		ItemModVehicleModule component = ((Component)moduleItem.info).GetComponent<ItemModVehicleModule>();
+		if ((Object)(object)component == (Object)null)
+		{
+			failureReason = "Not the right item module type";
+			return false;
+		}
+		int socketsTaken = component.socketsTaken;
+		if (socketIndex < 0)
+		{
+			socketIndex = Inventory.TryGetFreeSocket(socketsTaken);
+		}
+		if (!Inventory.SocketsAreFree(socketIndex, socketsTaken, moduleItem))
+		{
+			failureReason = "One or more desired sockets already in use";
+			return false;
+		}
+		failureReason = string.Empty;
+		return true;
+	}
+
+	public BaseVehicleModule CreatePhysicalModuleEntity(Item moduleItem, ItemModVehicleModule itemModModule, int socketIndex)
+	{
+		//IL_000c: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0011: Unknown result type (might be due to invalid IL or missing references)
+		//IL_001e: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0023: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0026: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0027: Unknown result type (might be due to invalid IL or missing references)
+		Vector3 worldPosition = moduleSockets[socketIndex].WorldPosition;
+		Quaternion worldRotation = moduleSockets[socketIndex].WorldRotation;
+		BaseVehicleModule baseVehicleModule = itemModModule.CreateModuleEntity(this, worldPosition, worldRotation);
+		baseVehicleModule.AssociatedItemInstance = moduleItem;
+		SetUpModule(baseVehicleModule, moduleItem);
+		return baseVehicleModule;
+	}
+
+	public void SetUpModule(BaseVehicleModule moduleEntity, Item moduleItem)
+	{
+		moduleEntity.InitializeHealth(moduleItem.condition, moduleItem.maxCondition);
+		if (moduleItem.condition < moduleItem.maxCondition)
+		{
+			moduleEntity.SendNetworkUpdate();
+		}
+	}
+
+	public Item GetVehicleItem(ItemId itemUID)
+	{
+		//IL_000b: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0020: Unknown result type (might be due to invalid IL or missing references)
+		Item item = Inventory.ChassisContainer.FindItemByUID(itemUID);
+		if (item == null)
+		{
+			item = Inventory.ModuleContainer.FindItemByUID(itemUID);
+		}
+		return item;
+	}
+
+	public BaseVehicleModule GetModuleForItem(Item item)
+	{
+		if (item == null)
+		{
+			return null;
+		}
+		foreach (BaseVehicleModule attachedModuleEntity in AttachedModuleEntities)
+		{
+			if (attachedModuleEntity.AssociatedItemInstance == item)
+			{
+				return attachedModuleEntity;
+			}
+		}
+		return null;
+	}
+
+	public void SetMass(float mass)
+	{
+		TotalMass = mass;
+		rigidBody.mass = TotalMass;
+	}
+
+	public void SetCOM(Vector3 com)
+	{
+		//IL_0001: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0002: Unknown result type (might be due to invalid IL or missing references)
+		//IL_000e: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0014: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0019: Unknown result type (might be due to invalid IL or missing references)
+		realLocalCOM = com;
+		rigidBody.centerOfMass = Vector3.Scale(realLocalCOM, GetCOMMultiplier());
+	}
+
+	public override void InitShared()
+	{
+		//IL_000e: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0019: Unknown result type (might be due to invalid IL or missing references)
+		base.InitShared();
+		AddMass(Mass, CentreOfMass, ((Component)this).transform.position);
+		HasInited = true;
+		foreach (BaseVehicleModule attachedModuleEntity in AttachedModuleEntities)
+		{
+			attachedModuleEntity.RefreshConditionals(canGib: false);
+		}
+	}
+
+	public virtual bool PlayerCanUseThis(BasePlayer player, ModularCarCodeLock.LockType lockType)
+	{
+		return true;
+	}
+
+	public bool TryDeduceSocketIndex(BaseVehicleModule addedModule, out int index)
+	{
+		//IL_002d: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0038: Unknown result type (might be due to invalid IL or missing references)
+		//IL_003d: Unknown result type (might be due to invalid IL or missing references)
+		if (addedModule.FirstSocketIndex >= 0)
+		{
+			index = addedModule.FirstSocketIndex;
+			return index >= 0;
+		}
+		index = -1;
+		for (int i = 0; i < moduleSockets.Count; i++)
+		{
+			if (Vector3.SqrMagnitude(moduleSockets[i].WorldPosition - ((Component)addedModule).transform.position) < 0.1f)
+			{
+				index = i;
+				return true;
+			}
+		}
+		return false;
+	}
+
+	public void AddMass(float moduleMass, Vector3 moduleCOM, Vector3 moduleWorldPos)
+	{
+		//IL_000e: Unknown result type (might be due to invalid IL or missing references)
+		//IL_000f: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0014: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0015: Unknown result type (might be due to invalid IL or missing references)
+		//IL_001a: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0041: Unknown result type (might be due to invalid IL or missing references)
+		//IL_004e: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0053: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0057: Unknown result type (might be due to invalid IL or missing references)
+		//IL_005c: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0061: Unknown result type (might be due to invalid IL or missing references)
+		//IL_006a: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0030: Unknown result type (might be due to invalid IL or missing references)
+		if (base.isServer)
+		{
+			Vector3 val = ((Component)this).transform.InverseTransformPoint(moduleWorldPos) + moduleCOM;
+			if (TotalMass == 0f)
+			{
+				SetMass(moduleMass);
+				SetCOM(val);
+				return;
+			}
+			float num = TotalMass + moduleMass;
+			Vector3 cOM = realLocalCOM * (TotalMass / num) + val * (moduleMass / num);
+			SetMass(num);
+			SetCOM(cOM);
+		}
+	}
+
+	public void RemoveMass(float moduleMass, Vector3 moduleCOM, Vector3 moduleWorldPos)
+	{
+		//IL_0017: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0018: Unknown result type (might be due to invalid IL or missing references)
+		//IL_001d: Unknown result type (might be due to invalid IL or missing references)
+		//IL_001e: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0023: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0025: Unknown result type (might be due to invalid IL or missing references)
+		//IL_002a: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0033: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0038: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0045: Unknown result type (might be due to invalid IL or missing references)
+		//IL_004a: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0053: Unknown result type (might be due to invalid IL or missing references)
+		if (base.isServer)
+		{
+			float num = TotalMass - moduleMass;
+			Vector3 val = ((Component)this).transform.InverseTransformPoint(moduleWorldPos) + moduleCOM;
+			Vector3 cOM = (realLocalCOM - val * (moduleMass / TotalMass)) / (num / TotalMass);
+			SetMass(num);
+			SetCOM(cOM);
+		}
+	}
+
+	public bool TryGetModuleAt(int socketIndex, out BaseVehicleModule result)
+	{
+		if (socketIndex < 0 || socketIndex >= moduleSockets.Count)
+		{
+			result = null;
+			return false;
+		}
+		foreach (BaseVehicleModule attachedModuleEntity in AttachedModuleEntities)
+		{
+			int firstSocketIndex = attachedModuleEntity.FirstSocketIndex;
+			int num = firstSocketIndex + attachedModuleEntity.GetNumSocketsTaken() - 1;
+			if (firstSocketIndex <= socketIndex && num >= socketIndex)
+			{
+				result = attachedModuleEntity;
+				return true;
+			}
+		}
+		result = null;
+		return false;
+	}
+
+	public ModularVehicleSocket GetSocket(int index)
+	{
+		if (index < 0 || index >= moduleSockets.Count)
+		{
+			return null;
+		}
+		return moduleSockets[index];
+	}
+
+	public override void Load(LoadInfo info)
+	{
+		base.Load(info);
+		_ = info.msg.modularVehicle;
+	}
+
+	public override bool CanPushNow(BasePlayer pusher)
+	{
+		if (!base.CanPushNow(pusher))
+		{
+			return false;
+		}
+		if (!IsKinematic)
+		{
+			return !IsEditableNow;
+		}
+		return false;
+	}
+
+	public override void OnChildAdded(BaseEntity childEntity)
+	{
+		base.OnChildAdded(childEntity);
+		BaseVehicleModule module = childEntity as BaseVehicleModule;
+		if (module != null)
+		{
+			Action action = delegate
+			{
+				ModuleEntityAdded(module);
+			};
+			moduleAddActions[module] = action;
+			((FacepunchBehaviour)module).Invoke(action, 0f);
+		}
+	}
+
+	public override void OnChildRemoved(BaseEntity childEntity)
+	{
+		base.OnChildRemoved(childEntity);
+		if (childEntity is BaseVehicleModule removedModule)
+		{
+			ModuleEntityRemoved(removedModule);
+		}
+	}
+
+	public virtual void ModuleEntityAdded(BaseVehicleModule addedModule)
+	{
+		//IL_0155: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0160: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0093: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00bf: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00d5: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00e0: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00e5: Unknown result type (might be due to invalid IL or missing references)
+		if (AttachedModuleEntities.Contains(addedModule))
+		{
+			return;
+		}
+		if (base.isServer && ((Object)(object)this == (Object)null || IsDead() || base.IsDestroyed))
+		{
+			if ((Object)(object)addedModule != (Object)null && !addedModule.IsDestroyed)
+			{
+				addedModule.Kill();
+			}
+			return;
+		}
+		int index = -1;
+		if (base.isServer && addedModule.AssociatedItemInstance != null)
+		{
+			index = addedModule.AssociatedItemInstance.position;
+		}
+		if (index == -1 && !TryDeduceSocketIndex(addedModule, out index))
+		{
+			string text = $"{((object)this).GetType().Name}: Couldn't get socket index from position ({((Component)addedModule).transform.position}).";
+			for (int i = 0; i < moduleSockets.Count; i++)
+			{
+				text += $" Sqr dist to socket {i} at {moduleSockets[i].WorldPosition} is {Vector3.SqrMagnitude(moduleSockets[i].WorldPosition - ((Component)addedModule).transform.position)}.";
+			}
+			Debug.LogError((object)text, (Object)(object)((Component)addedModule).gameObject);
+			return;
+		}
+		if (moduleAddActions.ContainsKey(addedModule))
+		{
+			moduleAddActions.Remove(addedModule);
+		}
+		AttachedModuleEntities.Add(addedModule);
+		addedModule.ModuleAdded(this, index);
+		AddMass(addedModule.Mass, addedModule.CentreOfMass, ((Component)addedModule).transform.position);
+		if (base.isServer && !Inventory.TrySyncModuleInventory(addedModule, index))
+		{
+			Debug.LogError((object)$"{((object)this).GetType().Name}: Unable to add module {((Object)addedModule).name} to socket ({index}). Destroying it.", (Object)(object)((Component)this).gameObject);
+			addedModule.Kill();
+			AttachedModuleEntities.Remove(addedModule);
+			return;
+		}
+		RefreshModulesExcept(addedModule);
+		if (base.isServer)
+		{
+			UpdateMountFlags();
+		}
+	}
+
+	public virtual void ModuleEntityRemoved(BaseVehicleModule removedModule)
+	{
+		//IL_004d: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0058: Unknown result type (might be due to invalid IL or missing references)
+		if (base.IsDestroyed)
+		{
+			return;
+		}
+		if (moduleAddActions.ContainsKey(removedModule))
+		{
+			((FacepunchBehaviour)removedModule).CancelInvoke(moduleAddActions[removedModule]);
+			moduleAddActions.Remove(removedModule);
+		}
+		if (AttachedModuleEntities.Contains(removedModule))
+		{
+			RemoveMass(removedModule.Mass, removedModule.CentreOfMass, ((Component)removedModule).transform.position);
+			AttachedModuleEntities.Remove(removedModule);
+			removedModule.ModuleRemoved();
+			RefreshModulesExcept(removedModule);
+			if (base.isServer)
+			{
+				UpdateMountFlags();
+			}
+		}
+	}
+
+	public void RefreshModulesExcept(BaseVehicleModule ignoredModule)
+	{
+		foreach (BaseVehicleModule attachedModuleEntity in AttachedModuleEntities)
+		{
+			if ((Object)(object)attachedModuleEntity != (Object)(object)ignoredModule)
+			{
+				attachedModuleEntity.OtherVehicleModulesChanged();
+			}
+		}
+	}
+}
+
+
 using UnityEngine;
 
 [CreateAssetMenu(fileName = "Engine Audio Preset", menuName = "Scriptable Object/Vehicles/Engine Audio Preset")]
@@ -1694,8 +2358,8 @@ using UnityEngine;
 
 public class SnowmobileAudio : GroundVehicleAudio
 {
-	[Header("Engine")]
 	[SerializeField]
+	[Header("Engine")]
 	private EngineAudioSet engineAudioSet;
 
 	[SerializeField]
@@ -2166,8 +2830,8 @@ public class SubmarineAudio : MonoBehaviour
 	[SerializeField]
 	private SoundDefinition waterSubmergeSoundDef;
 
-	[Header("Interior")]
 	[SerializeField]
+	[Header("Interior")]
 	private SoundDefinition activeLoopDef;
 
 	[SerializeField]
@@ -2211,8 +2875,8 @@ using UnityEngine;
 
 public class SubmarineDuo : BaseSubmarine
 {
-	[Header("Duo Sub Seating & Controls")]
 	[SerializeField]
+	[Header("Duo Sub Seating & Controls")]
 	private Transform steeringWheel;
 
 	[SerializeField]
@@ -4435,8 +5099,8 @@ using UnityEngine;
 
 public class LocomotiveExtraVisuals : MonoBehaviour
 {
-	[Header("Gauges")]
 	[SerializeField]
+	[Header("Gauges")]
 	private TrainEngine trainEngine;
 
 	[SerializeField]
@@ -4466,8 +5130,8 @@ public class LocomotiveExtraVisuals : MonoBehaviour
 	[SerializeField]
 	private float speedoMax = 80f;
 
-	[SerializeField]
 	[Header("Fans")]
+	[SerializeField]
 	private Transform[] engineFans;
 }
 
@@ -5041,8 +5705,8 @@ public class TrainEngineAudio : TrainCarAudio
 	[SerializeField]
 	private Transform hornSoundPosition;
 
-	[Header("Engine")]
 	[SerializeField]
+	[Header("Engine")]
 	private SoundDefinition engineStartSound;
 
 	[SerializeField]
@@ -5082,15 +5746,15 @@ public class TrainEngineAudio : TrainCarAudio
 	[SerializeField]
 	private float reflectionRayOffset = 0.5f;
 
-	[Header("Horn")]
 	[SerializeField]
+	[Header("Horn")]
 	private SoundDefinition hornLoop;
 
 	[SerializeField]
 	private SoundDefinition hornStart;
 
-	[SerializeField]
 	[Header("Other")]
+	[SerializeField]
 	private SoundDefinition lightsToggleSound;
 
 	[SerializeField]
@@ -8101,8 +8765,8 @@ using UnityEngine;
 
 public class ChargeUpIOEntity : IOEntity
 {
-	[Header("ChargeUp IO")]
 	[Tooltip("This amount will be added to the charge meter every second.")]
+	[Header("ChargeUp IO")]
 	public int powerConsumptionWhileCharging = 1;
 
 	public float chargeRequiredToBecomeActive = 10f;
@@ -10837,8 +11501,8 @@ public class Powergrid : ConsoleSystem
 	[Help("If disabled power grid functionality will be disabled.")]
 	public static bool enabled = true;
 
-	[Help("Required powergrid stage for green recyclers to return to baseline efficiency. If < 0 then will use the default values.")]
 	[ReplicatedVar]
+	[Help("Required powergrid stage for green recyclers to return to baseline efficiency. If < 0 then will use the default values.")]
 	public static int greenRecyclerFullEfficiencyStage = -1;
 
 	[ServerVar]
@@ -10998,8 +11662,8 @@ public class RespawnableLootFridge : Fridge, ILootContainer
 	[Tooltip("Maximum seconds between refreshes.")]
 	public float maxSecondsBetweenRefresh = 900f;
 
-	[Min(1f)]
 	[Tooltip("A full spawn replaces every Nth reduced refresh.")]
+	[Min(1f)]
 	public int refreshesForFullRefresh = 4;
 
 	[Tooltip("Do a full loot spawn as soon as the fridge spawns (ignored when restoring from a save).")]
@@ -17004,8 +17668,8 @@ public class Climate : SingletonComponent<Climate>
 		[Horizontal(4, -1)]
 		public Float4 FogAmbientIntensity = Float4.One();
 
-		[Horizontal(4, -1)]
 		[Range(0f, 1f)]
+		[Horizontal(4, -1)]
 		public Float4 FogAmbientSaturation = Float4.One();
 
 		[Horizontal(4, -1)]
@@ -17690,8 +18354,8 @@ public class ClimateParameters
 	[Horizontal(4, -1)]
 	public Float4 FogAmbientIntensity = Float4.One();
 
-	[Horizontal(4, -1)]
 	[Range(0f, 1f)]
+	[Horizontal(4, -1)]
 	public Float4 FogAmbientSaturation = Float4.One();
 
 	[Horizontal(4, -1)]
@@ -19560,8 +20224,8 @@ public class EffectRecycle : BaseMonoBehaviour, IClientComponent, IRagdollInhert
 	[ReadOnly]
 	public float detachTime;
 
-	[ReadOnly]
 	[FormerlySerializedAs("lifeTime")]
+	[ReadOnly]
 	public float recycleTime;
 
 	public PlayMode playMode;
@@ -19893,8 +20557,8 @@ public class EnvironmentVolume : MonoBehaviour, IPrefabPreProcess
 	[field: Tooltip("Controls the falloff amount of the positive axes of spatially aware volumes.")]
 	public Vector3 FalloffPositive { get; private set; } = Vector3.zero;
 
-	[field: Tooltip("Controls the falloff amount of the negative axes of spatially aware volumes.")]
 	[field: SerializeField]
+	[field: Tooltip("Controls the falloff amount of the negative axes of spatially aware volumes.")]
 	public Vector3 FalloffNegative { get; private set; } = Vector3.zero;
 
 	[field: SerializeField]
@@ -20319,9 +20983,9 @@ using UnityEngine;
 public static class EnvironmentVolumeMath
 {
 	[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-	internal delegate void CalculateTransformationBoundsBurst_00005EEF$PostfixBurstDelegate(in float4x4 transformationMatrix, in bool capsule, out Bounds bounds);
+	internal delegate void CalculateTransformationBoundsBurst_00005EF4$PostfixBurstDelegate(in float4x4 transformationMatrix, in bool capsule, out Bounds bounds);
 
-	internal static class CalculateTransformationBoundsBurst_00005EEF$BurstDirectCall
+	internal static class CalculateTransformationBoundsBurst_00005EF4$BurstDirectCall
 	{
 		private static IntPtr Pointer;
 
@@ -20332,7 +20996,7 @@ public static class EnvironmentVolumeMath
 			//IL_001b: Unknown result type (might be due to invalid IL or missing references)
 			if (Pointer == (IntPtr)0)
 			{
-				Pointer = BurstCompiler.CompileFunctionPointer<CalculateTransformationBoundsBurst_00005EEF$PostfixBurstDelegate>((CalculateTransformationBoundsBurst_00005EEF$PostfixBurstDelegate)CalculateTransformationBoundsBurst).Value;
+				Pointer = BurstCompiler.CompileFunctionPointer<CalculateTransformationBoundsBurst_00005EF4$PostfixBurstDelegate>((CalculateTransformationBoundsBurst_00005EF4$PostfixBurstDelegate)CalculateTransformationBoundsBurst).Value;
 			}
 			P_0 = Pointer;
 		}
@@ -20360,9 +21024,9 @@ public static class EnvironmentVolumeMath
 	}
 
 	[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-	internal delegate void MultiplyPoint3X4_00005EF0$PostfixBurstDelegate(in float4x4 transformationMatrix, in float3 point, out float3 result);
+	internal delegate void MultiplyPoint3X4_00005EF5$PostfixBurstDelegate(in float4x4 transformationMatrix, in float3 point, out float3 result);
 
-	internal static class MultiplyPoint3X4_00005EF0$BurstDirectCall
+	internal static class MultiplyPoint3X4_00005EF5$BurstDirectCall
 	{
 		private static IntPtr Pointer;
 
@@ -20373,7 +21037,7 @@ public static class EnvironmentVolumeMath
 			//IL_001b: Unknown result type (might be due to invalid IL or missing references)
 			if (Pointer == (IntPtr)0)
 			{
-				Pointer = BurstCompiler.CompileFunctionPointer<MultiplyPoint3X4_00005EF0$PostfixBurstDelegate>((MultiplyPoint3X4_00005EF0$PostfixBurstDelegate)MultiplyPoint3X4).Value;
+				Pointer = BurstCompiler.CompileFunctionPointer<MultiplyPoint3X4_00005EF5$PostfixBurstDelegate>((MultiplyPoint3X4_00005EF5$PostfixBurstDelegate)MultiplyPoint3X4).Value;
 			}
 			P_0 = Pointer;
 		}
@@ -20401,9 +21065,9 @@ public static class EnvironmentVolumeMath
 	}
 
 	[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-	internal delegate void UpdateVolumeTransformationAndBoundsBurst_00005EF1$PostfixBurstDelegate(in float3 size, in float3 center, in float4x4 localToWorldMatrix, in bool isCapsule, out float4x4 volumeTransformation, out float4x4 volumeTransformationInverse, out float3 volumePosition, out Bounds volumeBounds);
+	internal delegate void UpdateVolumeTransformationAndBoundsBurst_00005EF6$PostfixBurstDelegate(in float3 size, in float3 center, in float4x4 localToWorldMatrix, in bool isCapsule, out float4x4 volumeTransformation, out float4x4 volumeTransformationInverse, out float3 volumePosition, out Bounds volumeBounds);
 
-	internal static class UpdateVolumeTransformationAndBoundsBurst_00005EF1$BurstDirectCall
+	internal static class UpdateVolumeTransformationAndBoundsBurst_00005EF6$BurstDirectCall
 	{
 		private static IntPtr Pointer;
 
@@ -20414,7 +21078,7 @@ public static class EnvironmentVolumeMath
 			//IL_001b: Unknown result type (might be due to invalid IL or missing references)
 			if (Pointer == (IntPtr)0)
 			{
-				Pointer = BurstCompiler.CompileFunctionPointer<UpdateVolumeTransformationAndBoundsBurst_00005EF1$PostfixBurstDelegate>((UpdateVolumeTransformationAndBoundsBurst_00005EF1$PostfixBurstDelegate)UpdateVolumeTransformationAndBoundsBurst).Value;
+				Pointer = BurstCompiler.CompileFunctionPointer<UpdateVolumeTransformationAndBoundsBurst_00005EF6$PostfixBurstDelegate>((UpdateVolumeTransformationAndBoundsBurst_00005EF6$PostfixBurstDelegate)UpdateVolumeTransformationAndBoundsBurst).Value;
 			}
 			P_0 = Pointer;
 		}
@@ -20442,24 +21106,24 @@ public static class EnvironmentVolumeMath
 	}
 
 	[BurstCompile]
-	[MonoPInvokeCallback(typeof(CalculateTransformationBoundsBurst_00005EEF$PostfixBurstDelegate))]
+	[MonoPInvokeCallback(typeof(CalculateTransformationBoundsBurst_00005EF4$PostfixBurstDelegate))]
 	private static void CalculateTransformationBoundsBurst(in float4x4 transformationMatrix, in bool capsule, out Bounds bounds)
 	{
-		CalculateTransformationBoundsBurst_00005EEF$BurstDirectCall.Invoke(in transformationMatrix, in capsule, out bounds);
+		CalculateTransformationBoundsBurst_00005EF4$BurstDirectCall.Invoke(in transformationMatrix, in capsule, out bounds);
 	}
 
 	[BurstCompile]
-	[MonoPInvokeCallback(typeof(MultiplyPoint3X4_00005EF0$PostfixBurstDelegate))]
+	[MonoPInvokeCallback(typeof(MultiplyPoint3X4_00005EF5$PostfixBurstDelegate))]
 	private static void MultiplyPoint3X4(in float4x4 transformationMatrix, in float3 point, out float3 result)
 	{
-		MultiplyPoint3X4_00005EF0$BurstDirectCall.Invoke(in transformationMatrix, in point, out result);
+		MultiplyPoint3X4_00005EF5$BurstDirectCall.Invoke(in transformationMatrix, in point, out result);
 	}
 
 	[BurstCompile]
-	[MonoPInvokeCallback(typeof(UpdateVolumeTransformationAndBoundsBurst_00005EF1$PostfixBurstDelegate))]
+	[MonoPInvokeCallback(typeof(UpdateVolumeTransformationAndBoundsBurst_00005EF6$PostfixBurstDelegate))]
 	public static void UpdateVolumeTransformationAndBoundsBurst(in float3 size, in float3 center, in float4x4 localToWorldMatrix, in bool isCapsule, out float4x4 volumeTransformation, out float4x4 volumeTransformationInverse, out float3 volumePosition, out Bounds volumeBounds)
 	{
-		UpdateVolumeTransformationAndBoundsBurst_00005EF1$BurstDirectCall.Invoke(in size, in center, in localToWorldMatrix, in isCapsule, out volumeTransformation, out volumeTransformationInverse, out volumePosition, out volumeBounds);
+		UpdateVolumeTransformationAndBoundsBurst_00005EF6$BurstDirectCall.Invoke(in size, in center, in localToWorldMatrix, in isCapsule, out volumeTransformation, out volumeTransformationInverse, out volumePosition, out volumeBounds);
 	}
 
 	[MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -20579,7 +21243,7 @@ using Unity.Mathematics;
 using UnityEngine;
 
 [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-internal delegate void CalculateTransformationBoundsBurst_00005EEF$PostfixBurstDelegate(in float4x4 transformationMatrix, in bool capsule, out Bounds bounds);
+internal delegate void CalculateTransformationBoundsBurst_00005EF4$PostfixBurstDelegate(in float4x4 transformationMatrix, in bool capsule, out Bounds bounds);
 
 
 using System;
@@ -20587,7 +21251,7 @@ using Unity.Burst;
 using Unity.Mathematics;
 using UnityEngine;
 
-internal static class CalculateTransformationBoundsBurst_00005EEF$BurstDirectCall
+internal static class CalculateTransformationBoundsBurst_00005EF4$BurstDirectCall
 {
 	private static IntPtr Pointer;
 
@@ -20598,7 +21262,7 @@ internal static class CalculateTransformationBoundsBurst_00005EEF$BurstDirectCal
 		//IL_001b: Unknown result type (might be due to invalid IL or missing references)
 		if (Pointer == (IntPtr)0)
 		{
-			Pointer = BurstCompiler.CompileFunctionPointer<CalculateTransformationBoundsBurst_00005EEF$PostfixBurstDelegate>((CalculateTransformationBoundsBurst_00005EEF$PostfixBurstDelegate)CalculateTransformationBoundsBurst).Value;
+			Pointer = BurstCompiler.CompileFunctionPointer<CalculateTransformationBoundsBurst_00005EF4$PostfixBurstDelegate>((CalculateTransformationBoundsBurst_00005EF4$PostfixBurstDelegate)CalculateTransformationBoundsBurst).Value;
 		}
 		P_0 = Pointer;
 	}
@@ -20630,14 +21294,14 @@ using System.Runtime.InteropServices;
 using Unity.Mathematics;
 
 [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-internal delegate void MultiplyPoint3X4_00005EF0$PostfixBurstDelegate(in float4x4 transformationMatrix, in float3 point, out float3 result);
+internal delegate void MultiplyPoint3X4_00005EF5$PostfixBurstDelegate(in float4x4 transformationMatrix, in float3 point, out float3 result);
 
 
 using System;
 using Unity.Burst;
 using Unity.Mathematics;
 
-internal static class MultiplyPoint3X4_00005EF0$BurstDirectCall
+internal static class MultiplyPoint3X4_00005EF5$BurstDirectCall
 {
 	private static IntPtr Pointer;
 
@@ -20648,7 +21312,7 @@ internal static class MultiplyPoint3X4_00005EF0$BurstDirectCall
 		//IL_001b: Unknown result type (might be due to invalid IL or missing references)
 		if (Pointer == (IntPtr)0)
 		{
-			Pointer = BurstCompiler.CompileFunctionPointer<MultiplyPoint3X4_00005EF0$PostfixBurstDelegate>((MultiplyPoint3X4_00005EF0$PostfixBurstDelegate)MultiplyPoint3X4).Value;
+			Pointer = BurstCompiler.CompileFunctionPointer<MultiplyPoint3X4_00005EF5$PostfixBurstDelegate>((MultiplyPoint3X4_00005EF5$PostfixBurstDelegate)MultiplyPoint3X4).Value;
 		}
 		P_0 = Pointer;
 	}
@@ -20681,7 +21345,7 @@ using Unity.Mathematics;
 using UnityEngine;
 
 [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-internal delegate void UpdateVolumeTransformationAndBoundsBurst_00005EF1$PostfixBurstDelegate(in float3 size, in float3 center, in float4x4 localToWorldMatrix, in bool isCapsule, out float4x4 volumeTransformation, out float4x4 volumeTransformationInverse, out float3 volumePosition, out Bounds volumeBounds);
+internal delegate void UpdateVolumeTransformationAndBoundsBurst_00005EF6$PostfixBurstDelegate(in float3 size, in float3 center, in float4x4 localToWorldMatrix, in bool isCapsule, out float4x4 volumeTransformation, out float4x4 volumeTransformationInverse, out float3 volumePosition, out Bounds volumeBounds);
 
 
 using System;
@@ -20689,7 +21353,7 @@ using Unity.Burst;
 using Unity.Mathematics;
 using UnityEngine;
 
-internal static class UpdateVolumeTransformationAndBoundsBurst_00005EF1$BurstDirectCall
+internal static class UpdateVolumeTransformationAndBoundsBurst_00005EF6$BurstDirectCall
 {
 	private static IntPtr Pointer;
 
@@ -20700,7 +21364,7 @@ internal static class UpdateVolumeTransformationAndBoundsBurst_00005EF1$BurstDir
 		//IL_001b: Unknown result type (might be due to invalid IL or missing references)
 		if (Pointer == (IntPtr)0)
 		{
-			Pointer = BurstCompiler.CompileFunctionPointer<UpdateVolumeTransformationAndBoundsBurst_00005EF1$PostfixBurstDelegate>((UpdateVolumeTransformationAndBoundsBurst_00005EF1$PostfixBurstDelegate)UpdateVolumeTransformationAndBoundsBurst).Value;
+			Pointer = BurstCompiler.CompileFunctionPointer<UpdateVolumeTransformationAndBoundsBurst_00005EF6$PostfixBurstDelegate>((UpdateVolumeTransformationAndBoundsBurst_00005EF6$PostfixBurstDelegate)UpdateVolumeTransformationAndBoundsBurst).Value;
 		}
 		P_0 = Pointer;
 	}
@@ -20784,8 +21448,8 @@ public class FakePhysicsRope : FacepunchBehaviour, IClientComponent
 
 	public Vector3 endPointOffset;
 
-	[Range(2f, 100f)]
 	[Header("Settings")]
+	[Range(2f, 100f)]
 	public int linePoints = 10;
 
 	[Tooltip("Value highly dependent on use case, a metal cable would have high stiffness, a rubber rope would have a low one")]
@@ -20953,8 +21617,8 @@ public class FoliagePlacement : ScriptableObject
 
 	public float RangeFade = 0.1f;
 
-	[Header("LOD")]
 	[Range(0f, 1f)]
+	[Header("LOD")]
 	public float DistanceDensity;
 
 	[Range(1f, 2f)]
@@ -24408,8 +25072,8 @@ using UnityEngine;
 
 public class RendererBatch : MonoBehaviour, IClientComponent, ICustomMaterialReplacer, IWorkshopPreview
 {
-	[HideInInspector]
 	[SerializeField]
+	[HideInInspector]
 	public int MaxVertexCountOverride;
 
 	[SerializeField]
@@ -25234,8 +25898,8 @@ public class LevelInfo : SingletonComponent<LevelInfo>
 	[Tooltip("A background image to be shown when loading the map")]
 	public Texture2D image;
 
-	[Tooltip("You should incrememnt this version when you make changes to the map that will invalidate old saves")]
 	[Space(10f)]
+	[Tooltip("You should incrememnt this version when you make changes to the map that will invalidate old saves")]
 	public int version = 1;
 }
 
@@ -29005,10 +29669,10 @@ using UnityEngine.Serialization;
 [CreateAssetMenu(menuName = "Rust/Density Spawn Population")]
 public class DensitySpawnPopulation : SpawnPopulationBase
 {
-	[FormerlySerializedAs("TargetDensity")]
-	[SerializeField]
 	[Tooltip("Usually per square km")]
 	[Header("Spawn Info")]
+	[FormerlySerializedAs("TargetDensity")]
+	[SerializeField]
 	public float _targetDensity = 1f;
 
 	public int ClusterSizeMin = 1;
@@ -30120,9 +30784,9 @@ public abstract class BaseSpawnPoint : MonoBehaviour, IServerComponent
 
 	public SpawnPointType spawnPointType;
 
+	[SerializeField]
 	[Range(1f, 25f)]
 	[Tooltip("Min distance between the spawn area and any human players")]
-	[SerializeField]
 	protected float playerCheckMargin = 2f;
 
 	public static Dictionary<SpawnPointType, List<BaseSpawnPoint>> spawnPoints = new Dictionary<SpawnPointType, List<BaseSpawnPoint>>();
@@ -30385,8 +31049,8 @@ public class IndividualSpawner : BaseMonoBehaviour, IServerComponent, ISpawnPoin
 
 	public LayerMask customBoundsCheckMask;
 
-	[SerializeField]
 	[Tooltip("Simply spawns the entity once. No respawning. Entity can be saved if desired.")]
+	[SerializeField]
 	public bool oneTimeSpawner;
 
 	internal bool isSpawnerActive = true;
@@ -30780,8 +31444,8 @@ using UnityEngine;
 public class RadialSpawnPoint : BaseSpawnPoint
 {
 	[Header("Position Settings")]
-	[Tooltip("Circle to spawn within")]
 	[SerializeField]
+	[Tooltip("Circle to spawn within")]
 	public float radius = 10f;
 
 	[SerializeField]
@@ -30797,8 +31461,8 @@ public class RadialSpawnPoint : BaseSpawnPoint
 	[SerializeField]
 	private bool xRotationEnabled;
 
-	[SerializeField]
 	[Range(-180f, 180f)]
+	[SerializeField]
 	private float xRotationMin = -180f;
 
 	[SerializeField]
@@ -30808,8 +31472,8 @@ public class RadialSpawnPoint : BaseSpawnPoint
 	[SerializeField]
 	private bool yRotationEnabled = true;
 
-	[Range(-180f, 180f)]
 	[SerializeField]
+	[Range(-180f, 180f)]
 	private float yRotationMin = -180f;
 
 	[SerializeField]
@@ -30819,12 +31483,12 @@ public class RadialSpawnPoint : BaseSpawnPoint
 	[SerializeField]
 	private bool zRotationEnabled;
 
-	[SerializeField]
 	[Range(-180f, 180f)]
+	[SerializeField]
 	private float zRotationMin = -180f;
 
-	[SerializeField]
 	[Range(-180f, 180f)]
+	[SerializeField]
 	private float zRotationMax = 180f;
 
 	public Quaternion GetRandomRotation()
@@ -32595,821 +33259,6 @@ public class StripRig : MonoBehaviour, IPrefabPreProcess
 			}
 		}
 		Pool.FreeUnmanaged<Transform>(ref list);
-	}
-}
-
-
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using Facepunch;
-using Rust;
-using UnityEngine;
-
-[CreateAssetMenu(fileName = "NewTechTree", menuName = "Rust/Tech Tree", order = 2)]
-public class TechTreeData : ScriptableObject
-{
-	[Serializable]
-	public class NodeInstance
-	{
-		public int id;
-
-		public ItemDefinition itemDef;
-
-		public Vector2 graphPosition;
-
-		public List<int> outputs = new List<int>();
-
-		public List<int> inputs = new List<int>();
-
-		public string groupName;
-
-		public int costOverride = -1;
-
-		public bool IsGroup()
-		{
-			if ((Object)(object)itemDef == (Object)null && groupName != "Entry")
-			{
-				return !string.IsNullOrEmpty(groupName);
-			}
-			return false;
-		}
-	}
-
-	public string shortname;
-
-	public int nextID;
-
-	public int techTreeLevel;
-
-	public SoundDefinition openSound;
-
-	public SoundDefinition closeSound;
-
-	public List<Era> AllowedEras;
-
-	[Tooltip("If true, this tech tree will only appear in a gamemode if it is assigned as allowed on the gamemode asset.")]
-	public bool RequireGameMode;
-
-	private Dictionary<int, NodeInstance> _idToNode;
-
-	private NodeInstance _entryNode;
-
-	public List<NodeInstance> nodes = new List<NodeInstance>();
-
-	public NodeInstance GetByID(int id)
-	{
-		if (Application.isPlaying)
-		{
-			if (_idToNode == null)
-			{
-				_idToNode = nodes.ToDictionary((NodeInstance n) => n.id, (NodeInstance n) => n);
-			}
-			_idToNode.TryGetValue(id, out var value);
-			return value;
-		}
-		_idToNode = null;
-		foreach (NodeInstance node in nodes)
-		{
-			if (node.id == id)
-			{
-				return node;
-			}
-		}
-		return null;
-	}
-
-	public NodeInstance GetEntryNode()
-	{
-		if (Application.isPlaying && _entryNode != null && _entryNode.groupName == "Entry")
-		{
-			return _entryNode;
-		}
-		_entryNode = null;
-		foreach (NodeInstance node in nodes)
-		{
-			if (node.groupName == "Entry")
-			{
-				_entryNode = node;
-				return node;
-			}
-		}
-		Debug.LogError((object)"NO ENTRY NODE FOR TECH TREE, This will Fail hard");
-		return null;
-	}
-
-	public void ClearInputs(NodeInstance node)
-	{
-		foreach (int output in node.outputs)
-		{
-			NodeInstance byID = GetByID(output);
-			byID.inputs.Clear();
-			ClearInputs(byID);
-		}
-	}
-
-	public void SetupInputs(NodeInstance node)
-	{
-		foreach (int output in node.outputs)
-		{
-			NodeInstance byID = GetByID(output);
-			if (!byID.inputs.Contains(node.id))
-			{
-				byID.inputs.Add(node.id);
-			}
-			SetupInputs(byID);
-		}
-	}
-
-	public bool PlayerHasPathForUnlock(BasePlayer player, NodeInstance node)
-	{
-		NodeInstance entryNode = GetEntryNode();
-		if (entryNode == null)
-		{
-			return false;
-		}
-		return CheckChainRecursive(player, entryNode, node);
-	}
-
-	public bool CheckChainRecursive(BasePlayer player, NodeInstance start, NodeInstance target)
-	{
-		if (start.groupName != "Entry")
-		{
-			if (start.IsGroup())
-			{
-				foreach (int input in start.inputs)
-				{
-					if (!PlayerHasPathForUnlock(player, GetByID(input)))
-					{
-						return false;
-					}
-				}
-			}
-			else if (start.itemDef.IsAllowed((EraRestriction)4) && !HasPlayerUnlocked(player, start))
-			{
-				return false;
-			}
-		}
-		bool result = false;
-		foreach (int output in start.outputs)
-		{
-			if (output == target.id)
-			{
-				return true;
-			}
-			if (CheckChainRecursive(player, GetByID(output), target))
-			{
-				result = true;
-			}
-		}
-		return result;
-	}
-
-	public bool PlayerCanUnlock(BasePlayer player, NodeInstance node)
-	{
-		return !HasPlayerUnlocked(player, node);
-	}
-
-	public bool HasPlayerUnlocked(BasePlayer player, NodeInstance node)
-	{
-		if (node.IsGroup())
-		{
-			bool result = true;
-			{
-				foreach (int output in node.outputs)
-				{
-					NodeInstance byID = GetByID(output);
-					if (!HasPlayerUnlocked(player, byID))
-					{
-						result = false;
-					}
-				}
-				return result;
-			}
-		}
-		return player.blueprints.HasUnlocked(node.itemDef);
-	}
-
-	public void GetNodesRequiredToUnlock(BasePlayer player, NodeInstance node, List<NodeInstance> foundNodes)
-	{
-		if ((Object)(object)node.itemDef != (Object)null && node.itemDef.IsAllowed((EraRestriction)4))
-		{
-			foundNodes.Add(node);
-		}
-		if (node == GetEntryNode())
-		{
-			foundNodes.Add(node);
-			return;
-		}
-		if (node.inputs.Count == 1)
-		{
-			GetNodesRequiredToUnlock(player, GetByID(node.inputs[0]), foundNodes);
-			return;
-		}
-		List<NodeInstance> list = Pool.Get<List<NodeInstance>>();
-		int num = int.MaxValue;
-		foreach (int input in node.inputs)
-		{
-			List<NodeInstance> list2 = Pool.Get<List<NodeInstance>>();
-			GetNodesRequiredToUnlock(player, GetByID(input), list2);
-			int num2 = 0;
-			foreach (NodeInstance item in list2)
-			{
-				if (!((Object)(object)item.itemDef == (Object)null) && !HasPlayerUnlocked(player, item) && item.itemDef.IsAllowed((EraRestriction)4))
-				{
-					num2 += Workbench.ScrapForResearch(item.itemDef, 0, out var _);
-				}
-			}
-			if (num2 < num)
-			{
-				list.Clear();
-				list.AddRange(list2);
-				num = num2;
-			}
-			Pool.FreeUnmanaged<NodeInstance>(ref list2);
-		}
-		foundNodes.AddRange(list);
-		Pool.FreeUnmanaged<NodeInstance>(ref list);
-	}
-
-	public bool IsAllowedInEra(Era era)
-	{
-		//IL_001d: Unknown result type (might be due to invalid IL or missing references)
-		if (AllowedEras == null || AllowedEras.Count == 0)
-		{
-			return true;
-		}
-		return AllowedEras.Contains(era);
-	}
-
-	public bool IsAllowedInGameMode(bool isServer)
-	{
-		BaseGameMode activeGameMode = BaseGameMode.GetActiveGameMode(isServer);
-		if ((Object)(object)activeGameMode == (Object)null)
-		{
-			return !RequireGameMode;
-		}
-		return activeGameMode.IsAllowed(this);
-	}
-}
-
-
-using System;
-using System.Collections.Generic;
-using UnityEngine;
-
-[Serializable]
-public class NodeInstance
-{
-	public int id;
-
-	public ItemDefinition itemDef;
-
-	public Vector2 graphPosition;
-
-	public List<int> outputs = new List<int>();
-
-	public List<int> inputs = new List<int>();
-
-	public string groupName;
-
-	public int costOverride = -1;
-
-	public bool IsGroup()
-	{
-		if ((Object)(object)itemDef == (Object)null && groupName != "Entry")
-		{
-			return !string.IsNullOrEmpty(groupName);
-		}
-		return false;
-	}
-}
-
-
-using System;
-using System.Collections.Generic;
-using UnityEngine;
-
-public class TriggerAchievement : TriggerBase
-{
-	public string statToIncrease = "";
-
-	public string achievementOnEnter = "";
-
-	public string requiredVehicleName = "";
-
-	[Tooltip("Always set to true, clientside does not work, currently")]
-	public bool serverSide = true;
-
-	public bool allowDuringTutorial;
-
-	[NonSerialized]
-	private List<ulong> triggeredPlayers = new List<ulong>();
-
-	public void OnPuzzleReset()
-	{
-		Reset();
-	}
-
-	public void Reset()
-	{
-		triggeredPlayers.Clear();
-	}
-
-	public override GameObject InterestedInObject(GameObject obj)
-	{
-		obj = base.InterestedInObject(obj);
-		if ((Object)(object)obj == (Object)null)
-		{
-			return null;
-		}
-		BaseEntity baseEntity = obj.ToBaseEntity();
-		if ((Object)(object)baseEntity == (Object)null)
-		{
-			return null;
-		}
-		if (baseEntity.isClient && serverSide)
-		{
-			return null;
-		}
-		if (baseEntity.isServer && !serverSide)
-		{
-			return null;
-		}
-		return ((Component)baseEntity).gameObject;
-	}
-
-	public override void OnEntityEnter(BaseEntity ent)
-	{
-		base.OnEntityEnter(ent);
-		if ((Object)(object)ent == (Object)null)
-		{
-			return;
-		}
-		BasePlayer component = ((Component)ent).GetComponent<BasePlayer>();
-		if ((Object)(object)component == (Object)null || !component.IsAlive() || component.IsSleeping() || component.IsNpc || triggeredPlayers.Contains(component.userID))
-		{
-			return;
-		}
-		if (!string.IsNullOrEmpty(requiredVehicleName))
-		{
-			BaseVehicle mountedVehicle = component.GetMountedVehicle();
-			if ((Object)(object)mountedVehicle == (Object)null || !mountedVehicle.ShortPrefabName.Contains(requiredVehicleName))
-			{
-				return;
-			}
-		}
-		if (serverSide)
-		{
-			if (!string.IsNullOrEmpty(achievementOnEnter))
-			{
-				component.GiveAchievement(achievementOnEnter, allowDuringTutorial);
-			}
-			if (!string.IsNullOrEmpty(statToIncrease))
-			{
-				component.stats.Add(statToIncrease, 1);
-				component.stats.Save(forceSteamSave: true);
-			}
-			triggeredPlayers.Add(component.userID);
-		}
-	}
-}
-
-
-using System;
-using System.Collections.Generic;
-using UnityEngine;
-
-public class TriggerAchievementAdvanced : TriggerBase
-{
-	public enum AchievementTriggerMode
-	{
-		Enter,
-		Exit
-	}
-
-	[Flags]
-	public enum ExitSideMask
-	{
-		Any = 0,
-		Front = 1,
-		Bottom = 2,
-		Left = 4,
-		Right = 8,
-		Back = 0x10,
-		Top = 0x20
-	}
-
-	public string statToIncrease = "";
-
-	public string achievementName = "";
-
-	public string requiredVehicleName = "";
-
-	public bool allowDuringTutorial;
-
-	[SerializeField]
-	private BoxCollider boxCollider;
-
-	public AchievementTriggerMode triggerMode;
-
-	public ExitSideMask requiredExitSides;
-
-	public BasePlayer.PlayerFlags requiredPlayerFlags;
-
-	public string[] requireWearingItemNames = Array.Empty<string>();
-
-	[NonSerialized]
-	private List<ulong> triggeredPlayers = new List<ulong>();
-
-	public void OnPuzzleReset()
-	{
-		Reset();
-	}
-
-	public void Reset()
-	{
-		triggeredPlayers.Clear();
-	}
-
-	internal override GameObject InterestedInObject(GameObject obj)
-	{
-		obj = base.InterestedInObject(obj);
-		if ((Object)(object)obj == (Object)null)
-		{
-			return null;
-		}
-		BaseEntity baseEntity = obj.ToBaseEntity();
-		if ((Object)(object)baseEntity == (Object)null)
-		{
-			return null;
-		}
-		if (baseEntity.isClient)
-		{
-			return null;
-		}
-		return ((Component)baseEntity).gameObject;
-	}
-
-	protected virtual bool VerifyAdditionalConditions(BasePlayer ply, bool onExit)
-	{
-		if (requireWearingItemNames.Length != 0 && !IsWearingRequiredItems(ply))
-		{
-			return false;
-		}
-		if (requiredPlayerFlags != 0 && !ply.HasPlayerFlag(requiredPlayerFlags))
-		{
-			return false;
-		}
-		return true;
-	}
-
-	private bool IsWearingRequiredItems(BasePlayer ply)
-	{
-		if ((Object)(object)ply == (Object)null || (Object)(object)ply.inventory == (Object)null || ply.inventory.containerWear == null)
-		{
-			return false;
-		}
-		bool result = true;
-		string[] array = requireWearingItemNames;
-		foreach (string name in array)
-		{
-			if (ply.inventory.containerWear.FindItemByItemName(name) == null)
-			{
-				result = false;
-				break;
-			}
-		}
-		return result;
-	}
-
-	internal override void OnEntityEnter(BaseEntity ent)
-	{
-		base.OnEntityEnter(ent);
-		TryGrant(ent, onExit: false);
-	}
-
-	internal override void OnEntityLeave(BaseEntity ent)
-	{
-		base.OnEntityLeave(ent);
-		TryGrant(ent, onExit: true);
-	}
-
-	private void TryGrant(BaseEntity ent, bool onExit)
-	{
-		if ((!onExit || triggerMode == AchievementTriggerMode.Exit) && (onExit || triggerMode == AchievementTriggerMode.Enter) && !((Object)(object)ent == (Object)null) && !ent.isClient && IsValidPlayer(ent, out var ply) && (requiredExitSides == ExitSideMask.Any || IsAllowedExitSide(ply)) && VerifyAdditionalConditions(ply, onExit))
-		{
-			GrantToPlayer(ply);
-		}
-	}
-
-	private bool IsValidPlayer(BaseEntity ent, out BasePlayer ply)
-	{
-		ply = null;
-		if ((Object)(object)ent == (Object)null)
-		{
-			return false;
-		}
-		ply = ((Component)ent).GetComponent<BasePlayer>();
-		if ((Object)(object)ply == (Object)null || !ply.IsAlive() || ply.IsSleeping() || ply.IsNpc)
-		{
-			return false;
-		}
-		if (triggeredPlayers.Contains(ply.userID))
-		{
-			return false;
-		}
-		if (!string.IsNullOrEmpty(requiredVehicleName))
-		{
-			BaseVehicle mountedVehicle = ply.GetMountedVehicle();
-			if ((Object)(object)mountedVehicle == (Object)null)
-			{
-				return false;
-			}
-			if (!mountedVehicle.ShortPrefabName.Contains(requiredVehicleName))
-			{
-				return false;
-			}
-		}
-		return true;
-	}
-
-	private void GrantToPlayer(BasePlayer ply)
-	{
-		if (!ply.isClient)
-		{
-			if (!string.IsNullOrEmpty(achievementName))
-			{
-				ply.GiveAchievement(achievementName, allowDuringTutorial);
-			}
-			if (!string.IsNullOrEmpty(statToIncrease))
-			{
-				ply.stats.Add(statToIncrease, 1);
-				ply.stats.Save(forceSteamSave: true);
-			}
-			triggeredPlayers.Add(ply.userID);
-		}
-	}
-
-	private bool IsAllowedExitSide(BasePlayer ply)
-	{
-		if (requiredExitSides == ExitSideMask.Any)
-		{
-			return true;
-		}
-		ExitSideMask exitSide = GetExitSide(ply);
-		if (exitSide == ExitSideMask.Any)
-		{
-			return false;
-		}
-		return (requiredExitSides & exitSide) != 0;
-	}
-
-	private ExitSideMask GetExitSide(BasePlayer ply)
-	{
-		//IL_0020: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0025: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0030: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0035: Unknown result type (might be due to invalid IL or missing references)
-		//IL_003a: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0041: Unknown result type (might be due to invalid IL or missing references)
-		//IL_004b: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0050: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0051: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0065: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0070: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0078: Unknown result type (might be due to invalid IL or missing references)
-		//IL_008c: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0097: Unknown result type (might be due to invalid IL or missing references)
-		//IL_009f: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00b3: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00be: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00fc: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00d0: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00ea: Unknown result type (might be due to invalid IL or missing references)
-		if (!Object.op_Implicit((Object)(object)boxCollider))
-		{
-			return ExitSideMask.Any;
-		}
-		Vector3 val = ((Component)boxCollider).transform.InverseTransformPoint(((Component)ply).transform.position) - boxCollider.center;
-		Vector3 val2 = boxCollider.size * 0.5f;
-		float num = ((val2.x > 0f) ? (Mathf.Abs(val.x) / val2.x) : (-1f));
-		float num2 = ((val2.y > 0f) ? (Mathf.Abs(val.y) / val2.y) : (-1f));
-		float num3 = ((val2.z > 0f) ? (Mathf.Abs(val.z) / val2.z) : (-1f));
-		if (num >= num2 && num >= num3)
-		{
-			if (!(val.x >= 0f))
-			{
-				return ExitSideMask.Left;
-			}
-			return ExitSideMask.Right;
-		}
-		if (num2 >= num && num2 >= num3)
-		{
-			if (!(val.y >= 0f))
-			{
-				return ExitSideMask.Bottom;
-			}
-			return ExitSideMask.Top;
-		}
-		if (!(val.z >= 0f))
-		{
-			return ExitSideMask.Back;
-		}
-		return ExitSideMask.Front;
-	}
-
-	private void OnDrawGizmosSelected()
-	{
-		//IL_0025: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0030: Unknown result type (might be due to invalid IL or missing references)
-		//IL_003b: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0040: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0042: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0047: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0048: Unknown result type (might be due to invalid IL or missing references)
-		//IL_004e: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0054: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0089: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0093: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0094: Unknown result type (might be due to invalid IL or missing references)
-		//IL_009b: Unknown result type (might be due to invalid IL or missing references)
-		//IL_009c: Unknown result type (might be due to invalid IL or missing references)
-		//IL_009d: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00aa: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00ab: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00ac: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00ba: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00bb: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00bc: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00c9: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00ca: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00cb: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00d8: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00d9: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00da: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00e8: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00e9: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00ea: Unknown result type (might be due to invalid IL or missing references)
-		BoxCollider val = (Object.op_Implicit((Object)(object)boxCollider) ? boxCollider : ((Component)this).GetComponent<BoxCollider>());
-		if (Object.op_Implicit((Object)(object)val))
-		{
-			Matrix4x4 matrix = Gizmos.matrix;
-			Gizmos.matrix = ((Component)val).transform.localToWorldMatrix;
-			Vector3 center = val.center;
-			Vector3 size = val.size;
-			float markerSize = Mathf.Max(Mathf.Min(size.x, Mathf.Min(size.y, size.z)) * 0.08f, 0.03f);
-			Gizmos.color = new Color(0.8f, 0.8f, 0.8f, 0.75f);
-			Gizmos.DrawWireCube(center, size);
-			DrawSideGizmo(center, size, Vector3.forward, ExitSideMask.Front, markerSize);
-			DrawSideGizmo(center, size, Vector3.back, ExitSideMask.Back, markerSize);
-			DrawSideGizmo(center, size, Vector3.left, ExitSideMask.Left, markerSize);
-			DrawSideGizmo(center, size, Vector3.right, ExitSideMask.Right, markerSize);
-			DrawSideGizmo(center, size, Vector3.up, ExitSideMask.Top, markerSize);
-			DrawSideGizmo(center, size, Vector3.down, ExitSideMask.Bottom, markerSize);
-			Gizmos.matrix = matrix;
-		}
-	}
-
-	private void DrawSideGizmo(Vector3 center, Vector3 size, Vector3 normal, ExitSideMask side, float markerSize)
-	{
-		//IL_0048: Unknown result type (might be due to invalid IL or missing references)
-		//IL_002d: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0052: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0058: Unknown result type (might be due to invalid IL or missing references)
-		//IL_005d: Unknown result type (might be due to invalid IL or missing references)
-		//IL_005e: Unknown result type (might be due to invalid IL or missing references)
-		//IL_005f: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0060: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0061: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0066: Unknown result type (might be due to invalid IL or missing references)
-		//IL_006b: Unknown result type (might be due to invalid IL or missing references)
-		//IL_006c: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0075: Unknown result type (might be due to invalid IL or missing references)
-		//IL_007a: Unknown result type (might be due to invalid IL or missing references)
-		//IL_007f: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0080: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0086: Unknown result type (might be due to invalid IL or missing references)
-		Gizmos.color = ((requiredExitSides == ExitSideMask.Any || (requiredExitSides & side) != 0) ? new Color(0.2f, 1f, 0.35f, 0.9f) : new Color(1f, 0.25f, 0.25f, 0.7f));
-		Vector3 val = size * 0.5f;
-		Vector3 val2 = center + Vector3.Scale(normal, val);
-		Vector3 val3 = val2 + normal * (markerSize * 3f);
-		Gizmos.DrawLine(val2, val3);
-		Gizmos.DrawSphere(val3, markerSize);
-	}
-}
-
-
-public enum AchievementTriggerMode
-{
-	Enter,
-	Exit
-}
-
-
-using System;
-
-[Flags]
-public enum ExitSideMask
-{
-	Any = 0,
-	Front = 1,
-	Bottom = 2,
-	Left = 4,
-	Right = 8,
-	Back = 0x10,
-	Top = 0x20
-}
-
-
-using System.Collections.Generic;
-using UnityEngine;
-
-public class TriggerAnalytic : TriggerBase, IServerComponent
-{
-	private struct RecentPlayerEntrance
-	{
-		public BasePlayer Player;
-
-		public TimeSince Time;
-	}
-
-	public string AnalyticMessage;
-
-	public float Timeout = 120f;
-
-	private List<RecentPlayerEntrance> recentEntrances = new List<RecentPlayerEntrance>();
-
-	internal override GameObject InterestedInObject(GameObject obj)
-	{
-		if (obj.ToBaseEntity() is BasePlayer { IsNpc: false, isServer: not false } basePlayer)
-		{
-			return ((Component)basePlayer).gameObject;
-		}
-		return null;
-	}
-
-	internal override void OnEntityEnter(BaseEntity ent)
-	{
-		//IL_004b: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0050: Unknown result type (might be due to invalid IL or missing references)
-		base.OnEntityEnter(ent);
-		BasePlayer basePlayer = ent.ToPlayer();
-		if ((Object)(object)basePlayer != (Object)null && !basePlayer.IsNpc)
-		{
-			CheckTimeouts();
-			if (IsPlayerValid(basePlayer))
-			{
-				recentEntrances.Add(new RecentPlayerEntrance
-				{
-					Player = basePlayer,
-					Time = TimeSince.op_Implicit(0f)
-				});
-			}
-		}
-	}
-
-	private void CheckTimeouts()
-	{
-		//IL_001c: Unknown result type (might be due to invalid IL or missing references)
-		for (int num = recentEntrances.Count - 1; num >= 0; num--)
-		{
-			if (TimeSince.op_Implicit(recentEntrances[num].Time) > Timeout)
-			{
-				recentEntrances.RemoveAt(num);
-			}
-		}
-	}
-
-	private bool IsPlayerValid(BasePlayer p)
-	{
-		for (int i = 0; i < recentEntrances.Count; i++)
-		{
-			if ((Object)(object)recentEntrances[i].Player == (Object)(object)p)
-			{
-				return false;
-			}
-		}
-		return true;
-	}
-}
-
-
-private struct RecentPlayerEntrance
-{
-	public BasePlayer Player;
-
-	public TimeSince Time;
-}
-
-
-using UnityEngine;
-
-public class TriggerBanditZone : TriggerBase
-{
-	public float GetBanditZoneLevel(Vector3 pos)
-	{
-		return 1f;
 	}
 }
 

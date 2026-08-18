@@ -2,6 +2,828 @@ using System.Collections.Generic;
 using System.Linq;
 using UnityEngine;
 
+public class GenerateDungeonBase : ProceduralComponent
+{
+	private class DungeonSegment
+	{
+		public Vector3 position;
+
+		public Quaternion rotation;
+
+		public Prefab prefab;
+
+		public DungeonBaseLink link;
+
+		public int score;
+
+		public int cost;
+
+		public int floor;
+	}
+
+	public string EntranceFolder = string.Empty;
+
+	public string LinkFolder = string.Empty;
+
+	public string EndFolder = string.Empty;
+
+	public string TransitionFolder = string.Empty;
+
+	public InfrastructureType ConnectionType = InfrastructureType.UnderwaterLab;
+
+	private static Vector3 VolumeExtrudePositive = Vector3.one * 0.01f;
+
+	private static Vector3 VolumeExtrudeNegative = Vector3.one * -0.01f;
+
+	private const int MaxCount = int.MaxValue;
+
+	private const int MaxDepth = 3;
+
+	private const int MaxFloor = 2;
+
+	private List<DungeonSegment> segmentsTotal = new List<DungeonSegment>();
+
+	private Quaternion[] horizontalRotations = (Quaternion[])(object)new Quaternion[1] { Quaternion.Euler(0f, 0f, 0f) };
+
+	private Quaternion[] pillarRotations = (Quaternion[])(object)new Quaternion[4]
+	{
+		Quaternion.Euler(0f, 0f, 0f),
+		Quaternion.Euler(0f, 90f, 0f),
+		Quaternion.Euler(0f, 180f, 0f),
+		Quaternion.Euler(0f, 270f, 0f)
+	};
+
+	private Quaternion[] verticalRotations = (Quaternion[])(object)new Quaternion[8]
+	{
+		Quaternion.Euler(0f, 0f, 0f),
+		Quaternion.Euler(0f, 45f, 0f),
+		Quaternion.Euler(0f, 90f, 0f),
+		Quaternion.Euler(0f, 135f, 0f),
+		Quaternion.Euler(0f, 180f, 0f),
+		Quaternion.Euler(0f, 225f, 0f),
+		Quaternion.Euler(0f, 270f, 0f),
+		Quaternion.Euler(0f, 315f, 0f)
+	};
+
+	public override bool RunOnCache => true;
+
+	public override void Process(uint seed)
+	{
+		//IL_0131: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0136: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0149: Unknown result type (might be due to invalid IL or missing references)
+		//IL_014e: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0380: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0387: Unknown result type (might be due to invalid IL or missing references)
+		//IL_038c: Unknown result type (might be due to invalid IL or missing references)
+		if (World.Cached)
+		{
+			return;
+		}
+		if (World.Networked)
+		{
+			World.Spawn("DungeonBase");
+		}
+		else
+		{
+			if (ConnectionType == InfrastructureType.UnderwaterLab && !World.Config.UnderwaterLabs)
+			{
+				return;
+			}
+			Prefab<DungeonBaseLink>[] array = Prefab.Load<DungeonBaseLink>("assets/bundled/prefabs/autospawn/" + EntranceFolder, (GameManager)null, (PrefabAttribute.Library)null, useProbabilities: true, useWorldConfig: false);
+			if (array == null)
+			{
+				return;
+			}
+			Prefab<DungeonBaseLink>[] array2 = Prefab.Load<DungeonBaseLink>("assets/bundled/prefabs/autospawn/" + LinkFolder, (GameManager)null, (PrefabAttribute.Library)null, useProbabilities: true, useWorldConfig: false);
+			if (array2 == null)
+			{
+				return;
+			}
+			Prefab<DungeonBaseLink>[] array3 = Prefab.Load<DungeonBaseLink>("assets/bundled/prefabs/autospawn/" + EndFolder, (GameManager)null, (PrefabAttribute.Library)null, useProbabilities: true, useWorldConfig: false);
+			if (array3 == null)
+			{
+				return;
+			}
+			Prefab<DungeonBaseTransition>[] array4 = Prefab.Load<DungeonBaseTransition>("assets/bundled/prefabs/autospawn/" + TransitionFolder, (GameManager)null, (PrefabAttribute.Library)null, useProbabilities: true, useWorldConfig: false);
+			if (array4 == null)
+			{
+				return;
+			}
+			foreach (DungeonBaseInfo item in Object.op_Implicit((Object)(object)TerrainMeta.Path) ? TerrainMeta.Path.DungeonBaseEntrances : null)
+			{
+				TerrainPathConnect[] componentsInChildren = ((Component)item).GetComponentsInChildren<TerrainPathConnect>(true);
+				foreach (TerrainPathConnect obj in componentsInChildren)
+				{
+					if (obj.Type != ConnectionType)
+					{
+						continue;
+					}
+					uint seed2 = seed++;
+					List<DungeonSegment> list = new List<DungeonSegment>();
+					DungeonSegment segmentStart = new DungeonSegment();
+					int num = 0;
+					segmentStart.position = ((Component)item).transform.position;
+					segmentStart.rotation = ((Component)item).transform.rotation;
+					segmentStart.link = ((Component)item).GetComponentInChildren<DungeonBaseLink>();
+					segmentStart.cost = 0;
+					segmentStart.floor = 0;
+					for (int j = 0; j < 25; j++)
+					{
+						List<DungeonSegment> list2 = new List<DungeonSegment>();
+						list2.Add(segmentStart);
+						PlaceSegments(ref seed2, int.MaxValue, 3, 2, attachToFemale: true, attachToMale: false, list2, array2);
+						int num2 = list2.Count((DungeonSegment x) => x.link.MaxCountLocal != -1);
+						if (num2 > num || (num2 == num && list2.Count > list.Count))
+						{
+							list = list2;
+							num = num2;
+						}
+					}
+					if (list.Count > 5)
+					{
+						list = list.OrderByDescending((DungeonSegment x) => Vector3Ex.SqrMagnitude2D(x.position - segmentStart.position)).ToList();
+						PlaceSegments(ref seed2, 1, 4, 2, attachToFemale: true, attachToMale: false, list, array);
+					}
+					if (list.Count > 25)
+					{
+						DungeonSegment segmentEnd = list[list.Count - 1];
+						list = list.OrderByDescending((DungeonSegment x) => Mathf.Min(Vector3Ex.SqrMagnitude2D(x.position - segmentStart.position), Vector3Ex.SqrMagnitude2D(x.position - segmentEnd.position))).ToList();
+						PlaceSegments(ref seed2, 1, 5, 2, attachToFemale: true, attachToMale: false, list, array);
+					}
+					bool flag = true;
+					while (flag)
+					{
+						flag = false;
+						for (int k = 0; k < list.Count; k++)
+						{
+							DungeonSegment dungeonSegment = list[k];
+							if (dungeonSegment.link.Cost <= 0 && !IsFullyOccupied(list, dungeonSegment))
+							{
+								list.RemoveAt(k--);
+								flag = true;
+							}
+						}
+					}
+					PlaceSegments(ref seed2, int.MaxValue, int.MaxValue, 3, attachToFemale: true, attachToMale: true, list, array3);
+					PlaceTransitions(ref seed2, list, array4);
+					segmentsTotal.AddRange(list);
+				}
+			}
+			foreach (DungeonSegment item2 in segmentsTotal)
+			{
+				if (item2.prefab != null)
+				{
+					World.AddPrefab("DungeonBase", item2.prefab, item2.position, item2.rotation, Vector3.one);
+				}
+			}
+		}
+	}
+
+	private Quaternion[] GetRotationList(DungeonBaseSocketType type)
+	{
+		return type switch
+		{
+			DungeonBaseSocketType.Horizontal => horizontalRotations, 
+			DungeonBaseSocketType.Vertical => verticalRotations, 
+			DungeonBaseSocketType.Pillar => pillarRotations, 
+			_ => null, 
+		};
+	}
+
+	private int GetSocketFloor(DungeonBaseSocketType type)
+	{
+		if (type != DungeonBaseSocketType.Vertical)
+		{
+			return 0;
+		}
+		return 1;
+	}
+
+	private bool IsFullyOccupied(List<DungeonSegment> segments, DungeonSegment segment)
+	{
+		//IL_0009: Unknown result type (might be due to invalid IL or missing references)
+		//IL_000f: Unknown result type (might be due to invalid IL or missing references)
+		return SocketMatches(segments, segment.link, segment.position, segment.rotation) == segment.link.Sockets.Count;
+	}
+
+	private bool NeighbourMatches(List<DungeonSegment> segments, DungeonBaseTransition transition, Vector3 transitionPos, Quaternion transitionRot)
+	{
+		//IL_0027: Unknown result type (might be due to invalid IL or missing references)
+		//IL_002c: Unknown result type (might be due to invalid IL or missing references)
+		//IL_002d: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0032: Unknown result type (might be due to invalid IL or missing references)
+		//IL_006c: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0072: Unknown result type (might be due to invalid IL or missing references)
+		//IL_007e: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0083: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0088: Unknown result type (might be due to invalid IL or missing references)
+		//IL_008d: Unknown result type (might be due to invalid IL or missing references)
+		//IL_008e: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0093: Unknown result type (might be due to invalid IL or missing references)
+		bool flag = false;
+		bool flag2 = false;
+		foreach (DungeonSegment segment in segments)
+		{
+			Vector3 val;
+			if ((Object)(object)segment.link == (Object)null)
+			{
+				val = segment.position - transitionPos;
+				if (((Vector3)(ref val)).sqrMagnitude < 0.01f)
+				{
+					flag = false;
+					flag2 = false;
+				}
+				continue;
+			}
+			foreach (DungeonBaseSocket socket in segment.link.Sockets)
+			{
+				val = segment.position + segment.rotation * ((Component)socket).transform.localPosition - transitionPos;
+				if (((Vector3)(ref val)).sqrMagnitude < 0.01f)
+				{
+					if (!flag && segment.link.Type == transition.Neighbour1)
+					{
+						flag = true;
+					}
+					else if (!flag2 && segment.link.Type == transition.Neighbour2)
+					{
+						flag2 = true;
+					}
+				}
+			}
+		}
+		return flag && flag2;
+	}
+
+	private int SocketMatches(List<DungeonSegment> segments, DungeonBaseLink link, Vector3 linkPos, Quaternion linkRot)
+	{
+		//IL_0036: Unknown result type (might be due to invalid IL or missing references)
+		//IL_003c: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0048: Unknown result type (might be due to invalid IL or missing references)
+		//IL_004d: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0052: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0057: Unknown result type (might be due to invalid IL or missing references)
+		//IL_007c: Unknown result type (might be due to invalid IL or missing references)
+		//IL_007d: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0086: Unknown result type (might be due to invalid IL or missing references)
+		//IL_008b: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0090: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0095: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0097: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0099: Unknown result type (might be due to invalid IL or missing references)
+		//IL_009b: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00a0: Unknown result type (might be due to invalid IL or missing references)
+		int num = 0;
+		foreach (DungeonSegment segment in segments)
+		{
+			foreach (DungeonBaseSocket socket in segment.link.Sockets)
+			{
+				Vector3 val = segment.position + segment.rotation * ((Component)socket).transform.localPosition;
+				foreach (DungeonBaseSocket socket2 in link.Sockets)
+				{
+					if (!((Object)(object)socket == (Object)(object)socket2))
+					{
+						Vector3 val2 = linkPos + linkRot * ((Component)socket2).transform.localPosition;
+						Vector3 val3 = val - val2;
+						if (((Vector3)(ref val3)).sqrMagnitude < 0.01f)
+						{
+							num++;
+						}
+					}
+				}
+			}
+		}
+		return num;
+	}
+
+	private bool IsOccupied(List<DungeonSegment> segments, DungeonBaseSocket socket, Vector3 socketPos, Quaternion socketRot)
+	{
+		//IL_0039: Unknown result type (might be due to invalid IL or missing references)
+		//IL_003f: Unknown result type (might be due to invalid IL or missing references)
+		//IL_004a: Unknown result type (might be due to invalid IL or missing references)
+		//IL_004f: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0054: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0059: Unknown result type (might be due to invalid IL or missing references)
+		//IL_005a: Unknown result type (might be due to invalid IL or missing references)
+		//IL_005f: Unknown result type (might be due to invalid IL or missing references)
+		foreach (DungeonSegment segment in segments)
+		{
+			foreach (DungeonBaseSocket socket2 in segment.link.Sockets)
+			{
+				if (!((Object)(object)socket2 == (Object)(object)socket))
+				{
+					Vector3 val = segment.position + segment.rotation * ((Component)socket2).transform.localPosition - socketPos;
+					if (((Vector3)(ref val)).sqrMagnitude < 0.01f)
+					{
+						return true;
+					}
+				}
+			}
+		}
+		return false;
+	}
+
+	private int CountLocal(List<DungeonSegment> segments, DungeonBaseLink link)
+	{
+		int num = 0;
+		if ((Object)(object)link == (Object)null)
+		{
+			return num;
+		}
+		foreach (DungeonSegment segment in segments)
+		{
+			if (!((Object)(object)segment.link == (Object)null))
+			{
+				if ((Object)(object)segment.link == (Object)(object)link)
+				{
+					num++;
+				}
+				else if (segment.link.MaxCountIdentifier >= 0 && segment.link.MaxCountIdentifier == link.MaxCountIdentifier)
+				{
+					num++;
+				}
+			}
+		}
+		return num;
+	}
+
+	private int CountGlobal(List<DungeonSegment> segments, DungeonBaseLink link)
+	{
+		int num = 0;
+		if ((Object)(object)link == (Object)null)
+		{
+			return num;
+		}
+		foreach (DungeonSegment segment in segments)
+		{
+			if (!((Object)(object)segment.link == (Object)null))
+			{
+				if ((Object)(object)segment.link == (Object)(object)link)
+				{
+					num++;
+				}
+				else if (segment.link.MaxCountIdentifier >= 0 && segment.link.MaxCountIdentifier == link.MaxCountIdentifier)
+				{
+					num++;
+				}
+			}
+		}
+		foreach (DungeonSegment item in segmentsTotal)
+		{
+			if (!((Object)(object)item.link == (Object)null))
+			{
+				if ((Object)(object)item.link == (Object)(object)link)
+				{
+					num++;
+				}
+				else if (item.link.MaxCountIdentifier >= 0 && item.link.MaxCountIdentifier == link.MaxCountIdentifier)
+				{
+					num++;
+				}
+			}
+		}
+		return num;
+	}
+
+	private bool IsBlocked(List<DungeonSegment> segments, DungeonBaseLink link, Vector3 linkPos, Quaternion linkRot)
+	{
+		//IL_0019: Unknown result type (might be due to invalid IL or missing references)
+		//IL_001a: Unknown result type (might be due to invalid IL or missing references)
+		//IL_001c: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0021: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0026: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0027: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0028: Unknown result type (might be due to invalid IL or missing references)
+		//IL_002a: Unknown result type (might be due to invalid IL or missing references)
+		//IL_002f: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0034: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0068: Unknown result type (might be due to invalid IL or missing references)
+		//IL_006f: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0074: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0079: Unknown result type (might be due to invalid IL or missing references)
+		//IL_007e: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0082: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0200: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0207: Unknown result type (might be due to invalid IL or missing references)
+		//IL_020c: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0211: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0216: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00cf: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00d6: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00e2: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00e7: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00ec: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00f1: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00f5: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0233: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0234: Unknown result type (might be due to invalid IL or missing references)
+		//IL_023d: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0242: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0247: Unknown result type (might be due to invalid IL or missing references)
+		//IL_024c: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0250: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0119: Unknown result type (might be due to invalid IL or missing references)
+		//IL_011a: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0123: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0128: Unknown result type (might be due to invalid IL or missing references)
+		//IL_012d: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0132: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0134: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0136: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0138: Unknown result type (might be due to invalid IL or missing references)
+		//IL_013d: Unknown result type (might be due to invalid IL or missing references)
+		//IL_027f: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0286: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0292: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0297: Unknown result type (might be due to invalid IL or missing references)
+		//IL_029c: Unknown result type (might be due to invalid IL or missing references)
+		//IL_02a1: Unknown result type (might be due to invalid IL or missing references)
+		//IL_02a3: Unknown result type (might be due to invalid IL or missing references)
+		//IL_02a8: Unknown result type (might be due to invalid IL or missing references)
+		Vector3 val3;
+		foreach (DungeonVolume volume in link.Volumes)
+		{
+			OBB bounds = volume.GetBounds(linkPos, linkRot, VolumeExtrudeNegative);
+			OBB bounds2 = volume.GetBounds(linkPos, linkRot, VolumeExtrudePositive);
+			foreach (DungeonSegment segment in segments)
+			{
+				foreach (DungeonVolume volume2 in segment.link.Volumes)
+				{
+					OBB bounds3 = volume2.GetBounds(segment.position, segment.rotation, VolumeExtrudeNegative);
+					if (((OBB)(ref bounds)).Intersects(bounds3))
+					{
+						return true;
+					}
+				}
+				foreach (DungeonBaseSocket socket in segment.link.Sockets)
+				{
+					Vector3 val = segment.position + segment.rotation * ((Component)socket).transform.localPosition;
+					if (!((OBB)(ref bounds2)).Contains(val))
+					{
+						continue;
+					}
+					bool flag = false;
+					foreach (DungeonBaseSocket socket2 in link.Sockets)
+					{
+						Vector3 val2 = linkPos + linkRot * ((Component)socket2).transform.localPosition;
+						val3 = val - val2;
+						if (((Vector3)(ref val3)).sqrMagnitude < 0.01f)
+						{
+							flag = true;
+							break;
+						}
+					}
+					if (!flag)
+					{
+						return true;
+					}
+				}
+			}
+		}
+		foreach (DungeonSegment segment2 in segments)
+		{
+			foreach (DungeonVolume volume3 in segment2.link.Volumes)
+			{
+				OBB bounds4 = volume3.GetBounds(segment2.position, segment2.rotation, VolumeExtrudePositive);
+				foreach (DungeonBaseSocket socket3 in link.Sockets)
+				{
+					Vector3 val4 = linkPos + linkRot * ((Component)socket3).transform.localPosition;
+					if (!((OBB)(ref bounds4)).Contains(val4))
+					{
+						continue;
+					}
+					bool flag2 = false;
+					foreach (DungeonBaseSocket socket4 in segment2.link.Sockets)
+					{
+						val3 = segment2.position + segment2.rotation * ((Component)socket4).transform.localPosition - val4;
+						if (((Vector3)(ref val3)).sqrMagnitude < 0.01f)
+						{
+							flag2 = true;
+							break;
+						}
+					}
+					if (!flag2)
+					{
+						return true;
+					}
+				}
+			}
+		}
+		return false;
+	}
+
+	private void PlaceSegments(ref uint seed, int count, int budget, int floors, bool attachToFemale, bool attachToMale, List<DungeonSegment> segments, Prefab<DungeonBaseLink>[] prefabs)
+	{
+		//IL_0084: Unknown result type (might be due to invalid IL or missing references)
+		//IL_008a: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0096: Unknown result type (might be due to invalid IL or missing references)
+		//IL_009b: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00a0: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00a5: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00a8: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00b4: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00b9: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00be: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00c5: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00c7: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0177: Unknown result type (might be due to invalid IL or missing references)
+		//IL_017c: Unknown result type (might be due to invalid IL or missing references)
+		//IL_017e: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0183: Unknown result type (might be due to invalid IL or missing references)
+		//IL_018e: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0190: Unknown result type (might be due to invalid IL or missing references)
+		//IL_01eb: Unknown result type (might be due to invalid IL or missing references)
+		//IL_01ed: Unknown result type (might be due to invalid IL or missing references)
+		//IL_01f4: Unknown result type (might be due to invalid IL or missing references)
+		//IL_01f6: Unknown result type (might be due to invalid IL or missing references)
+		int num = 0;
+		for (int i = 0; i < segments.Count; i++)
+		{
+			DungeonSegment dungeonSegment = segments[i];
+			if (dungeonSegment.cost >= budget)
+			{
+				continue;
+			}
+			int num2 = SeedRandom.Range(ref seed, 0, dungeonSegment.link.Sockets.Count);
+			for (int j = 0; j < dungeonSegment.link.Sockets.Count; j++)
+			{
+				DungeonBaseSocket dungeonBaseSocket = dungeonSegment.link.Sockets[(j + num2) % dungeonSegment.link.Sockets.Count];
+				if (!(dungeonBaseSocket.Female && attachToFemale) && !(dungeonBaseSocket.Male && attachToMale))
+				{
+					continue;
+				}
+				Vector3 val = dungeonSegment.position + dungeonSegment.rotation * ((Component)dungeonBaseSocket).transform.localPosition;
+				Quaternion val2 = dungeonSegment.rotation * ((Component)dungeonBaseSocket).transform.localRotation;
+				if (IsOccupied(segments, dungeonBaseSocket, val, val2))
+				{
+					continue;
+				}
+				prefabs.Shuffle(ref seed);
+				DungeonSegment dungeonSegment2 = null;
+				Quaternion[] rotationList = GetRotationList(dungeonBaseSocket.Type);
+				foreach (Prefab<DungeonBaseLink> prefab in prefabs)
+				{
+					DungeonBaseLink component = prefab.Component;
+					if (component.MaxCountLocal == 0 || component.MaxCountGlobal == 0 || (component.MaxFloor >= 0 && dungeonSegment.floor > component.MaxFloor))
+					{
+						continue;
+					}
+					int num3 = dungeonSegment.cost + component.Cost;
+					if (num3 > budget)
+					{
+						continue;
+					}
+					int num4 = dungeonSegment.floor + GetSocketFloor(dungeonBaseSocket.Type);
+					if (num4 > floors)
+					{
+						continue;
+					}
+					DungeonBaseSocket linkSocket = null;
+					Vector3 linkPos = Vector3.zero;
+					Quaternion linkRot = Quaternion.identity;
+					int linkScore = 0;
+					if (Place(ref seed, segments, dungeonBaseSocket, val, val2, prefab, rotationList, out linkSocket, out linkPos, out linkRot, out linkScore) && (component.MaxCountLocal <= 0 || CountLocal(segments, component) < component.MaxCountLocal) && (component.MaxCountGlobal <= 0 || CountGlobal(segments, component) < component.MaxCountGlobal))
+					{
+						DungeonSegment dungeonSegment3 = new DungeonSegment();
+						dungeonSegment3.position = linkPos;
+						dungeonSegment3.rotation = linkRot;
+						dungeonSegment3.prefab = prefab;
+						dungeonSegment3.link = component;
+						dungeonSegment3.score = linkScore;
+						dungeonSegment3.cost = num3;
+						dungeonSegment3.floor = num4;
+						if (dungeonSegment2 == null || dungeonSegment2.score < dungeonSegment3.score)
+						{
+							dungeonSegment2 = dungeonSegment3;
+						}
+					}
+				}
+				if (dungeonSegment2 != null)
+				{
+					segments.Add(dungeonSegment2);
+					num++;
+					if (num >= count)
+					{
+						return;
+					}
+				}
+			}
+		}
+	}
+
+	private void PlaceTransitions(ref uint seed, List<DungeonSegment> segments, Prefab<DungeonBaseTransition>[] prefabs)
+	{
+		//IL_005e: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0064: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0070: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0075: Unknown result type (might be due to invalid IL or missing references)
+		//IL_007a: Unknown result type (might be due to invalid IL or missing references)
+		//IL_007f: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0082: Unknown result type (might be due to invalid IL or missing references)
+		//IL_008e: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0093: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0098: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00d1: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00d3: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00e5: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00e7: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00ee: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00f0: Unknown result type (might be due to invalid IL or missing references)
+		int count = segments.Count;
+		for (int i = 0; i < count; i++)
+		{
+			DungeonSegment dungeonSegment = segments[i];
+			int num = SeedRandom.Range(ref seed, 0, dungeonSegment.link.Sockets.Count);
+			for (int j = 0; j < dungeonSegment.link.Sockets.Count; j++)
+			{
+				DungeonBaseSocket dungeonBaseSocket = dungeonSegment.link.Sockets[(j + num) % dungeonSegment.link.Sockets.Count];
+				Vector3 val = dungeonSegment.position + dungeonSegment.rotation * ((Component)dungeonBaseSocket).transform.localPosition;
+				Quaternion val2 = dungeonSegment.rotation * ((Component)dungeonBaseSocket).transform.localRotation;
+				prefabs.Shuffle(ref seed);
+				foreach (Prefab<DungeonBaseTransition> prefab in prefabs)
+				{
+					if (dungeonBaseSocket.Type == prefab.Component.Type && NeighbourMatches(segments, prefab.Component, val, val2))
+					{
+						DungeonSegment dungeonSegment2 = new DungeonSegment();
+						dungeonSegment2.position = val;
+						dungeonSegment2.rotation = val2;
+						dungeonSegment2.prefab = prefab;
+						dungeonSegment2.link = null;
+						dungeonSegment2.score = 0;
+						dungeonSegment2.cost = 0;
+						dungeonSegment2.floor = 0;
+						segments.Add(dungeonSegment2);
+						break;
+					}
+				}
+			}
+		}
+	}
+
+	private bool Place(ref uint seed, List<DungeonSegment> segments, DungeonBaseSocket targetSocket, Vector3 targetPos, Quaternion targetRot, Prefab<DungeonBaseLink> prefab, Quaternion[] rotations, out DungeonBaseSocket linkSocket, out Vector3 linkPos, out Quaternion linkRot, out int linkScore)
+	{
+		//IL_0006: Unknown result type (might be due to invalid IL or missing references)
+		//IL_000b: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0012: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0017: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00af: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00ba: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00bf: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00c4: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00c6: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00cb: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00d0: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00d5: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00f8: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00fa: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00ff: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0101: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0103: Unknown result type (might be due to invalid IL or missing references)
+		//IL_010b: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0110: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0115: Unknown result type (might be due to invalid IL or missing references)
+		//IL_011a: Unknown result type (might be due to invalid IL or missing references)
+		//IL_011f: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0121: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00e0: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00e2: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00e7: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00ec: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00f1: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00f6: Unknown result type (might be due to invalid IL or missing references)
+		//IL_012d: Unknown result type (might be due to invalid IL or missing references)
+		//IL_012f: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0141: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0143: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0145: Unknown result type (might be due to invalid IL or missing references)
+		//IL_015f: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0161: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0168: Unknown result type (might be due to invalid IL or missing references)
+		//IL_016a: Unknown result type (might be due to invalid IL or missing references)
+		linkSocket = null;
+		linkPos = Vector3.one;
+		linkRot = Quaternion.identity;
+		linkScore = 0;
+		DungeonBaseLink component = prefab.Component;
+		int num = SeedRandom.Range(ref seed, 0, component.Sockets.Count);
+		for (int i = 0; i < component.Sockets.Count; i++)
+		{
+			DungeonBaseSocket dungeonBaseSocket = component.Sockets[(i + num) % component.Sockets.Count];
+			if (dungeonBaseSocket.Type != targetSocket.Type || ((!dungeonBaseSocket.Male || !targetSocket.Female) && (!dungeonBaseSocket.Female || !targetSocket.Male)))
+			{
+				continue;
+			}
+			rotations.Shuffle(ref seed);
+			foreach (Quaternion val in rotations)
+			{
+				Quaternion val2 = Quaternion.FromToRotation(-((Component)dungeonBaseSocket).transform.forward, targetRot * Vector3.forward);
+				if (dungeonBaseSocket.Type != DungeonBaseSocketType.Vertical)
+				{
+					val2 = QuaternionEx.LookRotationForcedUp(val2 * Vector3.forward, Vector3.up);
+				}
+				Quaternion val3 = val * val2;
+				Vector3 val4 = targetPos - val3 * ((Component)dungeonBaseSocket).transform.localPosition;
+				if (!IsBlocked(segments, component, val4, val3))
+				{
+					int num2 = SocketMatches(segments, component, val4, val3);
+					if (num2 > linkScore && prefab.CheckEnvironmentVolumesOutsideTerrain(val4, val3, Vector3.one, EnvironmentType.UnderwaterLab, (EnvironmentType)0, 1f))
+					{
+						linkSocket = dungeonBaseSocket;
+						linkPos = val4;
+						linkRot = val3;
+						linkScore = num2;
+					}
+				}
+			}
+		}
+		return linkScore > 0;
+	}
+
+	public static void SetupAI()
+	{
+		//IL_00bf: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00c6: Expected O, but got Unknown
+		//IL_00d8: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0110: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0115: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0122: Unknown result type (might be due to invalid IL or missing references)
+		//IL_012e: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0133: Unknown result type (might be due to invalid IL or missing references)
+		//IL_013d: Unknown result type (might be due to invalid IL or missing references)
+		//IL_014d: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0177: Unknown result type (might be due to invalid IL or missing references)
+		//IL_018b: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0190: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0195: Unknown result type (might be due to invalid IL or missing references)
+		if ((Object)(object)TerrainMeta.Path == (Object)null || TerrainMeta.Path.DungeonBaseEntrances == null)
+		{
+			return;
+		}
+		foreach (DungeonBaseInfo dungeonBaseEntrance in TerrainMeta.Path.DungeonBaseEntrances)
+		{
+			if ((Object)(object)dungeonBaseEntrance == (Object)null)
+			{
+				continue;
+			}
+			List<AIInformationZone> list = new List<AIInformationZone>();
+			int num = 0;
+			AIInformationZone componentInChildren = ((Component)dungeonBaseEntrance).GetComponentInChildren<AIInformationZone>();
+			if ((Object)(object)componentInChildren != (Object)null)
+			{
+				list.Add(componentInChildren);
+				num++;
+			}
+			foreach (GameObject link in ((Component)dungeonBaseEntrance).GetComponent<DungeonBaseInfo>().Links)
+			{
+				AIInformationZone componentInChildren2 = link.GetComponentInChildren<AIInformationZone>();
+				if (!((Object)(object)componentInChildren2 == (Object)null))
+				{
+					list.Add(componentInChildren2);
+					num++;
+				}
+			}
+			GameObject val = new GameObject("AIZ");
+			val.transform.position = ((Component)dungeonBaseEntrance).gameObject.transform.position;
+			AIInformationZone aIInformationZone = AIInformationZone.Merge(list, val);
+			aIInformationZone.ShouldSleepAI = true;
+			val.transform.SetParent(((Component)dungeonBaseEntrance).gameObject.transform);
+			GameObject val2 = new GameObject("WakeTrigger");
+			val2.transform.position = val.transform.position + ((Bounds)(ref aIInformationZone.bounds)).center;
+			val2.layer = LayerMask.NameToLayer("Trigger");
+			val2.transform.SetParent(((Component)dungeonBaseEntrance).gameObject.transform);
+			WakeAIZ wakeAIZ = val2.AddComponent<WakeAIZ>();
+			wakeAIZ.isBox = true;
+			wakeAIZ.size = ((Bounds)(ref aIInformationZone.bounds)).extents + new Vector3(100f, 100f, 100f);
+			wakeAIZ.Init(aIInformationZone);
+		}
+	}
+}
+
+
+using UnityEngine;
+
+private class DungeonSegment
+{
+	public Vector3 position;
+
+	public Quaternion rotation;
+
+	public Prefab prefab;
+
+	public DungeonBaseLink link;
+
+	public int score;
+
+	public int cost;
+
+	public int floor;
+}
+
+
+using System.Collections.Generic;
+using System.Linq;
+using UnityEngine;
+
 public class GenerateDungeonGrid : ProceduralComponent
 {
 	private class PathNode
@@ -13809,9 +14631,9 @@ using UnityEngine;
 public class WaterSystemBurst
 {
 	[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-	internal delegate void GetHeightArray_Burst_00007076$PostfixBurstDelegate(in ReadOnly<Vector2> posUV, ref NativeArray<float> shore, ref NativeArray<float> terrainHeight, in TerrainTexturing.ShoreData shoreData, in TerrainHeightMap.HeightMapQueryStructure terrainHeightMapData, in bool hasHeightMap, in bool hasTerrainTexturing);
+	internal delegate void GetHeightArray_Burst_0000707B$PostfixBurstDelegate(in ReadOnly<Vector2> posUV, ref NativeArray<float> shore, ref NativeArray<float> terrainHeight, in TerrainTexturing.ShoreData shoreData, in TerrainHeightMap.HeightMapQueryStructure terrainHeightMapData, in bool hasHeightMap, in bool hasTerrainTexturing);
 
-	internal static class GetHeightArray_Burst_00007076$BurstDirectCall
+	internal static class GetHeightArray_Burst_0000707B$BurstDirectCall
 	{
 		private static IntPtr Pointer;
 
@@ -13822,7 +14644,7 @@ public class WaterSystemBurst
 			//IL_001b: Unknown result type (might be due to invalid IL or missing references)
 			if (Pointer == (IntPtr)0)
 			{
-				Pointer = BurstCompiler.CompileFunctionPointer<GetHeightArray_Burst_00007076$PostfixBurstDelegate>((GetHeightArray_Burst_00007076$PostfixBurstDelegate)GetHeightArray_Burst).Value;
+				Pointer = BurstCompiler.CompileFunctionPointer<GetHeightArray_Burst_0000707B$PostfixBurstDelegate>((GetHeightArray_Burst_0000707B$PostfixBurstDelegate)GetHeightArray_Burst).Value;
 			}
 			P_0 = Pointer;
 		}
@@ -13850,9 +14672,9 @@ public class WaterSystemBurst
 	}
 
 	[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-	internal delegate void ComputeOceanSimHeight_Burst_00007077$PostfixBurstDelegate(in NativeArray<Vector2> pos, in NativeArray<Vector2> posUV, ref NativeArray<float> shore, ref NativeArray<float> waterHeight, in bool isDeepSea, in bool hasWaterAndTopology, in TerrainTopologyMap.TopologyQueryStructure topologyQueryStructure, in float OceanLevel, in float MaxOceanLevel, in bool hasWaterSystem, in TerrainWaterMap.WaterMapQueryStructure waterMapQueryStruct);
+	internal delegate void ComputeOceanSimHeight_Burst_0000707C$PostfixBurstDelegate(in NativeArray<Vector2> pos, in NativeArray<Vector2> posUV, ref NativeArray<float> shore, ref NativeArray<float> waterHeight, in bool isDeepSea, in bool hasWaterAndTopology, in TerrainTopologyMap.TopologyQueryStructure topologyQueryStructure, in float OceanLevel, in float MaxOceanLevel, in bool hasWaterSystem, in TerrainWaterMap.WaterMapQueryStructure waterMapQueryStruct);
 
-	internal static class ComputeOceanSimHeight_Burst_00007077$BurstDirectCall
+	internal static class ComputeOceanSimHeight_Burst_0000707C$BurstDirectCall
 	{
 		private static IntPtr Pointer;
 
@@ -13863,7 +14685,7 @@ public class WaterSystemBurst
 			//IL_001b: Unknown result type (might be due to invalid IL or missing references)
 			if (Pointer == (IntPtr)0)
 			{
-				Pointer = BurstCompiler.CompileFunctionPointer<ComputeOceanSimHeight_Burst_00007077$PostfixBurstDelegate>((ComputeOceanSimHeight_Burst_00007077$PostfixBurstDelegate)ComputeOceanSimHeight_Burst).Value;
+				Pointer = BurstCompiler.CompileFunctionPointer<ComputeOceanSimHeight_Burst_0000707C$PostfixBurstDelegate>((ComputeOceanSimHeight_Burst_0000707C$PostfixBurstDelegate)ComputeOceanSimHeight_Burst).Value;
 			}
 			P_0 = Pointer;
 		}
@@ -13890,18 +14712,18 @@ public class WaterSystemBurst
 		}
 	}
 
+	[MonoPInvokeCallback(typeof(GetHeightArray_Burst_0000707B$PostfixBurstDelegate))]
 	[BurstCompile]
-	[MonoPInvokeCallback(typeof(GetHeightArray_Burst_00007076$PostfixBurstDelegate))]
 	public static void GetHeightArray_Burst(in ReadOnly<Vector2> posUV, ref NativeArray<float> shore, ref NativeArray<float> terrainHeight, in TerrainTexturing.ShoreData shoreData, in TerrainHeightMap.HeightMapQueryStructure terrainHeightMapData, in bool hasHeightMap, in bool hasTerrainTexturing)
 	{
-		GetHeightArray_Burst_00007076$BurstDirectCall.Invoke(in posUV, ref shore, ref terrainHeight, in shoreData, in terrainHeightMapData, in hasHeightMap, in hasTerrainTexturing);
+		GetHeightArray_Burst_0000707B$BurstDirectCall.Invoke(in posUV, ref shore, ref terrainHeight, in shoreData, in terrainHeightMapData, in hasHeightMap, in hasTerrainTexturing);
 	}
 
 	[BurstCompile]
-	[MonoPInvokeCallback(typeof(ComputeOceanSimHeight_Burst_00007077$PostfixBurstDelegate))]
+	[MonoPInvokeCallback(typeof(ComputeOceanSimHeight_Burst_0000707C$PostfixBurstDelegate))]
 	public static void ComputeOceanSimHeight_Burst(in NativeArray<Vector2> pos, in NativeArray<Vector2> posUV, ref NativeArray<float> shore, ref NativeArray<float> waterHeight, in bool isDeepSea, in bool hasWaterAndTopology, in TerrainTopologyMap.TopologyQueryStructure topologyQueryStructure, in float OceanLevel, in float MaxOceanLevel, in bool hasWaterSystem, in TerrainWaterMap.WaterMapQueryStructure waterMapQueryStruct)
 	{
-		ComputeOceanSimHeight_Burst_00007077$BurstDirectCall.Invoke(in pos, in posUV, ref shore, ref waterHeight, in isDeepSea, in hasWaterAndTopology, in topologyQueryStructure, in OceanLevel, in MaxOceanLevel, in hasWaterSystem, in waterMapQueryStruct);
+		ComputeOceanSimHeight_Burst_0000707C$BurstDirectCall.Invoke(in pos, in posUV, ref shore, ref waterHeight, in isDeepSea, in hasWaterAndTopology, in topologyQueryStructure, in OceanLevel, in MaxOceanLevel, in hasWaterSystem, in waterMapQueryStruct);
 	}
 
 	[MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -13993,7 +14815,7 @@ using Unity.Collections;
 using UnityEngine;
 
 [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-internal delegate void GetHeightArray_Burst_00007076$PostfixBurstDelegate(in ReadOnly<Vector2> posUV, ref NativeArray<float> shore, ref NativeArray<float> terrainHeight, in TerrainTexturing.ShoreData shoreData, in TerrainHeightMap.HeightMapQueryStructure terrainHeightMapData, in bool hasHeightMap, in bool hasTerrainTexturing);
+internal delegate void GetHeightArray_Burst_0000707B$PostfixBurstDelegate(in ReadOnly<Vector2> posUV, ref NativeArray<float> shore, ref NativeArray<float> terrainHeight, in TerrainTexturing.ShoreData shoreData, in TerrainHeightMap.HeightMapQueryStructure terrainHeightMapData, in bool hasHeightMap, in bool hasTerrainTexturing);
 
 
 using System;
@@ -14001,7 +14823,7 @@ using Unity.Burst;
 using Unity.Collections;
 using UnityEngine;
 
-internal static class GetHeightArray_Burst_00007076$BurstDirectCall
+internal static class GetHeightArray_Burst_0000707B$BurstDirectCall
 {
 	private static IntPtr Pointer;
 
@@ -14012,7 +14834,7 @@ internal static class GetHeightArray_Burst_00007076$BurstDirectCall
 		//IL_001b: Unknown result type (might be due to invalid IL or missing references)
 		if (Pointer == (IntPtr)0)
 		{
-			Pointer = BurstCompiler.CompileFunctionPointer<GetHeightArray_Burst_00007076$PostfixBurstDelegate>((GetHeightArray_Burst_00007076$PostfixBurstDelegate)GetHeightArray_Burst).Value;
+			Pointer = BurstCompiler.CompileFunctionPointer<GetHeightArray_Burst_0000707B$PostfixBurstDelegate>((GetHeightArray_Burst_0000707B$PostfixBurstDelegate)GetHeightArray_Burst).Value;
 		}
 		P_0 = Pointer;
 	}
@@ -14045,7 +14867,7 @@ using Unity.Collections;
 using UnityEngine;
 
 [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-internal delegate void ComputeOceanSimHeight_Burst_00007077$PostfixBurstDelegate(in NativeArray<Vector2> pos, in NativeArray<Vector2> posUV, ref NativeArray<float> shore, ref NativeArray<float> waterHeight, in bool isDeepSea, in bool hasWaterAndTopology, in TerrainTopologyMap.TopologyQueryStructure topologyQueryStructure, in float OceanLevel, in float MaxOceanLevel, in bool hasWaterSystem, in TerrainWaterMap.WaterMapQueryStructure waterMapQueryStruct);
+internal delegate void ComputeOceanSimHeight_Burst_0000707C$PostfixBurstDelegate(in NativeArray<Vector2> pos, in NativeArray<Vector2> posUV, ref NativeArray<float> shore, ref NativeArray<float> waterHeight, in bool isDeepSea, in bool hasWaterAndTopology, in TerrainTopologyMap.TopologyQueryStructure topologyQueryStructure, in float OceanLevel, in float MaxOceanLevel, in bool hasWaterSystem, in TerrainWaterMap.WaterMapQueryStructure waterMapQueryStruct);
 
 
 using System;
@@ -14053,7 +14875,7 @@ using Unity.Burst;
 using Unity.Collections;
 using UnityEngine;
 
-internal static class ComputeOceanSimHeight_Burst_00007077$BurstDirectCall
+internal static class ComputeOceanSimHeight_Burst_0000707C$BurstDirectCall
 {
 	private static IntPtr Pointer;
 
@@ -14064,7 +14886,7 @@ internal static class ComputeOceanSimHeight_Burst_00007077$BurstDirectCall
 		//IL_001b: Unknown result type (might be due to invalid IL or missing references)
 		if (Pointer == (IntPtr)0)
 		{
-			Pointer = BurstCompiler.CompileFunctionPointer<ComputeOceanSimHeight_Burst_00007077$PostfixBurstDelegate>((ComputeOceanSimHeight_Burst_00007077$PostfixBurstDelegate)ComputeOceanSimHeight_Burst).Value;
+			Pointer = BurstCompiler.CompileFunctionPointer<ComputeOceanSimHeight_Burst_0000707C$PostfixBurstDelegate>((ComputeOceanSimHeight_Burst_0000707C$PostfixBurstDelegate)ComputeOceanSimHeight_Burst).Value;
 		}
 		P_0 = Pointer;
 	}
@@ -15145,8 +15967,8 @@ private struct SubsurfaceProfileEntry
 
 using UnityEngine;
 
-[RequireComponent(typeof(Renderer))]
 [ExecuteInEditMode]
+[RequireComponent(typeof(Renderer))]
 public class DeferredMeshDecal : MonoBehaviour, IClientComponent
 {
 }
@@ -15154,8 +15976,8 @@ public class DeferredMeshDecal : MonoBehaviour, IClientComponent
 
 using UnityEngine;
 
-[ExecuteInEditMode]
 [RequireComponent(typeof(Camera))]
+[ExecuteInEditMode]
 public class DeferredMeshDecalRenderer : MonoBehaviour
 {
 }
@@ -15374,9 +16196,9 @@ public class OceanParameters
 using UnityEngine;
 using UnityEngine.Rendering;
 
+[ExecuteInEditMode]
 [RequireComponent(typeof(DeferredIndirectLightingPass))]
 [RequireComponent(typeof(CommandBufferManager))]
-[ExecuteInEditMode]
 public class SpatialEnvironmentVolumePass : MonoBehaviour
 {
 	private const CameraEvent VOLUME_RENDERING_CAMERA_EVENT = 6;
@@ -16855,8 +17677,8 @@ using UnityEngine;
 [CreateAssetMenu(menuName = "Rendering/RustRendererFeatures/AmbientOcclusion")]
 public class SSAORendererFeature : RustRendererFeature
 {
-	[Header("Ambient Occlusion")]
 	[Tooltip("How the occlusion result is composited into the frame.")]
+	[Header("Ambient Occlusion")]
 	public ApplicationMethod ApplyMethod;
 
 	[Tooltip("Number of samples per occlusion pass.")]
@@ -16865,23 +17687,23 @@ public class SSAORendererFeature : RustRendererFeature
 	[Tooltip("Source used for per-pixel normals.")]
 	public PerPixelNormalSource PerPixelNormals = PerPixelNormalSource.Camera;
 
-	[Range(0f, 1f)]
 	[Tooltip("Final applied intensity of the occlusion effect.")]
+	[Range(0f, 1f)]
 	public float Intensity = 1f;
 
 	[Tooltip("Tint colour blended with the occlusion shadow.")]
 	public Color Tint = Color.black;
 
-	[Range(0f, 32f)]
 	[Tooltip("World-space radius of the occlusion kernel.")]
+	[Range(0f, 32f)]
 	public float Radius = 2f;
 
 	[Tooltip("Power exponent attenuation of the occlusion.")]
 	[Range(0f, 16f)]
 	public float PowerExponent = 1.8f;
 
-	[Range(0f, 0.99f)]
 	[Tooltip("Initial occlusion contribution offset (reduces self-occlusion / acne).")]
+	[Range(0f, 0.99f)]
 	public float Bias = 0.05f;
 
 	[Range(0f, 1f)]
@@ -16918,8 +17740,8 @@ public class SSAORendererFeature : RustRendererFeature
 	[Header("Bilateral Blur")]
 	public bool BlurEnabled = true;
 
-	[Range(1f, 4f)]
 	[Tooltip("Blur kernel radius in screen pixels (1–4).")]
+	[Range(1f, 4f)]
 	public int BlurRadius = 3;
 
 	[Tooltip("Number of blur passes.")]
@@ -18401,8 +19223,8 @@ public class UnderwaterEffectVolumeComponent : VolumeComponent, IPostProcessComp
 
 	public FloatParameter waterLineBlurSize = new FloatParameter(0f, false);
 
-	[Header("Blur")]
 	[Range(0f, 2f)]
+	[Header("Blur")]
 	public IntParameter downsample = new IntParameter(0, false);
 
 	[Range(1f, 4f)]
@@ -19086,8 +19908,8 @@ public class GeometryClipmapTerrain : MonoBehaviour, IClientComponent
 
 	public float cellSize;
 
-	[SerializeField]
 	[Range(0f, 4f)]
+	[SerializeField]
 	protected int colliderVertexReduction;
 
 	[SerializeField]
@@ -19890,8 +20712,8 @@ public class VolumeCloudsConfig : ScriptableObject
 {
 	public VolumeCloudsWeatherLayerConfig WeatherLayer = new VolumeCloudsWeatherLayerConfig();
 
-	[Header("Detail")]
 	[Range(0f, 1f)]
+	[Header("Detail")]
 	public float Billows = 1f;
 
 	[Range(0f, 3f)]
@@ -19920,8 +20742,8 @@ public class VolumeCloudsConfig : ScriptableObject
 
 	public float CurlNoiseStrength = 50f;
 
-	[Range(0f, 1f)]
 	[Header("Density")]
+	[Range(0f, 1f)]
 	public float DensityScale = 0.05f;
 
 	[Range(0f, 1f)]
@@ -23789,1241 +24611,6 @@ public static class AntiHack
 			return 0;
 		}
 		return records[ply.userID];
-	}
-}
-
-
-public struct Batch
-{
-	public int PlayerIndex;
-
-	public int Count;
-
-	public bool Force;
-
-	public bool CastVehicleLayer;
-
-	public bool SkipVehicleLayer;
-}
-
-
-public struct FlyingBatch
-{
-	public int PlayerIndex;
-
-	public int Count;
-}
-
-
-using Facepunch;
-using UnityEngine;
-
-private class GroupedLog : IPooled
-{
-	public float firstLogTime;
-
-	public string playerName;
-
-	public AntiHackType antiHackType;
-
-	public string message;
-
-	public Vector3 averagePos;
-
-	public int num;
-
-	public GroupedLog()
-	{
-	}
-
-	public GroupedLog(string playerName, AntiHackType antiHackType, string message, Vector3 pos)
-	{
-		//IL_000a: Unknown result type (might be due to invalid IL or missing references)
-		SetInitial(playerName, antiHackType, message, pos);
-	}
-
-	public void EnterPool()
-	{
-		//IL_001e: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0023: Unknown result type (might be due to invalid IL or missing references)
-		firstLogTime = 0f;
-		playerName = string.Empty;
-		antiHackType = AntiHackType.None;
-		averagePos = Vector3.zero;
-		num = 0;
-	}
-
-	public void LeavePool()
-	{
-	}
-
-	public void SetInitial(string playerName, AntiHackType antiHackType, string message, Vector3 pos)
-	{
-		//IL_0021: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0023: Unknown result type (might be due to invalid IL or missing references)
-		firstLogTime = Time.unscaledTime;
-		this.playerName = playerName;
-		this.antiHackType = antiHackType;
-		this.message = message;
-		averagePos = pos;
-		num = 1;
-	}
-
-	public bool TryGroup(string playerName, AntiHackType antiHackType, string message, Vector3 pos, float maxDistance)
-	{
-		//IL_0028: Unknown result type (might be due to invalid IL or missing references)
-		//IL_002d: Unknown result type (might be due to invalid IL or missing references)
-		//IL_002f: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0043: Unknown result type (might be due to invalid IL or missing references)
-		//IL_004f: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0054: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0056: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0057: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0059: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0067: Unknown result type (might be due to invalid IL or missing references)
-		//IL_006c: Unknown result type (might be due to invalid IL or missing references)
-		if (antiHackType != this.antiHackType || playerName != this.playerName || message != this.message)
-		{
-			return false;
-		}
-		if (Vector3.SqrMagnitude(averagePos - pos) > maxDistance * maxDistance)
-		{
-			return false;
-		}
-		Vector3 val = averagePos * (float)num;
-		averagePos = (val + pos) / (float)(num + 1);
-		num++;
-		return true;
-	}
-}
-
-
-public struct PlayerState
-{
-	public float ViolationLevel;
-
-	public float LastViolationTime;
-
-	public float LastMovementViolationTime;
-
-	public float LastAdminCheatTime;
-
-	public float TickDistancePausetime;
-
-	public float UnparentTime;
-
-	public AntiHackType LastViolationType;
-}
-
-
-public struct PlayerNoclipState
-{
-	public float VehiclePauseTime;
-
-	public float ForceCastTime;
-}
-
-
-public struct PlayerSpeedhackState
-{
-	public float PauseTime;
-
-	public float ExtraSpeedTime;
-
-	public float Distance;
-
-	public float ExtraSpeed;
-}
-
-
-using UnityEngine;
-
-public struct PlayerFlyhackState
-{
-	public Vector3 LastGroundedPosition;
-
-	public float PauseTime;
-
-	public float VerticalDistance;
-
-	public float HorizontalDistance;
-
-	public float LastInAirTime;
-
-	public bool IsInAir;
-
-	public bool IsOnPlayer;
-}
-
-
-using System;
-using System.Collections;
-using ConVar;
-using Facepunch.Extend;
-using Facepunch.Math;
-using Network;
-using Oxide.Core;
-using ProtoBuf;
-using UnityEngine;
-using UnityEngine.Networking;
-
-public static class Auth_CentralizedBans
-{
-	[JsonModel]
-	private class BanPayload
-	{
-		public ulong steamId;
-
-		public string reason;
-
-		public long expiryDate;
-
-		public bool isMute;
-	}
-
-	private static readonly BanPayload payloadData = new BanPayload();
-
-	public static IEnumerator Run(Connection connection)
-	{
-		int num = default(int);
-		UnityWebRequest ownerRequest = default(UnityWebRequest);
-		UnityWebRequest userRequest = default(UnityWebRequest);
-		while (true)
-		{
-			object obj = Interface.CallHook("OnCentralizedBanCheck", (object)connection);
-			if (obj != null)
-			{
-				break;
-			}
-			string text2;
-			switch (num)
-			{
-			default:
-				yield break;
-			case 0:
-				connection.authStatusCentralizedBans = string.Empty;
-				if (!connection.active || connection.rejected)
-				{
-					yield break;
-				}
-				if (string.IsNullOrWhiteSpace(Server.bansServerEndpoint) || !Server.bansServerEndpoint.StartsWith("http"))
-				{
-					connection.authStatusCentralizedBans = "ok";
-					yield break;
-				}
-				if (!Server.bansServerEndpoint.EndsWith("/") && !Server.bansServerEndpoint.EndsWith("="))
-				{
-					Server.bansServerEndpoint += "/";
-				}
-				if (connection.ownerid != 0L && connection.ownerid != connection.userid)
-				{
-					string text = Server.bansServerEndpoint + connection.ownerid;
-					ownerRequest = UnityWebRequest.Get(text);
-					ownerRequest.timeout = Server.bansServerTimeout;
-					yield return ownerRequest.SendWebRequest();
-					break;
-				}
-				goto IL_0186;
-			case 1:
-				if (CheckIfPlayerBanned(connection.ownerid, connection, ownerRequest))
-				{
-					connection.authStatusCentralizedBans = "banned_account_owner";
-					yield break;
-				}
-				ownerRequest = null;
-				goto IL_0186;
-			case 2:
-				{
-					if (CheckIfPlayerBanned(connection.userid, connection, userRequest))
-					{
-						connection.authStatusCentralizedBans = "banned_account_player";
-					}
-					else
-					{
-						connection.authStatusCentralizedBans = "ok";
-					}
-					yield break;
-				}
-				IL_0186:
-				text2 = Server.bansServerEndpoint + connection.userid;
-				userRequest = UnityWebRequest.Get(text2);
-				userRequest.timeout = Server.bansServerTimeout;
-				yield return userRequest.SendWebRequest();
-				break;
-			}
-		}
-	}
-
-	private static bool CheckIfPlayerBanned(ulong steamId, Connection connection, UnityWebRequest request)
-	{
-		if (request.isNetworkError)
-		{
-			Debug.LogError((object)("Failed to check centralized bans due to a network error (" + request.error + ")"));
-			if (Server.bansServerFailureMode == 1)
-			{
-				Reject("Centralized Ban Error: Network Error");
-				return true;
-			}
-			return false;
-		}
-		if (request.responseCode == 404)
-		{
-			return false;
-		}
-		if (request.isHttpError)
-		{
-			Debug.LogError((object)$"Failed to check centralized bans due to a server error ({request.responseCode}: {request.error})");
-			if (Server.bansServerFailureMode == 1)
-			{
-				Reject("Centralized Ban Error: Server Error");
-				return true;
-			}
-			return false;
-		}
-		try
-		{
-			payloadData.steamId = 0uL;
-			payloadData.reason = null;
-			payloadData.expiryDate = 0L;
-			payloadData.isMute = false;
-			JsonUtility.FromJsonOverwrite(request.downloadHandler.text, (object)payloadData);
-			if (payloadData.expiryDate > 0 && Epoch.Current >= payloadData.expiryDate)
-			{
-				return false;
-			}
-			if (payloadData.steamId != steamId)
-			{
-				Debug.LogError((object)$"Failed to check centralized bans due to SteamID mismatch (expected {steamId}, got {payloadData.steamId})");
-				if (Server.bansServerFailureMode == 1)
-				{
-					Reject("Centralized Ban Error: SteamID Mismatch");
-					return true;
-				}
-				return false;
-			}
-			string text = payloadData.reason ?? "no reason given";
-			string text2 = ((payloadData.expiryDate > 0) ? (" for " + NumberExtensions.FormatSecondsLong(payloadData.expiryDate - Epoch.Current)) : "");
-			if (payloadData.isMute)
-			{
-				PlayerState val = SingletonComponent<ServerMgr>.Instance.playerStateManager.Get(steamId);
-				val.chatMuted = true;
-				if (payloadData.expiryDate > 0)
-				{
-					val.chatMuteExpiryTimestamp = payloadData.expiryDate;
-				}
-				else
-				{
-					val.chatMuteExpiryTimestamp = 0.0;
-				}
-			}
-			else
-			{
-				Reject("You are banned from this server" + text2 + " (" + text + ")");
-			}
-			return true;
-		}
-		catch (Exception ex)
-		{
-			Debug.LogError((object)("Failed to check centralized bans due to a malformed response: " + request.downloadHandler.text));
-			Debug.LogException(ex);
-			if (Server.bansServerFailureMode == 1)
-			{
-				Reject("Centralized Ban Error: Malformed Response");
-				return true;
-			}
-			return false;
-		}
-		void Reject(string reason)
-		{
-			ConnectionAuth.Reject(connection, reason);
-			PlatformService.Instance.EndPlayerSession(connection.userid);
-		}
-	}
-}
-
-
-[JsonModel]
-private class BanPayload
-{
-	public ulong steamId;
-
-	public string reason;
-
-	public long expiryDate;
-
-	public bool isMute;
-}
-
-
-[JsonModel]
-public class PlayerRequiredSystemConfigPayload
-{
-	public static readonly PlayerRequiredSystemConfigPayload Instance = new PlayerRequiredSystemConfigPayload();
-
-	public int Flags;
-}
-
-
-using System;
-using System.Collections;
-using ConVar;
-using Facepunch;
-using Network;
-using UnityEngine;
-using UnityEngine.Networking;
-
-public static class Auth_EAC
-{
-	public static IEnumerator Run(Connection connection)
-	{
-		connection.authStatusEAC = string.Empty;
-		if (!connection.active || connection.rejected)
-		{
-			yield break;
-		}
-		EAC.SystemConfig requiredSystemConfig = (Server.useServerWideRequiredSystemConfig ? EAC.SystemConfig.Default : EAC.SystemConfig.None);
-		if (Server.usePerPlayerRequiredSystemConfig)
-		{
-			UnityWebRequest request = UnityWebRequest.Get($"{Application.Integration.ApiUrl}rust/playerReqSysConfig/{connection.userid}");
-			try
-			{
-				request.timeout = 10;
-				yield return request.SendWebRequest();
-				if ((int)request.result == 1)
-				{
-					try
-					{
-						PlayerRequiredSystemConfigPayload instance = PlayerRequiredSystemConfigPayload.Instance;
-						instance.Flags = 0;
-						JsonUtility.FromJsonOverwrite(request.downloadHandler.text, (object)instance);
-						requiredSystemConfig = (EAC.SystemConfig)((int)requiredSystemConfig | instance.Flags);
-					}
-					catch (Exception arg)
-					{
-						DebugEx.LogWarning((object)$"Failed to parse required system config for {connection.userid}: {arg}", (StackTraceLogType)0);
-					}
-				}
-				else
-				{
-					DebugEx.LogWarning((object)$"Failed to fetch required system config for {connection.userid} ({request.result}: {request.error})", (StackTraceLogType)0);
-				}
-			}
-			finally
-			{
-				((IDisposable)request)?.Dispose();
-			}
-		}
-		EACServer.OnJoinGame(connection, requiredSystemConfig);
-		while (connection.active && !connection.rejected && connection.authStatusEAC == string.Empty)
-		{
-			yield return null;
-		}
-	}
-}
-
-
-using System;
-using System.Collections;
-using System.Threading.Tasks;
-using Facepunch.Nexus;
-using Facepunch.Nexus.Models;
-using Network;
-using UnityEngine;
-
-public static class Auth_Nexus
-{
-	public static IEnumerator Run(Connection connection)
-	{
-		connection.authStatusNexus = string.Empty;
-		if (!connection.active || connection.rejected)
-		{
-			yield break;
-		}
-		if (!NexusServer.Started)
-		{
-			connection.authStatusNexus = "ok";
-			yield break;
-		}
-		Task<NexusLoginResult> loginTask = NexusServer.Login(connection.userid);
-		yield return (object)new WaitUntil((Func<bool>)(() => loginTask.IsCompleted));
-		if (loginTask.IsFaulted || loginTask.IsCanceled)
-		{
-			Reject("Nexus login failure");
-			if (loginTask.Exception != null)
-			{
-				Debug.LogException((Exception)loginTask.Exception);
-			}
-			connection.authStatusNexus = "nexus_login_fail";
-			yield break;
-		}
-		NexusLoginResult result = loginTask.Result;
-		if (((NexusLoginResult)(ref result)).IsRedirect)
-		{
-			string text = ((((NexusLoginResult)(ref result)).AssignedZoneKey == null) ? null : NexusServer.FindZone(((NexusLoginResult)(ref result)).AssignedZoneKey)?.ConnectionProtocol());
-			ConsoleNetwork.SendClientCommandImmediate(connection, "nexus.redirect", ((NexusLoginResult)(ref result)).RedirectIpAddress, ((NexusLoginResult)(ref result)).RedirectGamePort, text ?? "");
-			Reject("Redirecting to another zone...");
-			connection.authStatusNexus = "nexus_login_redirect";
-			yield break;
-		}
-		if (((NexusLoginResult)(ref result)).AssignedZoneKey == null)
-		{
-			string spawnZoneKey;
-			NexusZoneDetails spawnZone;
-			try
-			{
-				spawnZoneKey = ZoneController.Instance.ChooseSpawnZone(connection.userid, isAlreadyAssignedToThisZone: false);
-				if (string.IsNullOrWhiteSpace(spawnZoneKey))
-				{
-					throw new Exception("ZoneController did not choose a spawn zone (returned '" + (spawnZoneKey ?? "<null>") + "')");
-				}
-				spawnZone = NexusServer.FindZone(spawnZoneKey);
-				if (spawnZone == null)
-				{
-					throw new Exception("ZoneController picked a spawn zone which we don't know about (" + spawnZoneKey + ")");
-				}
-			}
-			catch (Exception ex)
-			{
-				Reject("Nexus spawn - exception while choosing spawn zone");
-				Debug.LogException(ex);
-				connection.authStatusNexus = "nexus_zone_pick_fail";
-				yield break;
-			}
-			Task assignTask = NexusServer.AssignInitialZone(connection.userid, spawnZoneKey);
-			yield return (object)new WaitUntil((Func<bool>)(() => assignTask.IsCompleted));
-			if (assignTask.IsFaulted || assignTask.IsCanceled)
-			{
-				Reject("Nexus spawn - exception while registering transfer to spawn zone");
-				if (assignTask.Exception != null)
-				{
-					Debug.LogException((Exception)assignTask.Exception);
-				}
-				connection.authStatusNexus = "nexus_zone_transfer_fail";
-				yield break;
-			}
-			if (spawnZoneKey != NexusServer.ZoneKey)
-			{
-				ConsoleNetwork.SendClientCommandImmediate(connection, "nexus.redirect", spawnZone.IpAddress, spawnZone.GamePort, spawnZone.ConnectionProtocol());
-				Reject("Redirecting to another zone...");
-				connection.authStatusNexus = "nexus_zone_redirect";
-				yield break;
-			}
-		}
-		if (NexusServer.TryGetPlayer(connection.userid, out var player))
-		{
-			Variable val = default(Variable);
-			if (!player.TryGetVariable("appKey", ref val) || (int)val.Type != 1 || string.IsNullOrWhiteSpace(val.GetAsString()))
-			{
-				player.SetVariable("appKey", Guid.NewGuid().ToString("N"), false, false);
-			}
-		}
-		else
-		{
-			Debug.LogWarning((object)$"Couldn't find NexusPlayer for {connection.userid}, skipping setting up their app key");
-		}
-		connection.authStatusNexus = "ok";
-		void Reject(string reason)
-		{
-			ConnectionAuth.Reject(connection, reason);
-			PlatformService.Instance.EndPlayerSession(connection.userid);
-		}
-	}
-}
-
-
-using System;
-using System.Collections;
-using System.Threading.Tasks;
-using ConVar;
-using Network;
-using UnityEngine;
-
-public static class Auth_PremiumServer
-{
-	public static IEnumerator Run(Connection connection)
-	{
-		connection.authStatusPremiumServer = string.Empty;
-		if (!connection.active || connection.rejected)
-		{
-			yield break;
-		}
-		if (!Server.premium)
-		{
-			connection.authStatusPremiumServer = "ok";
-			yield break;
-		}
-		Task<PremiumUtil.PremiumCheckResult> checkTask = PremiumUtil.CheckIfPlayerIsPremium(connection.userid);
-		yield return (object)new WaitUntil((Func<bool>)(() => checkTask.IsCompleted));
-		if (checkTask.IsFaulted || checkTask.IsCanceled)
-		{
-			Reject(connection, "Failed to validate premium status: Faulted/Canceled");
-			if (checkTask.Exception != null)
-			{
-				Debug.LogException((Exception)checkTask.Exception);
-			}
-			connection.authStatusNexus = "premium_error";
-		}
-		else if (!checkTask.Result.IsPremium)
-		{
-			Reject(connection, checkTask.Result.FailReason ?? "Failed to validate premium status: Unknown Fail Reason");
-			connection.authStatusPremiumServer = "account_not_premium";
-		}
-		else
-		{
-			connection.authStatusPremiumServer = "ok";
-			connection.lastPremiumCheckTime = Time.realtimeSinceStartupAsDouble;
-		}
-	}
-
-	private static void Reject(Connection connection, string reason)
-	{
-		ConnectionAuth.Reject(connection, reason);
-		PlatformService.Instance.EndPlayerSession(connection.userid);
-	}
-}
-
-
-using System.Collections;
-using System.Collections.Generic;
-using System.Diagnostics;
-using ConVar;
-using Facepunch;
-using Network;
-using UnityEngine;
-
-public static class Auth_Steam
-{
-	internal static List<Connection> waitingList = new List<Connection>();
-
-	public static IEnumerator Run(Connection connection)
-	{
-		connection.authStatusSteam = string.Empty;
-		if (!connection.active || connection.rejected)
-		{
-			yield break;
-		}
-		if (!PlatformService.Instance.BeginPlayerSession(connection.userid, connection.token))
-		{
-			ConnectionAuth.Reject(connection, "Steam Auth Failed");
-			yield break;
-		}
-		waitingList.Add(connection);
-		Stopwatch timeout = Stopwatch.StartNew();
-		while (timeout.Elapsed.TotalSeconds < 30.0 && connection.active && !(connection.authStatusSteam != string.Empty))
-		{
-			yield return null;
-		}
-		waitingList.Remove(connection);
-		if (connection.active)
-		{
-			if (connection.authStatusSteam.Length == 0)
-			{
-				ConnectionAuth.Reject(connection, "Steam Auth Timeout: No auth response");
-				PlatformService.Instance.EndPlayerSession(connection.userid);
-			}
-			else if (connection.authStatusSteam == "banned")
-			{
-				ConnectionAuth.Reject(connection, "Steam Auth: " + connection.authStatusSteam);
-				PlatformService.Instance.EndPlayerSession(connection.userid);
-			}
-			else if (connection.authStatusSteam == "gamebanned")
-			{
-				ConnectionAuth.Reject(connection, "Steam Auth: " + connection.authStatusSteam);
-				PlatformService.Instance.EndPlayerSession(connection.userid);
-			}
-			else if (connection.authStatusSteam == "vacbanned")
-			{
-				ConnectionAuth.Reject(connection, "Steam Auth: " + connection.authStatusSteam);
-				PlatformService.Instance.EndPlayerSession(connection.userid);
-			}
-			else if (connection.authStatusSteam != "ok")
-			{
-				ConnectionAuth.Reject(connection, "Steam Auth Failed", "Steam Auth Error: " + connection.authStatusSteam);
-				PlatformService.Instance.EndPlayerSession(connection.userid);
-			}
-			else
-			{
-				string text = (Server.censorplayerlist ? RandomUsernames.Get(connection.userid + (ulong)Random.Range(0, 100000)) : connection.username);
-				PlatformService.Instance.UpdatePlayerSession(connection.userid, text);
-			}
-		}
-	}
-
-	public static bool ValidateConnecting(ulong steamid, ulong ownerSteamID, AuthResponse response)
-	{
-		//IL_0054: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0056: Invalid comparison between Unknown and I4
-		//IL_0065: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0067: Invalid comparison between Unknown and I4
-		//IL_0076: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0078: Invalid comparison between Unknown and I4
-		//IL_0087: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0089: Invalid comparison between Unknown and I4
-		Connection val = waitingList.Find((Connection x) => x.userid == steamid);
-		if (val == null)
-		{
-			return false;
-		}
-		val.ownerid = ownerSteamID;
-		if (ServerUsers.Is(ownerSteamID, ServerUsers.UserGroup.Banned) || ServerUsers.Is(steamid, ServerUsers.UserGroup.Banned))
-		{
-			val.authStatusSteam = "banned";
-			return true;
-		}
-		if ((int)response == 2)
-		{
-			val.authStatusSteam = "ok";
-			return true;
-		}
-		if ((int)response == 3)
-		{
-			val.authStatusSteam = "vacbanned";
-			return true;
-		}
-		if ((int)response == 4)
-		{
-			val.authStatusSteam = "gamebanned";
-			return true;
-		}
-		if ((int)response == 1 && !Server.strictauth_steam && val.authLevel == 0 && val.os != "editor")
-		{
-			Debug.LogWarning((object)("Steam Auth Timeout: AuthResponse.TimedOut for " + steamid + " / " + ownerSteamID + " - bypassing since strictauth_steam is false"));
-			val.authStatusSteam = "ok";
-			return true;
-		}
-		val.authStatusSteam = ((object)(AuthResponse)(ref response)/*cast due to .constrained prefix*/).ToString();
-		return true;
-	}
-}
-
-
-using System;
-using System.Collections;
-using System.Collections.Generic;
-using Facepunch;
-using Facepunch.Extend;
-using Facepunch.Math;
-using Network;
-using Newtonsoft.Json.Linq;
-using Oxide.Core;
-using UnityEngine;
-
-public class ConnectionAuth : MonoBehaviour
-{
-	[NonSerialized]
-	public static List<Connection> m_AuthConnection = new List<Connection>();
-
-	private static RealTimeSince _sinceClientRequirementRefresh;
-
-	private static (int, int)? _clientRequirementCache;
-
-	private static string _clientVersionMismatchMessage;
-
-	public bool IsAuthed(ulong iSteamID)
-	{
-		if (Object.op_Implicit((Object)(object)BasePlayer.FindByID(iSteamID)))
-		{
-			return true;
-		}
-		if (SingletonComponent<ServerMgr>.Instance.connectionQueue.IsJoining(iSteamID))
-		{
-			return true;
-		}
-		if (SingletonComponent<ServerMgr>.Instance.connectionQueue.IsQueued(iSteamID))
-		{
-			return true;
-		}
-		return false;
-	}
-
-	public static void Reject(Connection connection, string strReason, string strReasonPrivate = null)
-	{
-		DebugEx.Log((object)(((object)connection).ToString() + " Rejecting connection - " + (string.IsNullOrEmpty(strReasonPrivate) ? strReason : strReasonPrivate)), (StackTraceLogType)0);
-		Net.sv.Kick(connection, strReason, false);
-		m_AuthConnection.Remove(connection);
-	}
-
-	public static void OnDisconnect(Connection connection)
-	{
-		m_AuthConnection.Remove(connection);
-	}
-
-	public void Approve(Connection connection)
-	{
-		m_AuthConnection.Remove(connection);
-		SingletonComponent<ServerMgr>.Instance.connectionQueue.Join(connection);
-	}
-
-	public void OnNewConnection(Connection connection)
-	{
-		connection.connected = false;
-		if (connection.token == null || connection.token.Length < 32)
-		{
-			Reject(connection, "Invalid Token");
-			return;
-		}
-		if (connection.userid == 0L)
-		{
-			Reject(connection, "Invalid SteamID");
-			return;
-		}
-		if (connection.protocol != 2632)
-		{
-			if (!DeveloperList.Contains(connection.userid))
-			{
-				Reject(connection, "Incompatible Version");
-				return;
-			}
-			DebugEx.Log((object)("Not kicking " + connection.userid + " for incompatible protocol (is a developer)"), (StackTraceLogType)0);
-		}
-		if (ServerUsers.Is(connection.userid, ServerUsers.UserGroup.Banned))
-		{
-			ServerUsers.User user = ServerUsers.Get(connection.userid);
-			string text = user?.notes ?? "no reason given";
-			string text2 = ((user != null && user.expiry > 0) ? (" for " + NumberExtensions.FormatSecondsLong(user.expiry - Epoch.Current)) : "");
-			Reject(connection, "You are banned from this server" + text2 + " (" + text + ")");
-			return;
-		}
-		if (ServerUsers.Is(connection.userid, ServerUsers.UserGroup.Moderator))
-		{
-			DebugEx.Log((object)(((object)connection).ToString() + " has auth level 1"), (StackTraceLogType)0);
-			connection.authLevel = 1u;
-		}
-		if (ServerUsers.Is(connection.userid, ServerUsers.UserGroup.Owner))
-		{
-			DebugEx.Log((object)(((object)connection).ToString() + " has auth level 2"), (StackTraceLogType)0);
-			connection.authLevel = 2u;
-		}
-		if (DeveloperList.Contains(connection.userid))
-		{
-			DebugEx.Log((object)(((object)connection).ToString() + " is a developer"), (StackTraceLogType)0);
-			connection.authLevel = 3u;
-		}
-		if (Interface.CallHook("IOnUserApprove", (object)connection) == null)
-		{
-			m_AuthConnection.Add(connection);
-			((MonoBehaviour)this).StartCoroutine(AuthorisationRoutine(connection));
-		}
-	}
-
-	public IEnumerator AuthorisationRoutine(Connection connection)
-	{
-		yield return ((MonoBehaviour)this).StartCoroutine(Auth_Steam.Run(connection));
-		yield return ((MonoBehaviour)this).StartCoroutine(Auth_EAC.Run(connection));
-		yield return ((MonoBehaviour)this).StartCoroutine(Auth_CentralizedBans.Run(connection));
-		yield return ((MonoBehaviour)this).StartCoroutine(Auth_Nexus.Run(connection));
-		yield return ((MonoBehaviour)this).StartCoroutine(Auth_PremiumServer.Run(connection));
-		if (connection.rejected || !connection.active)
-		{
-			yield break;
-		}
-		if (IsAuthed(connection.userid))
-		{
-			Reject(connection, "You are already connected as a player!");
-			yield break;
-		}
-		if (connection.authLevel == 0)
-		{
-			(int, int)? minClientRequirement = GetMinClientRequirement();
-			if (minClientRequirement.HasValue && (connection.clientChangeset < minClientRequirement.Value.Item1 || connection.clientBuildTime < minClientRequirement.Value.Item2))
-			{
-				Reject(connection, GetClientVersionMismatchMessage());
-				yield break;
-			}
-		}
-		Approve(connection);
-	}
-
-	private static (int Changeset, int BuildTime)? GetMinClientRequirement()
-	{
-		//IL_0000: Unknown result type (might be due to invalid IL or missing references)
-		//IL_001c: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0021: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0094: Unknown result type (might be due to invalid IL or missing references)
-		//IL_009a: Invalid comparison between Unknown and I4
-		if (RealTimeSince.op_Implicit(_sinceClientRequirementRefresh) < 10f)
-		{
-			return _clientRequirementCache;
-		}
-		_sinceClientRequirementRefresh = RealTimeSince.op_Implicit(0f);
-		_clientRequirementCache = null;
-		try
-		{
-			BuildInfo current = BuildInfo.Current;
-			object obj;
-			if (current == null)
-			{
-				obj = null;
-			}
-			else
-			{
-				ScmInfo scm = current.Scm;
-				obj = ((scm != null) ? scm.Branch : null);
-			}
-			if (obj == null)
-			{
-				obj = "";
-			}
-			string text = (string)obj;
-			if (!string.IsNullOrWhiteSpace(text))
-			{
-				JObject obj2 = Application.Manifest?.Metadata;
-				object obj3;
-				if (obj2 == null)
-				{
-					obj3 = null;
-				}
-				else
-				{
-					JToken obj4 = obj2["ClientVersions"];
-					obj3 = ((obj4 != null) ? obj4[(object)text] : null);
-				}
-				JToken val = (JToken)obj3;
-				if (val != null && (int)val.Type == 1)
-				{
-					int item = val.Value<int>((object)"Changeset");
-					int item2 = val.Value<int>((object)"Timestamp");
-					_clientRequirementCache = (item, item2);
-				}
-			}
-		}
-		catch (Exception ex)
-		{
-			Debug.LogException(ex);
-			_clientRequirementCache = null;
-		}
-		return _clientRequirementCache;
-	}
-
-	private static string GetClientVersionMismatchMessage()
-	{
-		if (!string.IsNullOrEmpty(_clientVersionMismatchMessage))
-		{
-			return _clientVersionMismatchMessage;
-		}
-		BuildInfo current = BuildInfo.Current;
-		object obj;
-		if (current == null)
-		{
-			obj = null;
-		}
-		else
-		{
-			ScmInfo scm = current.Scm;
-			obj = ((scm != null) ? scm.Branch : null);
-		}
-		if (obj == null)
-		{
-			obj = "unknown";
-		}
-		string text = (string)obj;
-		string text2 = text.ToLowerInvariant();
-		string clientVersionMismatchMessage = ((text2 == "release") ? "Client update required. Close Rust and apply update from Steam." : ((!(text2 == "main")) ? ("Client update required. Apply \"Rust - Staging Branch\" (" + text + " beta) update from Steam.") : "Client update required. Apply \"Rust - Staging Branch\" update from Steam."));
-		_clientVersionMismatchMessage = clientVersionMismatchMessage;
-		return _clientVersionMismatchMessage;
-	}
-}
-
-
-using System.Collections.Generic;
-using System.IO;
-using ConVar;
-using Facepunch;
-using Facepunch.Math;
-using Network;
-using Oxide.Core;
-using UnityEngine;
-
-public class ConnectionQueue
-{
-	private class ReservedServerSlot : IPooled
-	{
-		public ulong UserId;
-
-		public float Expiry;
-
-		public void EnterPool()
-		{
-		}
-
-		public void LeavePool()
-		{
-			UserId = 0uL;
-			Expiry = 0f;
-		}
-	}
-
-	public List<Connection> queue = new List<Connection>();
-
-	public List<Connection> joining = new List<Connection>();
-
-	private List<ReservedServerSlot> reservedSlots = new List<ReservedServerSlot>();
-
-	private float nextCleanupReservedSlots;
-
-	public float nextMessageTime;
-
-	public int ReservedCount => reservedSlots.Count;
-
-	public int Queued => queue.Count;
-
-	public int Joining => joining.Count;
-
-	public bool IsServerFull => SingletonComponent<ServerMgr>.Instance.AvailableSlots - Joining <= 0;
-
-	public void SkipQueue(ulong userid)
-	{
-		for (int i = 0; i < queue.Count; i++)
-		{
-			Connection val = queue[i];
-			if (val.userid == userid)
-			{
-				JoinGame(val);
-				break;
-			}
-		}
-	}
-
-	internal void Join(Connection connection)
-	{
-		//IL_003d: Unknown result type (might be due to invalid IL or missing references)
-		if (Interface.CallHook("OnConnectionQueue", (object)connection) == null)
-		{
-			nextMessageTime = 0f;
-			if ((Queued == 0 && !IsServerFull) || CanJumpQueue(connection))
-			{
-				JoinGame(connection);
-				return;
-			}
-			connection.state = (State)2;
-			queue.Add(connection);
-		}
-	}
-
-	public void Cycle(int availableSlots)
-	{
-		if (Interface.CallHook("OnQueueCycle", (object)availableSlots) != null)
-		{
-			return;
-		}
-		if (Time.realtimeSinceStartup > nextCleanupReservedSlots)
-		{
-			nextCleanupReservedSlots = Time.realtimeSinceStartup + 1f;
-			CleanupExpiredReservedSlots();
-		}
-		if (queue.Count != 0)
-		{
-			SendQueueUpdates();
-			if (!IsServerFull)
-			{
-				JoinGame(queue[0]);
-			}
-		}
-	}
-
-	public void SendQueueUpdates()
-	{
-		if (!(nextMessageTime > Time.realtimeSinceStartup))
-		{
-			nextMessageTime = Time.realtimeSinceStartup + 10f;
-			for (int i = 0; i < queue.Count; i++)
-			{
-				SendQueueUpdate(queue[i], i);
-			}
-		}
-	}
-
-	public void SendQueueUpdate(Connection c, int position)
-	{
-		//IL_0066: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0046: Unknown result type (might be due to invalid IL or missing references)
-		if (Interface.CallHook("OnQueueUpdate", (object)c, (object)position) == null)
-		{
-			NetWrite val = ((BaseNetwork)Net.sv).StartWrite();
-			val.PacketID((Type)26);
-			val.UInt16((ushort)Queued);
-			val.UInt16((ushort)position);
-			if (PacketProfiler.shouldCaptureDetailedProfiling)
-			{
-				PacketProfiler.LogDetailedOutbound((Type)26, NetworkableId.EmptyId, (string)null, (int)((Stream)(object)val).Length, (byte[])null, Epoch.Current, true, "");
-			}
-			val.Send(new SendInfo(c));
-		}
-	}
-
-	public void RemoveConnection(Connection connection)
-	{
-		if (Interface.CallHook("OnConnectionDequeue", (object)connection) == null)
-		{
-			if (queue.Remove(connection))
-			{
-				nextMessageTime = 0f;
-			}
-			joining.Remove(connection);
-		}
-	}
-
-	public void TryAddReservedSlot(Connection connection)
-	{
-		//IL_0009: Unknown result type (might be due to invalid IL or missing references)
-		//IL_000f: Invalid comparison between Unknown and I4
-		//IL_0012: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0018: Invalid comparison between Unknown and I4
-		if (connection.canReserveSlot && ((int)connection.state == 4 || (int)connection.state == 3))
-		{
-			AddReservation(connection.userid);
-		}
-	}
-
-	private void JoinGame(Connection connection)
-	{
-		//IL_000f: Unknown result type (might be due to invalid IL or missing references)
-		queue.Remove(connection);
-		connection.state = (State)3;
-		RemoveReservedSlot(connection.userid);
-		nextMessageTime = 0f;
-		joining.Add(connection);
-		SingletonComponent<ServerMgr>.Instance.JoinGame(connection);
-	}
-
-	public void JoinedGame(Connection connection)
-	{
-		RemoveConnection(connection);
-	}
-
-	private void AddReservation(ulong userId)
-	{
-		ReservedServerSlot reservedServerSlot = FindQueueSpot(userId);
-		if (reservedServerSlot == null)
-		{
-			reservedServerSlot = Pool.Get<ReservedServerSlot>();
-			reservedSlots.Add(reservedServerSlot);
-		}
-		reservedServerSlot.UserId = userId;
-		reservedServerSlot.Expiry = Time.realtimeSinceStartup + (float)Server.rejoin_delay;
-	}
-
-	private void CleanupExpiredReservedSlots()
-	{
-		if (reservedSlots.Count == 0)
-		{
-			return;
-		}
-		float realtimeSinceStartup = Time.realtimeSinceStartup;
-		for (int i = 0; i < reservedSlots.Count; i++)
-		{
-			ReservedServerSlot reservedServerSlot = reservedSlots[i];
-			if (realtimeSinceStartup > reservedServerSlot.Expiry)
-			{
-				reservedSlots.RemoveAt(i);
-				i--;
-				Pool.Free<ReservedServerSlot>(ref reservedServerSlot);
-			}
-		}
-	}
-
-	private ReservedServerSlot FindQueueSpot(ulong userId)
-	{
-		foreach (ReservedServerSlot reservedSlot in reservedSlots)
-		{
-			if (reservedSlot.UserId == userId)
-			{
-				return reservedSlot;
-			}
-		}
-		return null;
-	}
-
-	private void RemoveReservedSlot(ulong userId)
-	{
-		for (int i = 0; i < reservedSlots.Count; i++)
-		{
-			ReservedServerSlot reservedServerSlot = reservedSlots[i];
-			if (reservedServerSlot.UserId == userId)
-			{
-				reservedSlots.RemoveAt(i);
-				i--;
-				Pool.Free<ReservedServerSlot>(ref reservedServerSlot);
-			}
-		}
-	}
-
-	private bool CanJumpQueue(Connection connection)
-	{
-		object obj = Interface.CallHook("CanBypassQueue", (object)connection);
-		if (obj is bool)
-		{
-			return (bool)obj;
-		}
-		if (DeveloperList.Contains(connection.userid))
-		{
-			return true;
-		}
-		ServerUsers.User user = ServerUsers.Get(connection.userid);
-		if (user != null && user.group == ServerUsers.UserGroup.Moderator)
-		{
-			return true;
-		}
-		if (user != null && user.group == ServerUsers.UserGroup.Owner)
-		{
-			return true;
-		}
-		if (user != null && user.group == ServerUsers.UserGroup.SkipQueue)
-		{
-			return true;
-		}
-		for (int i = 0; i < reservedSlots.Count; i++)
-		{
-			if (reservedSlots[i].UserId == connection.userid && reservedSlots[i].Expiry > Time.realtimeSinceStartup)
-			{
-				return true;
-			}
-		}
-		return false;
-	}
-
-	public bool IsQueued(ulong userid)
-	{
-		for (int i = 0; i < queue.Count; i++)
-		{
-			if (queue[i].userid == userid)
-			{
-				return true;
-			}
-		}
-		return false;
-	}
-
-	public bool IsJoining(ulong userid)
-	{
-		for (int i = 0; i < joining.Count; i++)
-		{
-			if (joining[i].userid == userid)
-			{
-				return true;
-			}
-		}
-		return false;
-	}
-}
-
-
-using Facepunch;
-
-private class ReservedServerSlot : IPooled
-{
-	public ulong UserId;
-
-	public float Expiry;
-
-	public void EnterPool()
-	{
-	}
-
-	public void LeavePool()
-	{
-		UserId = 0uL;
-		Expiry = 0f;
 	}
 }
 
