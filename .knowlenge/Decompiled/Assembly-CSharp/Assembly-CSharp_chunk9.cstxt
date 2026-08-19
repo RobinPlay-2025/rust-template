@@ -1,4 +1,660 @@
 using System;
+using System.Collections.Generic;
+using ConVar;
+using Facepunch;
+using Network;
+using Oxide.Core;
+using UnityEngine;
+
+[ExecuteInEditMode]
+public class TreeEntity : ResourceEntity, IPrefabPreProcess
+{
+	private struct HotspotMarkerSpawnValues
+	{
+		public Vector3 fromWorldPosition;
+
+		public Vector3 hitPositionWorld;
+
+		public Vector3 initiatorCenterPoint;
+
+		public bool isBypassingBonusGame;
+
+		public TreeEntity hitEntity;
+	}
+
+	[Header("Falling")]
+	public bool fallOnDied = true;
+
+	public float fallDuration = 1.5f;
+
+	public GameObjectRef fallStartSound;
+
+	public GameObjectRef fallImpactSound;
+
+	public GameObjectRef fallImpactParticles;
+
+	public SoundDefinition fallLeavesLoopDef;
+
+	[NonSerialized]
+	public bool[] usedHeights = new bool[20];
+
+	public bool impactSoundPlayed;
+
+	private float treeDistanceUponFalling;
+
+	public GameObjectRef prefab;
+
+	public bool hasBonusGame = true;
+
+	public GameObjectRef bonusHitEffect;
+
+	public GameObjectRef bonusHitSound;
+
+	public Collider serverCollider;
+
+	public Collider clientCollider;
+
+	public SoundDefinition smallCrackSoundDef;
+
+	public SoundDefinition medCrackSoundDef;
+
+	private float lastAttackDamage;
+
+	[Header("Tree Addition Settings")]
+	public bool spawnTreeAddition;
+
+	public GameObjectRef treeAdditionPrefab;
+
+	public float treeAdditionSpawnChance = 0.1f;
+
+	public Vector3 treeAdditionSpawnPosition;
+
+	public Vector3 treeAdditionSpawnRotation;
+
+	private BaseEntity treeAdditionRef;
+
+	private HotspotMarkerSpawnValues nextHotspotMarkerValues;
+
+	private Action _actionCreateNewHotspotMarker;
+
+	public BaseEntity xMarker;
+
+	private int currentBonusLevel;
+
+	private float lastDirection = -1f;
+
+	private float lastHitTime;
+
+	private int lastHitMarkerIndex = -1;
+
+	private float nextBirdTime;
+
+	private uint birdCycleIndex;
+
+	public virtual bool IncludeInNavmesh => false;
+
+	private Action actionCreateNewHotspotMarker
+	{
+		get
+		{
+			if (_actionCreateNewHotspotMarker == null)
+			{
+				_actionCreateNewHotspotMarker = SpawnNewHotspotMarker;
+			}
+			return _actionCreateNewHotspotMarker;
+		}
+	}
+
+	bool IPrefabPreProcess.CanRunDuringBundling => false;
+
+	public override bool OnRpcMessage(BasePlayer player, uint rpc, Message msg)
+	{
+		TimeWarning val = TimeWarning.New("TreeEntity.OnRpcMessage", 0);
+		try
+		{
+		}
+		finally
+		{
+			((IDisposable)val)?.Dispose();
+		}
+		return base.OnRpcMessage(player, rpc, msg);
+	}
+
+	public override void ResetState()
+	{
+		base.ResetState();
+	}
+
+	public override float AntiHackPadding()
+	{
+		return 1f;
+	}
+
+	public override void OnAttacked(HitInfo info)
+	{
+		//IL_0188: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0176: Unknown result type (might be due to invalid IL or missing references)
+		//IL_018d: Unknown result type (might be due to invalid IL or missing references)
+		//IL_01a0: Unknown result type (might be due to invalid IL or missing references)
+		//IL_01a2: Unknown result type (might be due to invalid IL or missing references)
+		//IL_01aa: Unknown result type (might be due to invalid IL or missing references)
+		//IL_01af: Unknown result type (might be due to invalid IL or missing references)
+		//IL_01bc: Unknown result type (might be due to invalid IL or missing references)
+		//IL_01c1: Unknown result type (might be due to invalid IL or missing references)
+		//IL_010f: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0114: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0117: Unknown result type (might be due to invalid IL or missing references)
+		//IL_011c: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0129: Unknown result type (might be due to invalid IL or missing references)
+		//IL_012b: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00f3: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00f8: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0105: Unknown result type (might be due to invalid IL or missing references)
+		//IL_010a: Unknown result type (might be due to invalid IL or missing references)
+		bool canGather = info.CanGather;
+		float time = Time.time;
+		float num = time - lastHitTime;
+		lastHitTime = time;
+		DoBirds();
+		bool flag = false;
+		float num2 = 1f;
+		if ((Object)(object)info.Weapon != (Object)null && info.Weapon.TryGetOwnerPlayer(out var ownerPlayer) && ResourceGatherItemConfig.instance.CanItemBypassHotspotGathering(resourceDispenser.gatherType, info.Weapon.GetOwnerItemDefinition(ownerPlayer), out var itemData))
+		{
+			num2 = itemData.hotspotGatherBonusScale;
+			flag = true;
+		}
+		if (!hasBonusGame || !canGather || (Object)(object)info.Initiator == (Object)null || (BonusActive() && !flag && !DidHitMarker(info)))
+		{
+			base.OnAttacked(info);
+			return;
+		}
+		bool flag2 = (Object)(object)xMarker != (Object)null;
+		if ((flag || flag2) && !info.DidGather && info.gatherScale > 0f)
+		{
+			Vector3 arg;
+			Vector3 arg2;
+			if (flag2 && !flag)
+			{
+				arg = ((Component)xMarker).transform.position;
+				arg2 = ((Component)xMarker).transform.up;
+			}
+			else
+			{
+				arg = info.HitPositionWorld;
+				arg2 = info.HitNormalWorld;
+			}
+			ClientRPC(RpcTarget.NetworkGroup("HotspotHit"), arg, arg2, currentBonusLevel);
+			currentBonusLevel++;
+			info.gatherScale = 1f + Mathf.Clamp((float)currentBonusLevel * 0.125f, 0f, 1f * num2);
+		}
+		Vector3 fromWorldPosition = (flag2 ? ((Component)xMarker).transform.position : info.HitPositionWorld);
+		CleanupMarker();
+		nextHotspotMarkerValues = new HotspotMarkerSpawnValues
+		{
+			fromWorldPosition = fromWorldPosition,
+			hitPositionWorld = info.HitPositionWorld,
+			initiatorCenterPoint = info.Initiator.CenterPoint(),
+			isBypassingBonusGame = flag,
+			hitEntity = this
+		};
+		if (num > 5f)
+		{
+			StartBonusGame();
+		}
+		base.OnAttacked(info);
+		if (health > 0f)
+		{
+			if (!flag)
+			{
+				SpawnNewHotspotMarker();
+			}
+			lastAttackDamage = info.damageTypes.Total();
+			int num3 = Mathf.CeilToInt(health / lastAttackDamage);
+			if (num3 < 2)
+			{
+				ClientRPC(RpcTarget.NetworkGroup("CrackSound"), 1);
+			}
+			else if (num3 < 5)
+			{
+				ClientRPC(RpcTarget.NetworkGroup("CrackSound"), 0);
+			}
+		}
+	}
+
+	public override void ServerInit()
+	{
+		if ((Object)(object)serverCollider == (Object)null)
+		{
+			serverCollider = clientCollider ?? ((Component)this).GetComponentInChildren<Collider>();
+		}
+		base.ServerInit();
+		lastDirection = ((Random.Range(0, 2) != 0) ? 1 : (-1));
+		TryAddTreeAddition();
+	}
+
+	public override void ServerInitPostNetworkGroupAssign()
+	{
+		base.ServerInitPostNetworkGroupAssign();
+		TreeManager.OnTreeSpawned(this);
+	}
+
+	internal override void DoServerDestroy()
+	{
+		base.DoServerDestroy();
+		CleanupMarker();
+		TryKillTreeAddition();
+		TreeManager.OnTreeDestroyed(this);
+	}
+
+	public bool DidHitMarker(HitInfo info)
+	{
+		//IL_0082: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0092: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0097: Unknown result type (might be due to invalid IL or missing references)
+		//IL_009d: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00a2: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00a3: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00b4: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00ba: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00bf: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0052: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0057: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0061: Unknown result type (might be due to invalid IL or missing references)
+		//IL_006e: Unknown result type (might be due to invalid IL or missing references)
+		if ((Object)(object)xMarker == (Object)null)
+		{
+			return false;
+		}
+		object obj = Interface.CallHook("OnTreeMarkerHit", (object)this, (object)info);
+		if (obj is bool)
+		{
+			return (bool)obj;
+		}
+		if (PrefabAttribute.server.Find<TreeMarkerData>(prefabID) != null)
+		{
+			Bounds val = default(Bounds);
+			((Bounds)(ref val))..ctor(((Component)xMarker).transform.position, Vector3.one * 0.2f);
+			if (((Bounds)(ref val)).Contains(info.HitPositionWorld))
+			{
+				return true;
+			}
+		}
+		else
+		{
+			Vector3 val2 = Vector3Ex.Direction2D(((Component)this).transform.position, ((Component)xMarker).transform.position);
+			Vector3 attackNormal = info.attackNormal;
+			float num = Vector3.Dot(val2, attackNormal);
+			float num2 = Vector3.SqrMagnitude(((Component)xMarker).transform.position - info.HitPositionWorld);
+			if (num >= 0.3f && num2 <= 0.040000003f)
+			{
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private void SpawnNewHotspotMarker()
+	{
+		//IL_00eb: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00f6: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00fb: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0100: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0115: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0117: Unknown result type (might be due to invalid IL or missing references)
+		//IL_011c: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0121: Unknown result type (might be due to invalid IL or missing references)
+		//IL_013c: Unknown result type (might be due to invalid IL or missing references)
+		//IL_013e: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0143: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0147: Unknown result type (might be due to invalid IL or missing references)
+		//IL_014e: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0153: Unknown result type (might be due to invalid IL or missing references)
+		//IL_010f: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0111: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0081: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0099: Unknown result type (might be due to invalid IL or missing references)
+		//IL_009e: Unknown result type (might be due to invalid IL or missing references)
+		//IL_003f: Unknown result type (might be due to invalid IL or missing references)
+		//IL_015d: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0162: Unknown result type (might be due to invalid IL or missing references)
+		//IL_016c: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0171: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0185: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0187: Unknown result type (might be due to invalid IL or missing references)
+		//IL_018c: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0191: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0196: Unknown result type (might be due to invalid IL or missing references)
+		//IL_019e: Unknown result type (might be due to invalid IL or missing references)
+		//IL_01a0: Unknown result type (might be due to invalid IL or missing references)
+		//IL_01a5: Unknown result type (might be due to invalid IL or missing references)
+		//IL_01b3: Unknown result type (might be due to invalid IL or missing references)
+		//IL_01b8: Unknown result type (might be due to invalid IL or missing references)
+		//IL_01bd: Unknown result type (might be due to invalid IL or missing references)
+		//IL_01c1: Unknown result type (might be due to invalid IL or missing references)
+		//IL_01d9: Unknown result type (might be due to invalid IL or missing references)
+		//IL_01de: Unknown result type (might be due to invalid IL or missing references)
+		//IL_01e3: Unknown result type (might be due to invalid IL or missing references)
+		//IL_01ea: Unknown result type (might be due to invalid IL or missing references)
+		//IL_01f8: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0209: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00a5: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00a6: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00ab: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00b2: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00b3: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00ba: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00c0: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00c2: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00c7: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00d3: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00d4: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0065: Unknown result type (might be due to invalid IL or missing references)
+		//IL_024a: Unknown result type (might be due to invalid IL or missing references)
+		//IL_024f: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0251: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0256: Unknown result type (might be due to invalid IL or missing references)
+		//IL_025e: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0260: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0265: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0267: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0269: Unknown result type (might be due to invalid IL or missing references)
+		//IL_026e: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0273: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0278: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0280: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0282: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0287: Unknown result type (might be due to invalid IL or missing references)
+		//IL_028f: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0291: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0296: Unknown result type (might be due to invalid IL or missing references)
+		//IL_02b4: Unknown result type (might be due to invalid IL or missing references)
+		//IL_02b9: Unknown result type (might be due to invalid IL or missing references)
+		//IL_02d8: Unknown result type (might be due to invalid IL or missing references)
+		//IL_02dd: Unknown result type (might be due to invalid IL or missing references)
+		//IL_02e9: Unknown result type (might be due to invalid IL or missing references)
+		//IL_02eb: Unknown result type (might be due to invalid IL or missing references)
+		//IL_02f0: Unknown result type (might be due to invalid IL or missing references)
+		//IL_02f2: Unknown result type (might be due to invalid IL or missing references)
+		//IL_02f7: Unknown result type (might be due to invalid IL or missing references)
+		//IL_02fe: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0304: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0306: Unknown result type (might be due to invalid IL or missing references)
+		//IL_030b: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0318: Unknown result type (might be due to invalid IL or missing references)
+		//IL_031a: Unknown result type (might be due to invalid IL or missing references)
+		if (health <= 0f)
+		{
+			return;
+		}
+		TreeMarkerData treeMarkerData = PrefabAttribute.server.Find<TreeMarkerData>(prefabID);
+		if (treeMarkerData != null)
+		{
+			Vector3 normal;
+			Vector3 closestPoint;
+			if (nextHotspotMarkerValues.isBypassingBonusGame)
+			{
+				if (!treeMarkerData.TryGetClosestPoint(nextHotspotMarkerValues.hitPositionWorld, nextHotspotMarkerValues.hitEntity, out closestPoint, out normal))
+				{
+					Debug.LogError((object)$"Failed to generate a closest point to spawn new marker from position {nextHotspotMarkerValues.fromWorldPosition}");
+					return;
+				}
+			}
+			else
+			{
+				closestPoint = treeMarkerData.GetNearbyPoint(nextHotspotMarkerValues.fromWorldPosition, nextHotspotMarkerValues.hitEntity, ref lastHitMarkerIndex, out normal);
+			}
+			closestPoint = ((Component)this).transform.TransformPoint(closestPoint);
+			Quaternion rot = QuaternionEx.LookRotationNormal(((Component)this).transform.TransformDirection(normal));
+			xMarker = GameManager.server.CreateEntity("assets/content/nature/treesprefabs/trees/effects/tree_marking_nospherecast.prefab", closestPoint, rot);
+		}
+		else
+		{
+			Vector3 val = Vector3Ex.Direction2D(((Component)this).transform.position, nextHotspotMarkerValues.fromWorldPosition);
+			Vector3 val2;
+			if (nextHotspotMarkerValues.isBypassingBonusGame)
+			{
+				val2 = val;
+			}
+			else
+			{
+				Vector3 val3 = Vector3.Cross(val, Vector3.up);
+				float num = lastDirection;
+				float num2 = Random.Range(0.5f, 0.5f);
+				val2 = Vector3.Lerp(-val, val3 * num, num2);
+			}
+			Vector3 val4 = ((Component)this).transform.InverseTransformDirection(((Vector3)(ref val2)).normalized) * 2.5f;
+			val4 = ((Component)this).transform.InverseTransformPoint(serverCollider.ClosestPoint(((Component)this).transform.TransformPoint(val4)));
+			Vector3 val5 = ((Component)this).transform.TransformPoint(val4);
+			Vector3 val6 = ((Component)this).transform.InverseTransformPoint(nextHotspotMarkerValues.hitPositionWorld);
+			val4.y = val6.y;
+			Vector3 val7 = ((Component)this).transform.InverseTransformPoint(nextHotspotMarkerValues.initiatorCenterPoint);
+			float num3 = Mathf.Max(0.75f, val7.y);
+			float num4 = val7.y + 0.5f;
+			val4.y = Mathf.Clamp(val4.y + Random.Range(0.1f, 0.2f) * ((Random.Range(0, 2) == 0) ? (-1f) : 1f), num3, num4);
+			Vector3 val8 = Vector3Ex.Direction2D(((Component)this).transform.position, val5);
+			val8 = ((Component)this).transform.InverseTransformDirection(val8);
+			Quaternion val9 = QuaternionEx.LookRotationNormal(-val8, Vector3.zero);
+			val4 = ((Component)this).transform.TransformPoint(val4);
+			val4 = serverCollider.ClosestPoint(val4);
+			Line val10 = default(Line);
+			((Line)(ref val10))..ctor(((Component)serverCollider).transform.TransformPoint(new Vector3(0f, 10f, 0f)), ((Component)serverCollider).transform.TransformPoint(new Vector3(0f, -10f, 0f)));
+			val9 = QuaternionEx.LookRotationNormal(-Vector3Ex.Direction(((Line)(ref val10)).ClosestPoint(val4), val4));
+			xMarker = GameManager.server.CreateEntity("assets/content/nature/treesprefabs/trees/effects/tree_marking.prefab", val4, val9);
+		}
+		xMarker.Spawn();
+	}
+
+	private void DelayedHotspotMarkerSpawn()
+	{
+		((FacepunchBehaviour)this).CancelInvoke(actionCreateNewHotspotMarker);
+		((FacepunchBehaviour)this).Invoke(actionCreateNewHotspotMarker, 0.5f);
+	}
+
+	public float GetLastHitTime()
+	{
+		return lastHitTime;
+	}
+
+	public void StartBonusGame()
+	{
+		if (((FacepunchBehaviour)this).IsInvoking((Action)StopBonusGame))
+		{
+			((FacepunchBehaviour)this).CancelInvoke((Action)StopBonusGame);
+		}
+		((FacepunchBehaviour)this).Invoke((Action)StopBonusGame, 60f);
+	}
+
+	public void StopBonusGame()
+	{
+		CleanupMarker();
+		lastHitTime = 0f;
+		currentBonusLevel = 0;
+	}
+
+	public bool BonusActive()
+	{
+		return (Object)(object)xMarker != (Object)null;
+	}
+
+	private void DoBirds()
+	{
+		//IL_001d: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0061: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0066: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0071: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0087: Unknown result type (might be due to invalid IL or missing references)
+		//IL_009c: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00a1: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00a6: Unknown result type (might be due to invalid IL or missing references)
+		if (!base.isClient && !(Time.realtimeSinceStartup < nextBirdTime) && !(((Bounds)(ref bounds)).extents.y < 6f))
+		{
+			uint num = (uint)(int)net.ID.Value + birdCycleIndex;
+			if (SeedRandom.Range(ref num, 0, 2) == 0)
+			{
+				Effect.server.Run("assets/prefabs/npc/birds/birdemission.prefab", ((Component)this).transform.position + Vector3.up * Random.Range(((Bounds)(ref bounds)).extents.y * 0.65f, ((Bounds)(ref bounds)).extents.y * 0.9f), Vector3.up);
+			}
+			birdCycleIndex++;
+			nextBirdTime = Time.realtimeSinceStartup + 90f;
+		}
+	}
+
+	public void CleanupMarker()
+	{
+		if (Object.op_Implicit((Object)(object)xMarker))
+		{
+			xMarker.Kill();
+		}
+		xMarker = null;
+	}
+
+	public override void OnDied(HitInfo info)
+	{
+		//IL_0024: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0029: Unknown result type (might be due to invalid IL or missing references)
+		//IL_002c: Unknown result type (might be due to invalid IL or missing references)
+		//IL_005e: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0063: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0064: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0065: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0077: Unknown result type (might be due to invalid IL or missing references)
+		//IL_007d: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0082: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0087: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0110: Unknown result type (might be due to invalid IL or missing references)
+		if (isKilled)
+		{
+			return;
+		}
+		isKilled = true;
+		CleanupMarker();
+		if (base.isServer)
+		{
+			StabilityEntity.UpdateSurroundingsQueue updateSurroundingsQueue = StabilityEntity.updateSurroundingsQueue;
+			OBB val = WorldSpaceBounds();
+			((ObjectWorkQueue<Bounds>)updateSurroundingsQueue).Add(((OBB)(ref val)).ToBounds());
+			TryKillTreeAddition();
+		}
+		if (fallOnDied)
+		{
+			Collider val2 = serverCollider;
+			if (Object.op_Implicit((Object)(object)val2))
+			{
+				val2.enabled = false;
+			}
+			Vector3 val3 = info.attackNormal;
+			if (val3 == Vector3.zero)
+			{
+				val3 = Vector3Ex.Direction2D(((Component)this).transform.position, info.PointStart);
+			}
+			PooledList<TimedExplosive> val4 = Pool.Get<PooledList<TimedExplosive>>();
+			try
+			{
+				foreach (BaseEntity child in children)
+				{
+					if (child is TimedExplosive item)
+					{
+						((List<TimedExplosive>)(object)val4).Add(item);
+					}
+				}
+				foreach (TimedExplosive item2 in (List<TimedExplosive>)(object)val4)
+				{
+					item2.UnStick();
+				}
+				OnFallServer();
+				ClientRPC(RpcTarget.NetworkGroup("TreeFall"), val3);
+				((FacepunchBehaviour)this).Invoke((Action)DelayedKill, fallDuration + 1f);
+				return;
+			}
+			finally
+			{
+				((IDisposable)val4)?.Dispose();
+			}
+		}
+		DelayedKill();
+	}
+
+	protected virtual void OnFallServer()
+	{
+	}
+
+	public void DelayedKill()
+	{
+		Kill();
+	}
+
+	private void TryAddTreeAddition()
+	{
+		//IL_0044: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0049: Unknown result type (might be due to invalid IL or missing references)
+		//IL_006b: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0070: Unknown result type (might be due to invalid IL or missing references)
+		//IL_008b: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0091: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0096: Unknown result type (might be due to invalid IL or missing references)
+		//IL_009b: Unknown result type (might be due to invalid IL or missing references)
+		if (spawnTreeAddition && treeAdditionPrefab.isValid && Random.value <= treeAdditionSpawnChance && !((Object)(object)treeAdditionRef != (Object)null))
+		{
+			treeAdditionRef = GameManager.server.CreateEntity(treeAdditionPrefab.resourcePath, Vector3.zero, Quaternion.identity);
+			((Component)treeAdditionRef).transform.position = ((Component)this).transform.TransformPoint(treeAdditionSpawnPosition);
+			((Component)treeAdditionRef).transform.rotation = ((Component)this).transform.rotation * Quaternion.Euler(treeAdditionSpawnRotation);
+			if ((Object)(object)((Component)treeAdditionRef).GetComponent<Poolable>() != (Object)null)
+			{
+				((Component)treeAdditionRef).gameObject.AwakeFromInstantiate();
+			}
+			treeAdditionRef.Spawn();
+			treeAdditionRef.SendNetworkUpdate();
+		}
+	}
+
+	private void TryKillTreeAddition()
+	{
+		if (spawnTreeAddition && (Object)(object)treeAdditionRef != (Object)null)
+		{
+			if (treeAdditionRef is BaseCombatEntity baseCombatEntity)
+			{
+				baseCombatEntity.Die();
+			}
+			else
+			{
+				treeAdditionRef.Kill(DestroyMode.Gib);
+			}
+			treeAdditionRef = null;
+		}
+	}
+
+	public BaseEntity GetBonusGame()
+	{
+		return xMarker;
+	}
+
+	public override void PreProcess(IPrefabProcessor preProcess, GameObject rootObj, string name, bool serverside, bool clientside, bool bundling)
+	{
+		base.PreProcess(preProcess, rootObj, name, serverside, clientside, bundling);
+		if (serverside)
+		{
+			globalBroadcast = Tree.global_broadcast;
+		}
+	}
+}
+
+
+using UnityEngine;
+
+private struct HotspotMarkerSpawnValues
+{
+	public Vector3 fromWorldPosition;
+
+	public Vector3 hitPositionWorld;
+
+	public Vector3 initiatorCenterPoint;
+
+	public bool isBypassingBonusGame;
+
+	public TreeEntity hitEntity;
+}
+
+
+using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -780,8 +1436,8 @@ public class Tugboat : MotorRowboat, IPlannerReparentChildrenToMe, ILargeVehicle
 {
 	private const Flags Flag_Horn = Flags.Reserved18;
 
-	[SerializeField]
 	[Header("Tugboat")]
+	[SerializeField]
 	private Canvas monitorCanvas;
 
 	[SerializeField]
@@ -832,8 +1488,8 @@ public class Tugboat : MotorRowboat, IPlannerReparentChildrenToMe, ILargeVehicle
 	[SerializeField]
 	private TriggerParent parentTrigger;
 
-	[Help("how long until boat corpses despawn (excluding tugboat)")]
 	[ServerVar]
+	[Help("how long until boat corpses despawn (excluding tugboat)")]
 	public static float tugcorpseseconds = 7200f;
 
 	[ServerVar(Help = "How long before a tugboat loses all its health while outside")]
@@ -2380,8 +3036,8 @@ public class VehicleModuleCamper : VehicleModuleSeating
 		info.msg.camperModule.storageID = activeStorage.uid;
 	}
 
-	[RPC_Server.MaxDistance(3f)]
 	[RPC_Server]
+	[RPC_Server.MaxDistance(3f)]
 	public void RPC_OpenLocker(RPCMessage msg)
 	{
 		BasePlayer player = msg.player;
@@ -2399,8 +3055,8 @@ public class VehicleModuleCamper : VehicleModuleSeating
 		}
 	}
 
-	[RPC_Server.MaxDistance(3f)]
 	[RPC_Server]
+	[RPC_Server.MaxDistance(3f)]
 	public void RPC_OpenStorage(RPCMessage msg)
 	{
 		BasePlayer player = msg.player;
@@ -2543,8 +3199,8 @@ public class VehicleModuleSeating : BaseVehicleModule, IPrefabPreProcess
 		[Header("Seating & Controls")]
 		public bool doorsAreLockable = true;
 
-		[HideInInspector]
 		[Obsolete("Use BaseVehicle.mountPoints instead")]
+		[HideInInspector]
 		public MountPointInfo[] mountPoints;
 
 		public Transform steeringWheel;
@@ -2608,8 +3264,8 @@ public class VehicleModuleSeating : BaseVehicleModule, IPrefabPreProcess
 	[HideInInspector]
 	private Vector3 speedometerAngle;
 
-	[SerializeField]
 	[HideInInspector]
+	[SerializeField]
 	private Vector3 fuelAngle;
 
 	[Header("Horn")]
@@ -2868,8 +3524,8 @@ public class VehicleModuleSeating : BaseVehicleModule, IPrefabPreProcess
 		}
 	}
 
-	[RPC_Server.MaxDistance(3f)]
 	[RPC_Server]
+	[RPC_Server.MaxDistance(3f)]
 	public void RPC_DestroyLock(RPCMessage msg)
 	{
 		BasePlayer player = msg.player;
@@ -2937,8 +3593,8 @@ public class Seating
 	[Header("Seating & Controls")]
 	public bool doorsAreLockable = true;
 
-	[HideInInspector]
 	[Obsolete("Use BaseVehicle.mountPoints instead")]
+	[HideInInspector]
 	public MountPointInfo[] mountPoints;
 
 	public Transform steeringWheel;
@@ -3249,8 +3905,8 @@ public class VehicleModuleStorage : VehicleModuleSeating
 		}
 	}
 
-	[RPC_Server.MaxDistance(3f)]
 	[RPC_Server]
+	[RPC_Server.MaxDistance(3f)]
 	public void RPC_Open(RPCMessage msg)
 	{
 		TryOpen(msg.player);
@@ -3491,8 +4147,8 @@ public class VehicleModuleTaxi : VehicleModuleStorage
 		return false;
 	}
 
-	[RPC_Server]
 	[RPC_Server.MaxDistance(3f)]
+	[RPC_Server]
 	public void RPC_KickPassengers(RPCMessage msg)
 	{
 		BasePlayer player = msg.player;
@@ -3812,8 +4468,8 @@ public class VehiclePrivilege : SimplePrivilege
 		return baseVehicle.IsDriver(player);
 	}
 
-	[RPC_Server]
 	[RPC_Server.MaxDistance(3f)]
+	[RPC_Server]
 	private void AddSelfAuthorize(RPCMessage rpc)
 	{
 		if (rpc.player.CanInteract() && CanModifyAuth(rpc.player) && Interface.CallHook("OnCupboardAuthorize", (object)this, (object)rpc.player) == null)
@@ -4956,9 +5612,9 @@ public class VendingMachine : ContainerIOEntity, IUGCBrowserEntity, IFoodSpoilMo
 		}
 	}
 
-	[RPC_Server.CallsPerSecond(5uL)]
-	[RPC_Server.IsVisible(3f)]
 	[RPC_Server]
+	[RPC_Server.IsVisible(3f)]
+	[RPC_Server.CallsPerSecond(5uL)]
 	public void SV_RequestLongTermData(RPCMessage msg)
 	{
 		if (CanPlayerAdmin(msg.player))
@@ -4975,9 +5631,9 @@ public class VendingMachine : ContainerIOEntity, IUGCBrowserEntity, IFoodSpoilMo
 		}
 	}
 
-	[RPC_Server.CallsPerSecond(5uL)]
 	[RPC_Server]
 	[RPC_Server.IsVisible(3f)]
+	[RPC_Server.CallsPerSecond(5uL)]
 	public void SV_RequestPurchaseData(RPCMessage msg)
 	{
 		if (CanPlayerAdmin(msg.player))
@@ -5632,8 +6288,8 @@ public class VendingMachine : ContainerIOEntity, IUGCBrowserEntity, IFoodSpoilMo
 		}
 	}
 
-	[RPC_Server.IsVisible(3f)]
 	[RPC_Server]
+	[RPC_Server.IsVisible(3f)]
 	[RPC_Server.CallsPerSecond(5uL)]
 	public void BuyItem(RPCMessage rpc)
 	{
@@ -6037,8 +6693,8 @@ public class VendingMachine : ContainerIOEntity, IUGCBrowserEntity, IFoodSpoilMo
 		PlayerOpenLoot(ply, panelName);
 	}
 
-	[RPC_Server]
 	[RPC_Server.MaxDistance(3f)]
+	[RPC_Server]
 	public void RPC_OpenShopNoLOS(RPCMessage msg)
 	{
 		if (OccupiedCheck(msg.player))
@@ -6058,8 +6714,8 @@ public class VendingMachine : ContainerIOEntity, IUGCBrowserEntity, IFoodSpoilMo
 		}
 	}
 
-	[RPC_Server.IsVisible(3f)]
 	[RPC_Server]
+	[RPC_Server.IsVisible(3f)]
 	public void RPC_OpenAdmin(RPCMessage msg)
 	{
 		BasePlayer player = msg.player;
@@ -6151,8 +6807,8 @@ public class VendingMachine : ContainerIOEntity, IUGCBrowserEntity, IFoodSpoilMo
 		return ((Component)this).transform.TransformPoint(localDropPosition);
 	}
 
-	[RPC_Server.IsVisible(3f)]
 	[RPC_Server]
+	[RPC_Server.IsVisible(3f)]
 	public void RPC_DeleteSellOrder(RPCMessage msg)
 	{
 		BasePlayer player = msg.player;
@@ -6173,8 +6829,8 @@ public class VendingMachine : ContainerIOEntity, IUGCBrowserEntity, IFoodSpoilMo
 		}
 	}
 
-	[RPC_Server]
 	[RPC_Server.IsVisible(3f)]
+	[RPC_Server]
 	public void RPC_DeleteAllSellOrders(RPCMessage msg)
 	{
 		BasePlayer player = msg.player;
@@ -6193,8 +6849,8 @@ public class VendingMachine : ContainerIOEntity, IUGCBrowserEntity, IFoodSpoilMo
 		SendSellOrders(player);
 	}
 
-	[RPC_Server]
 	[RPC_Server.IsVisible(3f)]
+	[RPC_Server]
 	public void RPC_MoveSellOrder(RPCMessage msg)
 	{
 		BasePlayer player = msg.player;
@@ -7332,8 +7988,8 @@ public class VineMountable : BaseMountable
 		StartReplicatingPos();
 	}
 
-	[RPC_Server]
 	[RPC_Server.IsVisible(3f)]
+	[RPC_Server]
 	private void SV_Swing(RPCMessage msg)
 	{
 		if (!IsMounted() && Server.allowVineSwinging)
@@ -7853,10 +8509,10 @@ public class WallpaperPlanner : Planner
 		list.amount.Add((int)placementPrice.amount);
 	}
 
-	[RPC_Server.FromOwner]
-	[RPC_Server.CallsPerSecond(3uL)]
-	[RPC_Server.IsActiveItem]
 	[RPC_Server]
+	[RPC_Server.CallsPerSecond(3uL)]
+	[RPC_Server.FromOwner]
+	[RPC_Server.IsActiveItem]
 	private void SERVER_ChangeWallpaperToolSkin(RPCMessage msg)
 	{
 		int num = msg.read.Int32();
@@ -7884,8 +8540,8 @@ public class WallpaperPlanner : Planner
 	}
 
 	[RPC_Server.FromOwner]
-	[RPC_Server]
 	[RPC_Server.CallsPerSecond(10uL)]
+	[RPC_Server]
 	public void SERVER_SwitchMode(RPCMessage msg)
 	{
 		BasePlayer player = msg.player;
@@ -8171,8 +8827,8 @@ public class WantedPoster : DecayEntity, ISignage, IUGCBrowserEntity, ILOD, ISer
 	}
 
 	[RPC_Server.IsVisible(3f)]
-	[RPC_Server]
 	[RPC_Server.CallsPerSecond(5uL)]
+	[RPC_Server]
 	private void ClearPlayer(RPCMessage msg)
 	{
 		//IL_005d: Unknown result type (might be due to invalid IL or missing references)
@@ -9481,10 +10137,10 @@ public class WeaponRack : StorageContainer
 		}
 	}
 
-	[RPC_Server]
-	[RPC_Server.IsVisible(3f)]
-	[RPC_Server.MaxDistance(2f)]
 	[RPC_Server.CallsPerSecond(5uL)]
+	[RPC_Server]
+	[RPC_Server.MaxDistance(2f)]
+	[RPC_Server.IsVisible(3f)]
 	private void ReqSwapWeapon(RPCMessage msg)
 	{
 		int num = msg.read.Int32();
@@ -9534,9 +10190,9 @@ public class WeaponRack : StorageContainer
 	}
 
 	[RPC_Server]
-	[RPC_Server.IsVisible(3f)]
 	[RPC_Server.CallsPerSecond(5uL)]
 	[RPC_Server.MaxDistance(2f)]
+	[RPC_Server.IsVisible(3f)]
 	private void ReqTakeWeapon(RPCMessage msg)
 	{
 		int num = msg.read.Int32();
@@ -9602,10 +10258,10 @@ public class WeaponRack : StorageContainer
 		Interface.CallHook("OnRackedWeaponTaken", (object)slot, (object)player, (object)this);
 	}
 
-	[RPC_Server]
 	[RPC_Server.CallsPerSecond(5uL)]
-	[RPC_Server.IsVisible(3f)]
 	[RPC_Server.MaxDistance(2f)]
+	[RPC_Server.IsVisible(3f)]
+	[RPC_Server]
 	private void ReqTakeAll(RPCMessage msg)
 	{
 		int num = msg.read.Int32();
@@ -9638,10 +10294,10 @@ public class WeaponRack : StorageContainer
 		SendNetworkUpdateImmediate();
 	}
 
-	[RPC_Server.CallsPerSecond(5uL)]
 	[RPC_Server.MaxDistance(2f)]
-	[RPC_Server.IsVisible(3f)]
 	[RPC_Server]
+	[RPC_Server.IsVisible(3f)]
+	[RPC_Server.CallsPerSecond(5uL)]
 	private void ReqUnloadWeapon(RPCMessage msg)
 	{
 		int num = msg.read.Int32();
@@ -9717,10 +10373,10 @@ public class WeaponRack : StorageContainer
 		}
 	}
 
-	[RPC_Server.CallsPerSecond(5uL)]
-	[RPC_Server.MaxDistance(2f)]
-	[RPC_Server.IsVisible(3f)]
 	[RPC_Server]
+	[RPC_Server.IsVisible(3f)]
+	[RPC_Server.MaxDistance(2f)]
+	[RPC_Server.CallsPerSecond(5uL)]
 	private void ReqMountBackSlot(RPCMessage msg)
 	{
 		if (base.inventory.itemList.Count != base.inventory.capacity)
@@ -9814,10 +10470,10 @@ public class WeaponRack : StorageContainer
 		ClientRPC(RpcTarget.NetworkGroup("PlayMountSound"), itemID);
 	}
 
-	[RPC_Server]
-	[RPC_Server.IsVisible(3f)]
-	[RPC_Server.MaxDistance(2f)]
 	[RPC_Server.CallsPerSecond(5uL)]
+	[RPC_Server.MaxDistance(2f)]
+	[RPC_Server.IsVisible(3f)]
+	[RPC_Server]
 	private void LoadWeaponAmmo(RPCMessage msg)
 	{
 		//IL_00fa: Unknown result type (might be due to invalid IL or missing references)
@@ -11370,8 +12026,12 @@ public class WireTool : HeldEntity
 
 	public override bool OnRpcMessage(BasePlayer player, uint rpc, Message msg)
 	{
-		//IL_0210: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0253: Unknown result type (might be due to invalid IL or missing references)
+		//IL_01b9: Unknown result type (might be due to invalid IL or missing references)
+		//IL_01be: Unknown result type (might be due to invalid IL or missing references)
+		//IL_01c8: Unknown result type (might be due to invalid IL or missing references)
+		//IL_01cd: Unknown result type (might be due to invalid IL or missing references)
+		//IL_023e: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0281: Unknown result type (might be due to invalid IL or missing references)
 		TimeWarning val = TimeWarning.New("WireTool.OnRpcMessage", 0);
 		try
 		{
@@ -11444,78 +12104,95 @@ public class WireTool : HeldEntity
 				TimeWarning val2 = TimeWarning.New("RPC_MakeConnection", 0);
 				try
 				{
-					TimeWarning val3 = TimeWarning.New("Conditions", 0);
+					bool flag = HasUnlimitedIo(player);
+					RepeatedElementLimitScope val4 = msg.read.UseRepeatedElementLimit(flag ? (-1) : 54);
 					try
 					{
-						if (!RPC_Server.CallsPerSecond.Test(2571821359u, "RPC_MakeConnection", this, player, 5uL))
-						{
-							return true;
-						}
-						if (!RPC_Server.FromOwner.Test(2571821359u, "RPC_MakeConnection", this, player))
-						{
-							return true;
-						}
-						long position = ((Stream)(object)msg.read).Position;
-						WireConnectionMessage val4 = msg.read.Proto<WireConnectionMessage>((WireConnectionMessage)null);
+						FieldOperationLimitSuspensionScope val5 = msg.read.SuspendProtoFieldOperationLimit(flag);
 						try
 						{
-							foreach (Vector3 linePoint in val4.linePoints)
+							TimeWarning val3 = TimeWarning.New("Conditions", 0);
+							try
 							{
-								if (!RPC_Server.InputValidation.Test(linePoint))
+								if (!RPC_Server.CallsPerSecond.Test(2571821359u, "RPC_MakeConnection", this, player, 5uL))
 								{
 									return true;
 								}
-							}
-							foreach (WireLineAnchorInfo lineAnchor in val4.lineAnchors)
-							{
-								if (!RPC_Server.InputValidation.Test(lineAnchor.position))
+								if (!RPC_Server.FromOwner.Test(2571821359u, "RPC_MakeConnection", this, player))
 								{
 									return true;
 								}
-							}
-							foreach (float slackLevel in val4.slackLevels)
-							{
-								if (!RPC_Server.InputValidation.Test(slackLevel))
+								long position = ((Stream)(object)msg.read).Position;
+								WireConnectionMessage val6 = msg.read.Proto<WireConnectionMessage>((WireConnectionMessage)null);
+								try
 								{
-									return true;
+									foreach (Vector3 linePoint in val6.linePoints)
+									{
+										if (!RPC_Server.InputValidation.Test(linePoint))
+										{
+											return true;
+										}
+									}
+									foreach (WireLineAnchorInfo lineAnchor in val6.lineAnchors)
+									{
+										if (!RPC_Server.InputValidation.Test(lineAnchor.position))
+										{
+											return true;
+										}
+									}
+									foreach (float slackLevel in val6.slackLevels)
+									{
+										if (!RPC_Server.InputValidation.Test(slackLevel))
+										{
+											return true;
+										}
+									}
+									((Stream)(object)msg.read).Position = position;
+									if (!RPC_Server.IsActiveItem.Test(2571821359u, "RPC_MakeConnection", this, player))
+									{
+										return true;
+									}
+								}
+								finally
+								{
+									((IDisposable)val6)?.Dispose();
 								}
 							}
-							((Stream)(object)msg.read).Position = position;
-							if (!RPC_Server.IsActiveItem.Test(2571821359u, "RPC_MakeConnection", this, player))
+							finally
 							{
-								return true;
+								((IDisposable)val3)?.Dispose();
+							}
+							try
+							{
+								val3 = TimeWarning.New("Call", 0);
+								try
+								{
+									RPCMessage rPCMessage = default(RPCMessage);
+									rPCMessage.connection = msg.connection;
+									rPCMessage.player = player;
+									rPCMessage.read = msg.read;
+									RPCMessage rpc2 = rPCMessage;
+									RPC_MakeConnection(rpc2);
+								}
+								finally
+								{
+									((IDisposable)val3)?.Dispose();
+								}
+							}
+							catch (Exception ex2)
+							{
+								Debug.LogException(ex2);
+								player.Kick("RPC Error in RPC_MakeConnection");
 							}
 						}
 						finally
 						{
-							((IDisposable)val4)?.Dispose();
+							((IDisposable)(FieldOperationLimitSuspensionScope)(ref val5)/*cast due to .constrained prefix*/).Dispose();
 						}
 					}
 					finally
 					{
-						((IDisposable)val3)?.Dispose();
-					}
-					try
-					{
-						val3 = TimeWarning.New("Call", 0);
-						try
-						{
-							RPCMessage rPCMessage = default(RPCMessage);
-							rPCMessage.connection = msg.connection;
-							rPCMessage.player = player;
-							rPCMessage.read = msg.read;
-							RPCMessage rpc2 = rPCMessage;
-							RPC_MakeConnection(rpc2);
-						}
-						finally
-						{
-							((IDisposable)val3)?.Dispose();
-						}
-					}
-					catch (Exception ex2)
-					{
-						Debug.LogException(ex2);
-						player.Kick("RPC Error in RPC_MakeConnection");
+						((IDisposable)(RepeatedElementLimitScope)(ref val4)/*cast due to .constrained prefix*/).Dispose();
 					}
 				}
 				finally
@@ -11730,10 +12407,19 @@ public class WireTool : HeldEntity
 		return Mathf.Clamp(num, 0f, 2f);
 	}
 
-	[RPC_Server.IsActiveItem]
-	[RPC_Server.CallsPerSecond(5uL)]
-	[RPC_Server.FromOwner]
+	private bool HasUnlimitedIo(BasePlayer player)
+	{
+		if (player.IsInCreativeMode)
+		{
+			return Creative.unlimitedIo;
+		}
+		return false;
+	}
+
 	[RPC_Server]
+	[RPC_Server.IsActiveItem]
+	[RPC_Server.FromOwner]
+	[RPC_Server.CallsPerSecond(5uL)]
 	public void RPC_WireStarted(RPCMessage msg)
 	{
 		//IL_000d: Unknown result type (might be due to invalid IL or missing references)
@@ -11768,11 +12454,17 @@ public class WireTool : HeldEntity
 		}
 	}
 
-	[RPC_Server.InputValidation(new Type[] { typeof(WireConnectionMessage) })]
-	[RPC_Server.CallsPerSecond(5uL)]
 	[RPC_Server]
 	[RPC_Server.IsActiveItem]
 	[RPC_Server.FromOwner]
+	[RPC_Server.CallsPerSecond(5uL)]
+	[RPC_Server.InputValidation(new Type[] { typeof(WireConnectionMessage) })]
+	[RPC_Server.MaxRepeatedElements(54)]
+	[RPC_Server.IgnoreConditional("HasUnlimitedIo", new Type[]
+	{
+		typeof(RPC_Server.MaxRepeatedElements),
+		typeof(RPC_Server.IgnoreProtoFieldOperationLimit)
+	})]
 	public void RPC_MakeConnection(RPCMessage rpc)
 	{
 		//IL_002b: Unknown result type (might be due to invalid IL or missing references)
@@ -12105,9 +12797,9 @@ public class WireTool : HeldEntity
 	}
 
 	[RPC_Server.CallsPerSecond(5uL)]
+	[RPC_Server.FromOwner]
 	[RPC_Server.IsActiveItem]
 	[RPC_Server]
-	[RPC_Server.FromOwner]
 	public void RPC_CancelPendingWire(RPCMessage msg)
 	{
 		//IL_0003: Unknown result type (might be due to invalid IL or missing references)
@@ -12117,9 +12809,9 @@ public class WireTool : HeldEntity
 	}
 
 	[RPC_Server.FromOwner]
-	[RPC_Server.CallsPerSecond(5uL)]
-	[RPC_Server.IsActiveItem]
 	[RPC_Server]
+	[RPC_Server.IsActiveItem]
+	[RPC_Server.CallsPerSecond(5uL)]
 	public void RPC_RequestChangeColor(RPCMessage msg)
 	{
 		//IL_000d: Unknown result type (might be due to invalid IL or missing references)
@@ -12637,8 +13329,8 @@ public class Workbench : StorageContainer
 	[Tooltip("Editor-only transform holding visual placement points. Should be removed at runtime.")]
 	public Transform upgradeVisualPlacement;
 
-	[Header("Filler Visuals")]
 	[Tooltip("Active when no upgrades are installed at all. Disabled when any upgrade is present.")]
+	[Header("Filler Visuals")]
 	public Transform fullFillerVisual;
 
 	[Tooltip("Individual filler transforms that are hidden when their associated upgrade is installed.")]
@@ -13167,8 +13859,8 @@ public class Workbench : StorageContainer
 		return num;
 	}
 
-	[RPC_Server.IsVisible(3f)]
 	[RPC_Server]
+	[RPC_Server.IsVisible(3f)]
 	public void RPC_SendTechTreeMultiplier(RPCMessage msg)
 	{
 		ClientRPC(RpcTarget.Player("RPC_TechTreeMultiplier", msg.player), GetTechTreeCostMultiplier());
@@ -13556,8 +14248,8 @@ public class Workbench : StorageContainer
 		return base.PlayerOpenLoot(player, panelToOpen, doPositionChecks);
 	}
 
-	[RPC_Server]
 	[RPC_Server.IsVisible(3f)]
+	[RPC_Server]
 	public void RPC_OpenUpgradeInventory(RPCMessage msg)
 	{
 		if (isLootable && !Static)
@@ -13695,8 +14387,8 @@ public class Workbench : StorageContainer
 		return blueprintBaseDef;
 	}
 
-	[RPC_Server]
 	[RPC_Server.IsVisible(3f)]
+	[RPC_Server]
 	public void RPC_BeginExperiment(RPCMessage msg)
 	{
 		//IL_01b0: Unknown result type (might be due to invalid IL or missing references)
@@ -14374,8 +15066,8 @@ public class WorldItem : BaseEntity, PlayerInventory.ICanMoveFrom
 		}
 	}
 
-	[RPC_Server]
 	[RPC_Server.IsVisible(3f)]
+	[RPC_Server]
 	public void Pickup(RPCMessage msg)
 	{
 		if (msg.player.CanInteract() && this.item != null && allowPickup && Interface.CallHook("OnItemPickup", (object)this.item, (object)msg.player, (object)this) == null && CanOpenInSafeZone(msg.player))
@@ -14461,8 +15153,8 @@ public class WorldItem : BaseEntity, PlayerInventory.ICanMoveFrom
 		return true;
 	}
 
-	[RPC_Server.IsVisible(3f)]
 	[RPC_Server]
+	[RPC_Server.IsVisible(3f)]
 	private void RPC_OpenLoot(RPCMessage rpc)
 	{
 		if (item == null || item.contents == null)
@@ -15096,9 +15788,9 @@ public class ZiplineLaunchPoint : BaseEntity
 		return false;
 	}
 
-	[RPC_Server]
-	[RPC_Server.CallsPerSecond(2uL)]
 	[RPC_Server.IsVisible(3f)]
+	[RPC_Server.CallsPerSecond(2uL)]
+	[RPC_Server]
 	public void MountPlayer(RPCMessage msg)
 	{
 		//IL_0032: Unknown result type (might be due to invalid IL or missing references)
@@ -17261,8 +17953,8 @@ using System;
 using UnityEngine;
 using UnityStandardAssets.ImageEffects;
 
-[AddComponentMenu("Image Effects/NVG Effect")]
 [ExecuteInEditMode]
+[AddComponentMenu("Image Effects/NVG Effect")]
 public class NVGEffect : PostEffectsBase, IImageEffect
 {
 	[Serializable]
@@ -23757,12 +24449,12 @@ public class PooltableMountableAnimationSubsystem : ChildAnimatorSubSystem, INot
 	[SerializeField]
 	private bool hitUpperBodyOnly = true;
 
-	[Tooltip("Played full body when the player mounts - the 3p equivalent of the viewmodel deploy.")]
 	[SerializeField]
+	[Tooltip("Played full body when the player mounts - the 3p equivalent of the viewmodel deploy.")]
 	private AnimationClip StartClip;
 
-	[SerializeField]
 	[Tooltip("Blend in/out time for the one shot clips. The blend out runs past the end of the clip, so it never unwinds the follow through.")]
+	[SerializeField]
 	private float oneShotBlendTime = 0.1f;
 
 	[Tooltip("Lateral speed (m/s) at which the walk clips reach full weight")]
@@ -23790,8 +24482,8 @@ public class UI_PoolTable : UIDialog, IShadowGroupVisibility
 	[SerializeField]
 	private RustSlider powerBar;
 
-	[Header("Instructions")]
 	[SerializeField]
+	[Header("Instructions")]
 	private GameObject holdInstruction;
 
 	[SerializeField]
@@ -23800,8 +24492,8 @@ public class UI_PoolTable : UIDialog, IShadowGroupVisibility
 	[SerializeField]
 	private GameObject cancelInstruction;
 
-	[Header("Players")]
 	[SerializeField]
+	[Header("Players")]
 	private RustText localPlayerNameText;
 
 	[SerializeField]
@@ -23813,8 +24505,8 @@ public class UI_PoolTable : UIDialog, IShadowGroupVisibility
 	[SerializeField]
 	private RawImage opponentAvatar;
 
-	[SerializeField]
 	[Header("Current Turn")]
+	[SerializeField]
 	private GameObject localTurnBall;
 
 	[SerializeField]
@@ -23826,8 +24518,8 @@ public class UI_PoolTable : UIDialog, IShadowGroupVisibility
 	[SerializeField]
 	private GameObject opponentTurnHighlight;
 
-	[SerializeField]
 	[Header("Ball Display")]
+	[SerializeField]
 	private Color localBallColour = new Color(0.11f, 0.37f, 0.58f, 1f);
 
 	[SerializeField]
@@ -23836,8 +24528,8 @@ public class UI_PoolTable : UIDialog, IShadowGroupVisibility
 	[SerializeField]
 	private Color eightBallColour = new Color(0.13f, 0.13f, 0.13f, 1f);
 
-	[SerializeField]
 	[Tooltip("Contains the 15 ball displays in left-to-right order.")]
+	[SerializeField]
 	private Transform ballDisplayRoot;
 
 	public bool ShouldUpdateShadows => true;
@@ -24167,8 +24859,8 @@ public class NPCVendingOrder : ScriptableObject
 
 		public bool currencyAsBP;
 
-		[FormerlySerializedAs("initialStock")]
 		[Tooltip("Most units of this order the machine will hold, both when the orders are installed and when it refills. Leave at -1 to use the machine's own Starting Stock.")]
+		[FormerlySerializedAs("initialStock")]
 		public int maxStock = -1;
 
 		public int refillAmount = 1;
@@ -24183,8 +24875,8 @@ public class NPCVendingOrder : ScriptableObject
 	{
 		public bool useRandom;
 
-		[Tooltip("The higher this number, the more likely this will be chosen")]
 		[Range(0f, 1f)]
+		[Tooltip("The higher this number, the more likely this will be chosen")]
 		public float weight;
 
 		[Tooltip("Minimum price for the currency item")]
@@ -24193,8 +24885,8 @@ public class NPCVendingOrder : ScriptableObject
 		[Tooltip("Maximum price for the currency item")]
 		public int maxPrice;
 
-		[Tooltip("Chance for a very low price to occur (0 to 1)")]
 		[Range(0f, 1f)]
+		[Tooltip("Chance for a very low price to occur (0 to 1)")]
 		public float veryLowPriceChance;
 
 		[Tooltip("Minimum very low price")]
@@ -24299,8 +24991,8 @@ public class Entry
 
 	public bool currencyAsBP;
 
-	[FormerlySerializedAs("initialStock")]
 	[Tooltip("Most units of this order the machine will hold, both when the orders are installed and when it refills. Leave at -1 to use the machine's own Starting Stock.")]
+	[FormerlySerializedAs("initialStock")]
 	public int maxStock = -1;
 
 	public int refillAmount = 1;
@@ -24319,8 +25011,8 @@ public struct EntryRandom
 {
 	public bool useRandom;
 
-	[Tooltip("The higher this number, the more likely this will be chosen")]
 	[Range(0f, 1f)]
+	[Tooltip("The higher this number, the more likely this will be chosen")]
 	public float weight;
 
 	[Tooltip("Minimum price for the currency item")]
@@ -24329,8 +25021,8 @@ public struct EntryRandom
 	[Tooltip("Maximum price for the currency item")]
 	public int maxPrice;
 
-	[Tooltip("Chance for a very low price to occur (0 to 1)")]
 	[Range(0f, 1f)]
+	[Tooltip("Chance for a very low price to occur (0 to 1)")]
 	public float veryLowPriceChance;
 
 	[Tooltip("Minimum very low price")]
@@ -29606,8 +30298,8 @@ public class JunkPileWater : JunkPile, IBudgetedFloatingEntity, IDestroyableOnPl
 
 	public static JunkpileWaterWorkQueue junkpileWaterWorkQueue = new JunkpileWaterWorkQueue();
 
-	[ServerVar]
 	[Help("How many milliseconds to budget for processing junk pile updates per frame")]
+	[ServerVar]
 	public static float framebudgetms = 0.05f;
 
 	public Transform[] buoyancyPoints;
@@ -31751,1163 +32443,6 @@ public class ParachuteWearable : MonoBehaviour
 	public Transform LeftHandTarget;
 
 	public Transform RightHandTarget;
-}
-
-
-using System;
-using UnityEngine;
-
-public class Pinata : BaseCombatEntity
-{
-	[Serializable]
-	public struct VisualThreshold
-	{
-		public GameObject Root;
-
-		public GameObjectRef DestroyEffect;
-
-		[Range(0f, 1f)]
-		public float HealthGreaterThan;
-	}
-
-	public Transform DropPoint;
-
-	public float DropPointRadius;
-
-	[Header("Hit Animation")]
-	public float TotalSwingTime = 0.6f;
-
-	public float SwingForce = 45f;
-
-	public Transform SwingTransform;
-
-	public AnimationCurve SwingCurve = new AnimationCurve((Keyframe[])(object)new Keyframe[3]
-	{
-		new Keyframe(0f, 0f),
-		new Keyframe(0.5f, 1f),
-		new Keyframe(1f, 0f)
-	});
-
-	[Header("Visual")]
-	public VisualThreshold[] Thresholds;
-
-	public LineRenderer Line;
-
-	public Transform DestroyEffectSpawnPos;
-
-	public float HangLength = -1.863f;
-
-	public GameObjectRef FinalDestroyEffect;
-
-	public override void OnDied(HitInfo info)
-	{
-		//IL_0055: Unknown result type (might be due to invalid IL or missing references)
-		//IL_005a: Unknown result type (might be due to invalid IL or missing references)
-		//IL_006f: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0074: Unknown result type (might be due to invalid IL or missing references)
-		//IL_007b: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0081: Unknown result type (might be due to invalid IL or missing references)
-		base.OnDied(info);
-		ItemAmount[] reward = PrefabAttribute.server.Find<PinataPayouts>(prefabID).GetPayout().Reward;
-		foreach (ItemAmount itemAmount in reward)
-		{
-			if ((Object)(object)itemAmount.itemDef != (Object)null)
-			{
-				ItemManager.Create(itemAmount.itemDef, (int)itemAmount.amount, 0uL, isServerSide: true, 0uL).CreateWorldObject(DropPoint.position + Random.onUnitSphere * Random.Range(0f, DropPointRadius));
-			}
-		}
-	}
-}
-
-
-using System;
-using UnityEngine;
-
-[Serializable]
-public struct VisualThreshold
-{
-	public GameObject Root;
-
-	public GameObjectRef DestroyEffect;
-
-	[Range(0f, 1f)]
-	public float HealthGreaterThan;
-}
-
-
-using System;
-using UnityEngine;
-
-public class PinataPayouts : PrefabAttribute, IServerComponent
-{
-	[Serializable]
-	public struct Payout
-	{
-		public ItemAmount[] Reward;
-
-		public int Chance;
-	}
-
-	public Payout[] AllPayouts;
-
-	private int totalChance;
-
-	public Payout GetPayout()
-	{
-		if (totalChance == 0)
-		{
-			Payout[] allPayouts = AllPayouts;
-			for (int i = 0; i < allPayouts.Length; i++)
-			{
-				Payout payout = allPayouts[i];
-				totalChance += payout.Chance;
-			}
-		}
-		if (totalChance == 0)
-		{
-			return AllPayouts[0];
-		}
-		int num = Random.Range(0, totalChance);
-		int num2 = 0;
-		for (int j = 0; j < AllPayouts.Length; j++)
-		{
-			Payout result = AllPayouts[j];
-			if (num <= num2 + result.Chance)
-			{
-				return result;
-			}
-			num2 += result.Chance;
-		}
-		return AllPayouts[0];
-	}
-
-	protected override Type GetIndexedType()
-	{
-		return typeof(PinataPayouts);
-	}
-}
-
-
-using System;
-
-[Serializable]
-public struct Payout
-{
-	public ItemAmount[] Reward;
-
-	public int Chance;
-}
-
-
-using System.Collections.Generic;
-using UnityEngine;
-
-public class InstantCameraFlashController : MonoBehaviour
-{
-	[SerializeField]
-	private List<Light> Flash = new List<Light>();
-
-	private void Awake()
-	{
-		DisableFlash();
-	}
-
-	public void EnableFlash()
-	{
-		foreach (Light item in Flash)
-		{
-			if ((Object)(object)item != (Object)null)
-			{
-				((Behaviour)item).enabled = true;
-			}
-		}
-	}
-
-	public void DisableFlash()
-	{
-		foreach (Light item in Flash)
-		{
-			if ((Object)(object)item != (Object)null)
-			{
-				((Behaviour)item).enabled = false;
-			}
-		}
-	}
-}
-
-
-public enum CameraFocusMode
-{
-	Off,
-	Auto,
-	Manual
-}
-
-
-public class ItemModPhoto : ItemModAssociatedEntity<PhotoEntity>
-{
-	protected override bool AllowNullParenting => true;
-}
-
-
-using System;
-using System.Collections.Generic;
-using Facepunch;
-using ProtoBuf;
-using Rust;
-
-public class PhotoEntity : ImageStorageEntity, IUGCBrowserEntity
-{
-	public ulong PhotographerSteamId { get; private set; }
-
-	public uint ImageCrc { get; private set; }
-
-	protected override uint CrcToLoad => ImageCrc;
-
-	public override bool ShouldTransferAssociatedFiles => true;
-
-	public uint[] GetContentCRCs
-	{
-		get
-		{
-			if (ImageCrc == 0)
-			{
-				return Array.Empty<uint>();
-			}
-			return new uint[1] { ImageCrc };
-		}
-	}
-
-	public UGCType ContentType => UGCType.ImageJpg;
-
-	public List<ulong> EditingHistory
-	{
-		get
-		{
-			if (PhotographerSteamId == 0)
-			{
-				return new List<ulong>();
-			}
-			return new List<ulong> { PhotographerSteamId };
-		}
-	}
-
-	public BaseNetworkable UgcEntity => this;
-
-	public string ContentString => string.Empty;
-
-	public override void Load(LoadInfo info)
-	{
-		base.Load(info);
-		if (info.msg.photo != null)
-		{
-			PhotographerSteamId = info.msg.photo.photographerSteamId;
-			ImageCrc = info.msg.photo.imageCrc;
-		}
-	}
-
-	public override void Save(SaveInfo info)
-	{
-		base.Save(info);
-		info.msg.photo = Pool.Get<Photo>();
-		info.msg.photo.photographerSteamId = PhotographerSteamId;
-		info.msg.photo.imageCrc = ImageCrc;
-	}
-
-	public void SetImageData(ulong steamId, byte[] data)
-	{
-		//IL_000e: Unknown result type (might be due to invalid IL or missing references)
-		ImageCrc = FileStorage.server.Store(data, FileStorage.Type.jpg, net.ID);
-		PhotographerSteamId = steamId;
-	}
-
-	internal override void DoServerDestroy()
-	{
-		//IL_0020: Unknown result type (might be due to invalid IL or missing references)
-		base.DoServerDestroy();
-		if (!Application.isQuitting && net != null)
-		{
-			FileStorage.server.RemoveAllByEntity(net.ID);
-		}
-	}
-
-	public void ClearContent()
-	{
-		ImageCrc = 0u;
-		SendNetworkUpdate();
-	}
-}
-
-
-using UnityEngine;
-using UnityEngine.UI;
-
-public class PhotoPanel : MonoBehaviour, IImageReceiver, IItemPanel
-{
-	public RawImage Image;
-
-	public InputField Message;
-}
-
-
-using Rust.UI;
-using UnityEngine;
-using UnityEngine.UI;
-
-public class SignPanel : MonoBehaviour, IImageReceiver, IItemPanel
-{
-	public RawImage Image;
-
-	public RectTransform ImageContainer;
-
-	public RustText DisabledSignsMessage;
-}
-
-
-using System;
-using System.Collections.Generic;
-using Facepunch;
-using ProtoBuf;
-using UnityEngine;
-
-public class PaddlingPool : LiquidContainer, ISplashable
-{
-	public const Flags FilledUp = Flags.Reserved4;
-
-	public Transform poolWaterVolume;
-
-	public GameObject poolWaterVisual;
-
-	public float minimumWaterHeight;
-
-	public float maximumWaterHeight = 1f;
-
-	public WaterVolume waterVolume;
-
-	public bool alignWaterUp = true;
-
-	public GameObjectRef destroyedWithWaterEffect;
-
-	public Transform destroyedWithWaterEffectPos;
-
-	public Collider requireLookAt;
-
-	private float lastFillAmount = -1f;
-
-	public override void PostServerLoad()
-	{
-		base.PostServerLoad();
-		Sprinkler.SplashableGrid.RegisterEntity(this);
-	}
-
-	public override void OnDeployed(BaseEntity parent, BasePlayer deployedBy, Item fromItem)
-	{
-		base.OnDeployed(parent, deployedBy, fromItem);
-		Sprinkler.SplashableGrid.RegisterEntity(this);
-	}
-
-	internal override void DoServerDestroy()
-	{
-		base.DoServerDestroy();
-		Sprinkler.SplashableGrid.DeregisterEntity(this);
-	}
-
-	public override void OnParentChanging(BaseEntity oldParent, BaseEntity newParent)
-	{
-		base.OnParentChanging(oldParent, newParent);
-		Sprinkler.SplashableGrid.OnParentChanged(this, oldParent, newParent);
-	}
-
-	public override void OnItemAddedOrRemoved(Item item, bool added)
-	{
-		base.OnItemAddedOrRemoved(item, added);
-		float normalisedFillLevel = GetNormalisedFillLevel();
-		using (FlagsUpdateScope flagsUpdateScope = StartSetFlags(FlagsUpdateMode.SendNetworkUpdate))
-		{
-			flagsUpdateScope.Set(Flags.Reserved4, normalisedFillLevel >= 1f);
-		}
-		UpdatePoolFillAmount(normalisedFillLevel);
-		SendNetworkUpdate();
-	}
-
-	protected override void OnInventoryDirty()
-	{
-		base.OnInventoryDirty();
-		float normalisedFillLevel = GetNormalisedFillLevel();
-		UpdatePoolFillAmount(normalisedFillLevel);
-		SendNetworkUpdate();
-	}
-
-	public bool WantsSplash(ItemDefinition splashType, int amount)
-	{
-		if (base.IsDestroyed)
-		{
-			return false;
-		}
-		if (!HasFlag(Flags.Reserved4) && (Object)(object)splashType != (Object)null)
-		{
-			for (int i = 0; i < ValidItems.Length; i++)
-			{
-				if ((Object)(object)ValidItems[i] != (Object)null && ValidItems[i].itemid == splashType.itemid)
-				{
-					return true;
-				}
-			}
-		}
-		return false;
-	}
-
-	public int DoSplash(ItemDefinition splashType, int amount)
-	{
-		int amount2 = Mathf.Clamp(Mathf.RoundToInt((float)amount * 0.66f), 1, amount);
-		base.inventory.AddItem(splashType, amount2, 0uL);
-		return amount;
-	}
-
-	public override void Save(SaveInfo info)
-	{
-		base.Save(info);
-		info.msg.WaterPool = Pool.Get<WaterPool>();
-		info.msg.WaterPool.fillAmount = GetNormalisedFillLevel();
-	}
-
-	private float GetNormalisedFillLevel()
-	{
-		if (base.inventory.itemList.Count <= 0 || base.inventory.itemList[0] == null)
-		{
-			return 0f;
-		}
-		return (float)base.inventory.itemList[0].amount / (float)maxStackSize;
-	}
-
-	private void UpdatePoolFillAmount(float normalisedAmount)
-	{
-		//IL_0044: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0049: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0058: Unknown result type (might be due to invalid IL or missing references)
-		//IL_006c: Unknown result type (might be due to invalid IL or missing references)
-		poolWaterVisual.gameObject.SetActive(normalisedAmount > 0f);
-		waterVolume.waterEnabled = normalisedAmount > 0f;
-		float y = Mathf.Lerp(minimumWaterHeight, maximumWaterHeight, normalisedAmount);
-		Vector3 localPosition = poolWaterVolume.localPosition;
-		localPosition.y = y;
-		poolWaterVolume.localPosition = localPosition;
-		if (alignWaterUp)
-		{
-			poolWaterVolume.up = Vector3.up;
-		}
-		if (normalisedAmount > 0f && lastFillAmount < normalisedAmount && waterVolume.entityContents != null)
-		{
-			foreach (BaseEntity entityContent in waterVolume.entityContents)
-			{
-				if (entityContent is IPoolVehicle poolVehicle)
-				{
-					poolVehicle.WakeUp();
-				}
-			}
-		}
-		lastFillAmount = normalisedAmount;
-	}
-
-	public override int ConsumptionAmount()
-	{
-		return 0;
-	}
-
-	public override void DestroyShared()
-	{
-		//IL_0015: Unknown result type (might be due to invalid IL or missing references)
-		//IL_001a: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0030: Unknown result type (might be due to invalid IL or missing references)
-		base.DestroyShared();
-		if (!base.isServer)
-		{
-			return;
-		}
-		PooledList<BaseEntity> val = Pool.Get<PooledList<BaseEntity>>();
-		try
-		{
-			OBB val2 = WorldSpaceBounds();
-			val2.extents.y += 0.2f;
-			Vis.Entities(val2, (List<BaseEntity>)(object)val, 32768, (QueryTriggerInteraction)2);
-			foreach (BaseEntity item in (List<BaseEntity>)(object)val)
-			{
-				if (item is IPoolVehicle poolVehicle)
-				{
-					poolVehicle.OnPoolDestroyed();
-				}
-			}
-		}
-		finally
-		{
-			((IDisposable)val)?.Dispose();
-		}
-	}
-}
-
-
-using UnityEngine;
-
-public class TwitchTrophy : BaseCombatEntity
-{
-	[Header("Trophy")]
-	public GameObjectRef DialogPrefab;
-}
-
-
-using Rust.UI;
-using UnityEngine;
-
-public class UITwitchTrophy : UIDialog
-{
-	public HttpImage EventImage;
-
-	public RustText EventName;
-
-	public RustText WinningTeamName;
-
-	public RectTransform TeamMembersRoot;
-
-	public GameObject TeamMemberNamePrefab;
-
-	public GameObject MissingDataOverlay;
-}
-
-
-using System.Collections.Generic;
-using Facepunch;
-using UnityEngine;
-
-public class NPCDwelling : BaseEntity
-{
-	public NPCSpawner npcSpawner;
-
-	public float NPCSpawnChance = 1f;
-
-	public SpawnGroup[] spawnGroups;
-
-	public AIMovePoint[] movePoints;
-
-	public AICoverPoint[] coverPoints;
-
-	public override void ServerInit()
-	{
-		base.ServerInit();
-		UpdateInformationZone(remove: false);
-		if ((Object)(object)npcSpawner != (Object)null && Random.Range(0f, 1f) <= NPCSpawnChance)
-		{
-			npcSpawner.SpawnInitial();
-		}
-		SpawnGroup[] array = spawnGroups;
-		foreach (SpawnGroup spawnGroup in array)
-		{
-			if ((Object)(object)spawnGroup == (Object)null)
-			{
-				Debug.LogWarning((object)("Null spawn group in NPCDwelling " + ((Object)this).name + " - skipping"));
-			}
-			else
-			{
-				spawnGroup.SpawnInitial();
-			}
-		}
-	}
-
-	public override void DestroyShared()
-	{
-		if (base.isServer)
-		{
-			CleanupSpawned();
-		}
-		base.DestroyShared();
-		if (base.isServer)
-		{
-			UpdateInformationZone(remove: true);
-		}
-	}
-
-	public bool ValidateAIPoint(Vector3 pos)
-	{
-		//IL_000c: Unknown result type (might be due to invalid IL or missing references)
-		//IL_000d: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0017: Unknown result type (might be due to invalid IL or missing references)
-		//IL_001c: Unknown result type (might be due to invalid IL or missing references)
-		((Component)this).gameObject.SetActive(false);
-		bool result = !GamePhysics.CheckSphere(pos + Vector3.up * 0.6f, 0.5f, 65537, (QueryTriggerInteraction)0);
-		((Component)this).gameObject.SetActive(true);
-		return result;
-	}
-
-	public void UpdateInformationZone(bool remove)
-	{
-		//IL_0006: Unknown result type (might be due to invalid IL or missing references)
-		AIInformationZone forPoint = AIInformationZone.GetForPoint(((Component)this).transform.position);
-		if (!((Object)(object)forPoint == (Object)null))
-		{
-			if (remove)
-			{
-				forPoint.RemoveDynamicAIPoints(movePoints, coverPoints);
-			}
-			else
-			{
-				forPoint.AddDynamicAIPoints(movePoints, coverPoints, ValidateAIPoint);
-			}
-		}
-	}
-
-	public void CheckDespawn()
-	{
-		if (!PlayersNearby() && (!Object.op_Implicit((Object)(object)npcSpawner) || npcSpawner.currentPopulation <= 0))
-		{
-			CleanupSpawned();
-			Kill();
-		}
-	}
-
-	public void CleanupSpawned()
-	{
-		if (spawnGroups != null)
-		{
-			SpawnGroup[] array = spawnGroups;
-			for (int i = 0; i < array.Length; i++)
-			{
-				array[i].Clear();
-			}
-		}
-		if (Object.op_Implicit((Object)(object)npcSpawner))
-		{
-			npcSpawner.Clear();
-		}
-	}
-
-	public bool PlayersNearby()
-	{
-		//IL_000c: Unknown result type (might be due to invalid IL or missing references)
-		List<BasePlayer> list = Pool.Get<List<BasePlayer>>();
-		Vis.Entities(((Component)this).transform.position, TimeoutPlayerCheckRadius(), list, 131072, (QueryTriggerInteraction)2);
-		bool result = false;
-		foreach (BasePlayer item in list)
-		{
-			if (!item.IsSleeping() && item.IsAlive())
-			{
-				result = true;
-				break;
-			}
-		}
-		Pool.FreeUnmanaged<BasePlayer>(ref list);
-		return result;
-	}
-
-	public virtual float TimeoutPlayerCheckRadius()
-	{
-		return 10f;
-	}
-}
-
-
-using System;
-using System.Collections.Generic;
-using UnityEngine;
-
-public class HexagonGridGenerator : BaseEntity
-{
-	public GameObjectRef[] hexTilePrefabs;
-
-	[Space]
-	public int gridRadius = 5;
-
-	public float tileSpacing = 1.5f;
-
-	[Space]
-	public float levelCount = 5f;
-
-	public float levelSpacing = 20f;
-
-	private readonly List<HexagonTile> hexTiles = new List<HexagonTile>();
-
-	public static HexagonGridGenerator Instance;
-
-	public override void ServerInit()
-	{
-		base.ServerInit();
-		Instance = this;
-		GenerateHexGrid();
-	}
-
-	public void GenerateHexGrid()
-	{
-		//IL_0041: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0046: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0056: Unknown result type (might be due to invalid IL or missing references)
-		//IL_005b: Unknown result type (might be due to invalid IL or missing references)
-		for (int num = hexTiles.Count; num > 0; num--)
-		{
-			hexTiles[num - 1].Kill();
-		}
-		hexTiles.Clear();
-		for (int i = 0; (float)i < levelCount; i++)
-		{
-			GenerateLevel(((Component)this).transform.position + Vector3.up * (levelSpacing * (float)(i + 1)), i);
-		}
-	}
-
-	private void GenerateLevel(Vector3 basePos, int level)
-	{
-		//IL_0074: Unknown result type (might be due to invalid IL or missing references)
-		//IL_007e: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0083: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0088: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00b1: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00b6: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00ca: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00cc: Unknown result type (might be due to invalid IL or missing references)
-		float num = tileSpacing * 2f;
-		float num2 = Mathf.Sqrt(3f) * tileSpacing;
-		for (int i = -gridRadius; i <= gridRadius; i++)
-		{
-			int num3 = Mathf.Max(-gridRadius, -i - gridRadius);
-			int num4 = Mathf.Min(gridRadius, -i + gridRadius);
-			for (int j = num3; j <= num4; j++)
-			{
-				float num5 = ((float)i + (float)j / 2f) * num;
-				float num6 = (float)j * num2;
-				Vector3 pos = basePos + new Vector3(num5, 0f, num6);
-				int num7 = Random.Range(-5, 6);
-				float num8 = 30f + 180f * (float)num7;
-				Quaternion rot = Quaternion.Euler(0f, num8, 0f);
-				HexagonTile hexagonTile = GameManager.server.CreateEntity(hexTilePrefabs[level].resourcePath, pos, rot) as HexagonTile;
-				hexagonTile.Spawn();
-				hexTiles.Add(hexagonTile);
-			}
-		}
-	}
-
-	[ServerVar(Help = "<gridSize> 5 <tileSpacing> 1.35")]
-	public static void generategrid(Arg args)
-	{
-		int @int = args.GetInt(0, 5);
-		float @float = args.GetFloat(1, 1.35f);
-		@int = Math.Clamp(@int, 1, 50);
-		@float = Mathf.Clamp(@float, 1.35f, float.PositiveInfinity);
-		Instance.gridRadius = @int;
-		Instance.tileSpacing = @float;
-		Instance.GenerateHexGrid();
-	}
-}
-
-
-using System;
-using UnityEngine;
-
-public class HexagonTile : BaseCombatEntity, IDetector
-{
-	public GameObject[] variants;
-
-	public AnimationCurve tweenCurve;
-
-	private MeshRenderer mesh;
-
-	public bool ShouldTrigger()
-	{
-		return true;
-	}
-
-	public void OnObjects()
-	{
-		using FlagsUpdateScope flagsUpdateScope = StartSetFlags(FlagsUpdateMode.SendNetworkUpdate);
-		flagsUpdateScope.Set(Flags.Busy, b: true);
-	}
-
-	public void OnObjectAdded(GameObject obj, Collider col)
-	{
-	}
-
-	public void OnEmpty()
-	{
-	}
-
-	public override void OnDied(HitInfo info)
-	{
-		base.OnDied(info);
-		using FlagsUpdateScope flagsUpdateScope = StartSetFlags(FlagsUpdateMode.SendNetworkUpdate);
-		flagsUpdateScope.Set(Flags.Busy, b: true);
-	}
-
-	public override void OnFlagsChanged(Flags old, Flags next)
-	{
-		base.OnFlagsChanged(old, next);
-		if ((old & Flags.Busy) == Flags.Busy != ((next & Flags.Busy) == Flags.Busy) && base.isServer)
-		{
-			((FacepunchBehaviour)this).Invoke((Action)delegate
-			{
-				Kill();
-			}, 1.2f);
-		}
-	}
-}
-
-
-using UnityEngine;
-
-public class RaceWaypointVisual : MonoBehaviour
-{
-	public GameObject RegularCheckpoint;
-
-	public GameObject FinishCheckpoint;
-}
-
-
-using System;
-using System.Collections.Generic;
-using Facepunch;
-using ProtoBuf;
-using UnityEngine;
-
-public class WaypointRace : BaseEntity
-{
-	private class PendingRaceResults
-	{
-		private class Completion
-		{
-			public List<BasePlayer> players = new List<BasePlayer>();
-
-			public float time;
-
-			public bool valid;
-		}
-
-		private List<Completion> Completions = new List<Completion>();
-
-		public int totalParticipants;
-
-		public int RegisterCompletion(List<BasePlayer> forPlayers, float time, bool valid)
-		{
-			Completion completion = new Completion();
-			foreach (BasePlayer forPlayer in forPlayers)
-			{
-				completion.players.Add(forPlayer);
-			}
-			completion.time = time;
-			completion.valid = valid;
-			Completions.Add(completion);
-			if (Completions.Count == totalParticipants)
-			{
-				TextTable val = Pool.Get<TextTable>();
-				try
-				{
-					val.AddColumns(new string[3] { "Place", "Players", "Time" });
-					for (int i = 0; i < Completions.Count; i++)
-					{
-						Completion completion2 = Completions[i];
-						if (!completion2.valid)
-						{
-							continue;
-						}
-						string text = "";
-						foreach (BasePlayer player in completion2.players)
-						{
-							text = text + player.displayName + ",";
-						}
-						val.AddRow(new string[3]
-						{
-							$"P{i + 1}",
-							text,
-							MathEx.SnapTo(completion2.time, 0.1f).ToString()
-						});
-					}
-					string msg = ((object)val).ToString();
-					foreach (Completion completion3 in Completions)
-					{
-						foreach (BasePlayer player2 in completion3.players)
-						{
-							player2.ChatMessage(msg);
-						}
-					}
-				}
-				finally
-				{
-					((IDisposable)val)?.Dispose();
-				}
-			}
-			return Completions.Count;
-		}
-	}
-
-	public float WaypointRadius = 10f;
-
-	public RaceWaypointVisual TargetWaypointVisual;
-
-	public RaceWaypointVisual NextWaypointVisual;
-
-	private List<Vector3> racePoints = new List<Vector3>();
-
-	private EntityRef<BaseVehicle> racingVehicle;
-
-	private int currentWaypoint;
-
-	public static Phrase stageNotifyPhrase = new Phrase("race_notify", "Reached checkpoint {0}/{1} : {2}s");
-
-	public static Phrase raceCompletePhrase = new Phrase("race_complete", "Finished race {0}/{1} in {2}s");
-
-	private PendingRaceResults raceResults;
-
-	private TimeSince startTime;
-
-	[ServerVar(Saved = true, Help = "How long a race can go until it times out (in seconds)")]
-	public static float raceTimeout = 900f;
-
-	[ServerVar]
-	public static void startRace(Arg arg)
-	{
-		//IL_0063: Unknown result type (might be due to invalid IL or missing references)
-		//IL_01ec: Unknown result type (might be due to invalid IL or missing references)
-		//IL_01f1: Unknown result type (might be due to invalid IL or missing references)
-		string @string = arg.GetString(0, "");
-		List<Transform> list = Pool.Get<List<Transform>>();
-		WaypointRaceTarget.GetWaypoints(@string, list);
-		if (list.Count == 0)
-		{
-			arg.ReplyWith("Couldn't find any waypoints for " + @string + ", is the name correct?");
-			return;
-		}
-		Debug.Log((object)$"Starting race {@string} with {list.Count} waypoints");
-		List<BasePlayer> list2 = Pool.Get<List<BasePlayer>>();
-		Vis.Entities(list[0].position, 30f, list2, 131072, (QueryTriggerInteraction)2);
-		List<BaseVehicle> list3 = Pool.Get<List<BaseVehicle>>();
-		for (int i = 0; i < list2.Count; i++)
-		{
-			if (list2[i].isClient)
-			{
-				list2.RemoveAt(i);
-				i--;
-				continue;
-			}
-			if (!list2[i].isMounted)
-			{
-				Debug.Log((object)("Remove player " + list2[i].displayName + " from race, not mounted"));
-				list2.RemoveAt(i);
-				i--;
-				continue;
-			}
-			BaseMountable mounted = list2[i].GetMounted();
-			if ((Object)(object)mounted == (Object)null || (Object)(object)mounted.VehicleParent() == (Object)null)
-			{
-				Debug.Log((object)("Remove player " + list2[i].displayName + " from race, no vehicle"));
-				list2.RemoveAt(i);
-				i--;
-				continue;
-			}
-			BaseVehicle baseVehicle = mounted.VehicleParent();
-			if (!baseVehicle.IsDriver(list2[i]))
-			{
-				Debug.Log((object)("Remove player " + list2[i].displayName + " from race, not a driver"));
-				list2.RemoveAt(i);
-				i--;
-			}
-			else if (!list3.Contains(baseVehicle))
-			{
-				list3.Add(baseVehicle);
-			}
-		}
-		PendingRaceResults results = new PendingRaceResults
-		{
-			totalParticipants = list3.Count
-		};
-		foreach (BaseVehicle item in list3)
-		{
-			WaypointRace obj = GameManager.server.CreateEntity("assets/prefabs/misc/waypointrace/waypointrace.prefab", ((Component)item).transform.position, Quaternion.identity) as WaypointRace;
-			obj.Setup(list, item, results);
-			obj.Spawn();
-		}
-		Pool.FreeUnmanaged<BasePlayer>(ref list2);
-		Pool.FreeUnmanaged<BaseVehicle>(ref list3);
-		Pool.FreeUnmanaged<Transform>(ref list);
-	}
-
-	private void Setup(List<Transform> waypoints, BaseVehicle participant, PendingRaceResults results)
-	{
-		//IL_0024: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0054: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0059: Unknown result type (might be due to invalid IL or missing references)
-		racingVehicle.Set(participant);
-		foreach (Transform waypoint in waypoints)
-		{
-			racePoints.Add(waypoint.position);
-		}
-		raceResults = results;
-		startTime = TimeSince.op_Implicit(0f);
-	}
-
-	public override void Save(SaveInfo info)
-	{
-		//IL_005e: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0063: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0074: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00a4: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00a9: Unknown result type (might be due to invalid IL or missing references)
-		base.Save(info);
-		if (info.msg.waypointRace == null)
-		{
-			info.msg.waypointRace = Pool.Get<WaypointRace>();
-		}
-		info.msg.waypointRace.positions = Pool.Get<List<Vector3>>();
-		info.msg.waypointRace.positions.Clear();
-		foreach (Vector3 racePoint in racePoints)
-		{
-			info.msg.waypointRace.positions.Add(racePoint);
-		}
-		info.msg.waypointRace.racingVehicle = racingVehicle.uid;
-		info.msg.waypointRace.currentWaypoint = currentWaypoint;
-	}
-
-	public override void Load(LoadInfo info)
-	{
-		base.Load(info);
-	}
-
-	private void Update()
-	{
-		//IL_0054: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0037: Unknown result type (might be due to invalid IL or missing references)
-		//IL_007a: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00aa: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00af: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00b6: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00bb: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00bc: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00c1: Unknown result type (might be due to invalid IL or missing references)
-		//IL_011b: Unknown result type (might be due to invalid IL or missing references)
-		//IL_01fc: Unknown result type (might be due to invalid IL or missing references)
-		//IL_016b: Unknown result type (might be due to invalid IL or missing references)
-		if (!base.isServer)
-		{
-			return;
-		}
-		BaseVehicle baseVehicle = racingVehicle.Get(base.isServer);
-		if ((Object)(object)baseVehicle == (Object)null || baseVehicle.IsDestroyed || baseVehicle.IsDead() || TimeSince.op_Implicit(startTime) > raceTimeout)
-		{
-			raceResults.RegisterCompletion(new List<BasePlayer>(), TimeSince.op_Implicit(startTime), valid: false);
-			Kill();
-			return;
-		}
-		((Component)this).transform.position = ((Component)baseVehicle).transform.position;
-		if (racePoints.Count <= currentWaypoint + 1)
-		{
-			return;
-		}
-		Vector3 val = racePoints[currentWaypoint + 1];
-		Vector3 val2 = ((Component)baseVehicle).transform.position - val;
-		if (!(((Vector3)(ref val2)).sqrMagnitude <= WaypointRadius * WaypointRadius))
-		{
-			return;
-		}
-		currentWaypoint++;
-		List<BasePlayer> list = Pool.Get<List<BasePlayer>>();
-		baseVehicle.GetMountedPlayers(list);
-		if (currentWaypoint >= racePoints.Count - 1)
-		{
-			int num = raceResults.RegisterCompletion(list, TimeSince.op_Implicit(startTime), valid: true);
-			foreach (BasePlayer item in list)
-			{
-				item.ShowToast(GameTip.Styles.Blue_Normal, raceCompletePhrase, false, num.ToString(), raceResults.totalParticipants.ToString(), MathEx.SnapTo(TimeSince.op_Implicit(startTime), 0.1f).ToString());
-			}
-			Kill();
-		}
-		else
-		{
-			foreach (BasePlayer item2 in list)
-			{
-				item2.ShowToast(GameTip.Styles.Blue_Normal, stageNotifyPhrase, false, currentWaypoint.ToString(), (racePoints.Count - 1).ToString(), MathEx.SnapTo(TimeSince.op_Implicit(startTime), 0.1f).ToString());
-			}
-			SendNetworkUpdate();
-		}
-		Pool.FreeUnmanaged<BasePlayer>(ref list);
-	}
-}
-
-
-using System;
-using System.Collections.Generic;
-using Facepunch;
-using UnityEngine;
-
-private class PendingRaceResults
-{
-	private class Completion
-	{
-		public List<BasePlayer> players = new List<BasePlayer>();
-
-		public float time;
-
-		public bool valid;
-	}
-
-	private List<Completion> Completions = new List<Completion>();
-
-	public int totalParticipants;
-
-	public int RegisterCompletion(List<BasePlayer> forPlayers, float time, bool valid)
-	{
-		Completion completion = new Completion();
-		foreach (BasePlayer forPlayer in forPlayers)
-		{
-			completion.players.Add(forPlayer);
-		}
-		completion.time = time;
-		completion.valid = valid;
-		Completions.Add(completion);
-		if (Completions.Count == totalParticipants)
-		{
-			TextTable val = Pool.Get<TextTable>();
-			try
-			{
-				val.AddColumns(new string[3] { "Place", "Players", "Time" });
-				for (int i = 0; i < Completions.Count; i++)
-				{
-					Completion completion2 = Completions[i];
-					if (!completion2.valid)
-					{
-						continue;
-					}
-					string text = "";
-					foreach (BasePlayer player in completion2.players)
-					{
-						text = text + player.displayName + ",";
-					}
-					val.AddRow(new string[3]
-					{
-						$"P{i + 1}",
-						text,
-						MathEx.SnapTo(completion2.time, 0.1f).ToString()
-					});
-				}
-				string msg = ((object)val).ToString();
-				foreach (Completion completion3 in Completions)
-				{
-					foreach (BasePlayer player2 in completion3.players)
-					{
-						player2.ChatMessage(msg);
-					}
-				}
-			}
-			finally
-			{
-				((IDisposable)val)?.Dispose();
-			}
-		}
-		return Completions.Count;
-	}
-}
-
-
-using System.Collections.Generic;
-
-private class Completion
-{
-	public List<BasePlayer> players = new List<BasePlayer>();
-
-	public float time;
-
-	public bool valid;
 }
 
 

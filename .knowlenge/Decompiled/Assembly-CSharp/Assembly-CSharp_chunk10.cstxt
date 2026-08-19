@@ -1,3 +1,1160 @@
+using System;
+using UnityEngine;
+
+public class Pinata : BaseCombatEntity
+{
+	[Serializable]
+	public struct VisualThreshold
+	{
+		public GameObject Root;
+
+		public GameObjectRef DestroyEffect;
+
+		[Range(0f, 1f)]
+		public float HealthGreaterThan;
+	}
+
+	public Transform DropPoint;
+
+	public float DropPointRadius;
+
+	[Header("Hit Animation")]
+	public float TotalSwingTime = 0.6f;
+
+	public float SwingForce = 45f;
+
+	public Transform SwingTransform;
+
+	public AnimationCurve SwingCurve = new AnimationCurve((Keyframe[])(object)new Keyframe[3]
+	{
+		new Keyframe(0f, 0f),
+		new Keyframe(0.5f, 1f),
+		new Keyframe(1f, 0f)
+	});
+
+	[Header("Visual")]
+	public VisualThreshold[] Thresholds;
+
+	public LineRenderer Line;
+
+	public Transform DestroyEffectSpawnPos;
+
+	public float HangLength = -1.863f;
+
+	public GameObjectRef FinalDestroyEffect;
+
+	public override void OnDied(HitInfo info)
+	{
+		//IL_0055: Unknown result type (might be due to invalid IL or missing references)
+		//IL_005a: Unknown result type (might be due to invalid IL or missing references)
+		//IL_006f: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0074: Unknown result type (might be due to invalid IL or missing references)
+		//IL_007b: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0081: Unknown result type (might be due to invalid IL or missing references)
+		base.OnDied(info);
+		ItemAmount[] reward = PrefabAttribute.server.Find<PinataPayouts>(prefabID).GetPayout().Reward;
+		foreach (ItemAmount itemAmount in reward)
+		{
+			if ((Object)(object)itemAmount.itemDef != (Object)null)
+			{
+				ItemManager.Create(itemAmount.itemDef, (int)itemAmount.amount, 0uL, isServerSide: true, 0uL).CreateWorldObject(DropPoint.position + Random.onUnitSphere * Random.Range(0f, DropPointRadius));
+			}
+		}
+	}
+}
+
+
+using System;
+using UnityEngine;
+
+[Serializable]
+public struct VisualThreshold
+{
+	public GameObject Root;
+
+	public GameObjectRef DestroyEffect;
+
+	[Range(0f, 1f)]
+	public float HealthGreaterThan;
+}
+
+
+using System;
+using UnityEngine;
+
+public class PinataPayouts : PrefabAttribute, IServerComponent
+{
+	[Serializable]
+	public struct Payout
+	{
+		public ItemAmount[] Reward;
+
+		public int Chance;
+	}
+
+	public Payout[] AllPayouts;
+
+	private int totalChance;
+
+	public Payout GetPayout()
+	{
+		if (totalChance == 0)
+		{
+			Payout[] allPayouts = AllPayouts;
+			for (int i = 0; i < allPayouts.Length; i++)
+			{
+				Payout payout = allPayouts[i];
+				totalChance += payout.Chance;
+			}
+		}
+		if (totalChance == 0)
+		{
+			return AllPayouts[0];
+		}
+		int num = Random.Range(0, totalChance);
+		int num2 = 0;
+		for (int j = 0; j < AllPayouts.Length; j++)
+		{
+			Payout result = AllPayouts[j];
+			if (num <= num2 + result.Chance)
+			{
+				return result;
+			}
+			num2 += result.Chance;
+		}
+		return AllPayouts[0];
+	}
+
+	protected override Type GetIndexedType()
+	{
+		return typeof(PinataPayouts);
+	}
+}
+
+
+using System;
+
+[Serializable]
+public struct Payout
+{
+	public ItemAmount[] Reward;
+
+	public int Chance;
+}
+
+
+using System.Collections.Generic;
+using UnityEngine;
+
+public class InstantCameraFlashController : MonoBehaviour
+{
+	[SerializeField]
+	private List<Light> Flash = new List<Light>();
+
+	private void Awake()
+	{
+		DisableFlash();
+	}
+
+	public void EnableFlash()
+	{
+		foreach (Light item in Flash)
+		{
+			if ((Object)(object)item != (Object)null)
+			{
+				((Behaviour)item).enabled = true;
+			}
+		}
+	}
+
+	public void DisableFlash()
+	{
+		foreach (Light item in Flash)
+		{
+			if ((Object)(object)item != (Object)null)
+			{
+				((Behaviour)item).enabled = false;
+			}
+		}
+	}
+}
+
+
+public enum CameraFocusMode
+{
+	Off,
+	Auto,
+	Manual
+}
+
+
+public class ItemModPhoto : ItemModAssociatedEntity<PhotoEntity>
+{
+	protected override bool AllowNullParenting => true;
+}
+
+
+using System;
+using System.Collections.Generic;
+using Facepunch;
+using ProtoBuf;
+using Rust;
+
+public class PhotoEntity : ImageStorageEntity, IUGCBrowserEntity
+{
+	public ulong PhotographerSteamId { get; private set; }
+
+	public uint ImageCrc { get; private set; }
+
+	protected override uint CrcToLoad => ImageCrc;
+
+	public override bool ShouldTransferAssociatedFiles => true;
+
+	public uint[] GetContentCRCs
+	{
+		get
+		{
+			if (ImageCrc == 0)
+			{
+				return Array.Empty<uint>();
+			}
+			return new uint[1] { ImageCrc };
+		}
+	}
+
+	public UGCType ContentType => UGCType.ImageJpg;
+
+	public List<ulong> EditingHistory
+	{
+		get
+		{
+			if (PhotographerSteamId == 0)
+			{
+				return new List<ulong>();
+			}
+			return new List<ulong> { PhotographerSteamId };
+		}
+	}
+
+	public BaseNetworkable UgcEntity => this;
+
+	public string ContentString => string.Empty;
+
+	public override void Load(LoadInfo info)
+	{
+		base.Load(info);
+		if (info.msg.photo != null)
+		{
+			PhotographerSteamId = info.msg.photo.photographerSteamId;
+			ImageCrc = info.msg.photo.imageCrc;
+		}
+	}
+
+	public override void Save(SaveInfo info)
+	{
+		base.Save(info);
+		info.msg.photo = Pool.Get<Photo>();
+		info.msg.photo.photographerSteamId = PhotographerSteamId;
+		info.msg.photo.imageCrc = ImageCrc;
+	}
+
+	public void SetImageData(ulong steamId, byte[] data)
+	{
+		//IL_000e: Unknown result type (might be due to invalid IL or missing references)
+		ImageCrc = FileStorage.server.Store(data, FileStorage.Type.jpg, net.ID);
+		PhotographerSteamId = steamId;
+	}
+
+	internal override void DoServerDestroy()
+	{
+		//IL_0020: Unknown result type (might be due to invalid IL or missing references)
+		base.DoServerDestroy();
+		if (!Application.isQuitting && net != null)
+		{
+			FileStorage.server.RemoveAllByEntity(net.ID);
+		}
+	}
+
+	public void ClearContent()
+	{
+		ImageCrc = 0u;
+		SendNetworkUpdate();
+	}
+}
+
+
+using UnityEngine;
+using UnityEngine.UI;
+
+public class PhotoPanel : MonoBehaviour, IImageReceiver, IItemPanel
+{
+	public RawImage Image;
+
+	public InputField Message;
+}
+
+
+using Rust.UI;
+using UnityEngine;
+using UnityEngine.UI;
+
+public class SignPanel : MonoBehaviour, IImageReceiver, IItemPanel
+{
+	public RawImage Image;
+
+	public RectTransform ImageContainer;
+
+	public RustText DisabledSignsMessage;
+}
+
+
+using System;
+using System.Collections.Generic;
+using Facepunch;
+using ProtoBuf;
+using UnityEngine;
+
+public class PaddlingPool : LiquidContainer, ISplashable
+{
+	public const Flags FilledUp = Flags.Reserved4;
+
+	public Transform poolWaterVolume;
+
+	public GameObject poolWaterVisual;
+
+	public float minimumWaterHeight;
+
+	public float maximumWaterHeight = 1f;
+
+	public WaterVolume waterVolume;
+
+	public bool alignWaterUp = true;
+
+	public GameObjectRef destroyedWithWaterEffect;
+
+	public Transform destroyedWithWaterEffectPos;
+
+	public Collider requireLookAt;
+
+	private float lastFillAmount = -1f;
+
+	public override void PostServerLoad()
+	{
+		base.PostServerLoad();
+		Sprinkler.SplashableGrid.RegisterEntity(this);
+	}
+
+	public override void OnDeployed(BaseEntity parent, BasePlayer deployedBy, Item fromItem)
+	{
+		base.OnDeployed(parent, deployedBy, fromItem);
+		Sprinkler.SplashableGrid.RegisterEntity(this);
+	}
+
+	internal override void DoServerDestroy()
+	{
+		base.DoServerDestroy();
+		Sprinkler.SplashableGrid.DeregisterEntity(this);
+	}
+
+	public override void OnParentChanging(BaseEntity oldParent, BaseEntity newParent)
+	{
+		base.OnParentChanging(oldParent, newParent);
+		Sprinkler.SplashableGrid.OnParentChanged(this, oldParent, newParent);
+	}
+
+	public override void OnItemAddedOrRemoved(Item item, bool added)
+	{
+		base.OnItemAddedOrRemoved(item, added);
+		float normalisedFillLevel = GetNormalisedFillLevel();
+		using (FlagsUpdateScope flagsUpdateScope = StartSetFlags(FlagsUpdateMode.SendNetworkUpdate))
+		{
+			flagsUpdateScope.Set(Flags.Reserved4, normalisedFillLevel >= 1f);
+		}
+		UpdatePoolFillAmount(normalisedFillLevel);
+		SendNetworkUpdate();
+	}
+
+	protected override void OnInventoryDirty()
+	{
+		base.OnInventoryDirty();
+		float normalisedFillLevel = GetNormalisedFillLevel();
+		UpdatePoolFillAmount(normalisedFillLevel);
+		SendNetworkUpdate();
+	}
+
+	public bool WantsSplash(ItemDefinition splashType, int amount)
+	{
+		if (base.IsDestroyed)
+		{
+			return false;
+		}
+		if (!HasFlag(Flags.Reserved4) && (Object)(object)splashType != (Object)null)
+		{
+			for (int i = 0; i < ValidItems.Length; i++)
+			{
+				if ((Object)(object)ValidItems[i] != (Object)null && ValidItems[i].itemid == splashType.itemid)
+				{
+					return true;
+				}
+			}
+		}
+		return false;
+	}
+
+	public int DoSplash(ItemDefinition splashType, int amount)
+	{
+		int amount2 = Mathf.Clamp(Mathf.RoundToInt((float)amount * 0.66f), 1, amount);
+		base.inventory.AddItem(splashType, amount2, 0uL);
+		return amount;
+	}
+
+	public override void Save(SaveInfo info)
+	{
+		base.Save(info);
+		info.msg.WaterPool = Pool.Get<WaterPool>();
+		info.msg.WaterPool.fillAmount = GetNormalisedFillLevel();
+	}
+
+	private float GetNormalisedFillLevel()
+	{
+		if (base.inventory.itemList.Count <= 0 || base.inventory.itemList[0] == null)
+		{
+			return 0f;
+		}
+		return (float)base.inventory.itemList[0].amount / (float)maxStackSize;
+	}
+
+	private void UpdatePoolFillAmount(float normalisedAmount)
+	{
+		//IL_0044: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0049: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0058: Unknown result type (might be due to invalid IL or missing references)
+		//IL_006c: Unknown result type (might be due to invalid IL or missing references)
+		poolWaterVisual.gameObject.SetActive(normalisedAmount > 0f);
+		waterVolume.waterEnabled = normalisedAmount > 0f;
+		float y = Mathf.Lerp(minimumWaterHeight, maximumWaterHeight, normalisedAmount);
+		Vector3 localPosition = poolWaterVolume.localPosition;
+		localPosition.y = y;
+		poolWaterVolume.localPosition = localPosition;
+		if (alignWaterUp)
+		{
+			poolWaterVolume.up = Vector3.up;
+		}
+		if (normalisedAmount > 0f && lastFillAmount < normalisedAmount && waterVolume.entityContents != null)
+		{
+			foreach (BaseEntity entityContent in waterVolume.entityContents)
+			{
+				if (entityContent is IPoolVehicle poolVehicle)
+				{
+					poolVehicle.WakeUp();
+				}
+			}
+		}
+		lastFillAmount = normalisedAmount;
+	}
+
+	public override int ConsumptionAmount()
+	{
+		return 0;
+	}
+
+	public override void DestroyShared()
+	{
+		//IL_0015: Unknown result type (might be due to invalid IL or missing references)
+		//IL_001a: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0030: Unknown result type (might be due to invalid IL or missing references)
+		base.DestroyShared();
+		if (!base.isServer)
+		{
+			return;
+		}
+		PooledList<BaseEntity> val = Pool.Get<PooledList<BaseEntity>>();
+		try
+		{
+			OBB val2 = WorldSpaceBounds();
+			val2.extents.y += 0.2f;
+			Vis.Entities(val2, (List<BaseEntity>)(object)val, 32768, (QueryTriggerInteraction)2);
+			foreach (BaseEntity item in (List<BaseEntity>)(object)val)
+			{
+				if (item is IPoolVehicle poolVehicle)
+				{
+					poolVehicle.OnPoolDestroyed();
+				}
+			}
+		}
+		finally
+		{
+			((IDisposable)val)?.Dispose();
+		}
+	}
+}
+
+
+using UnityEngine;
+
+public class TwitchTrophy : BaseCombatEntity
+{
+	[Header("Trophy")]
+	public GameObjectRef DialogPrefab;
+}
+
+
+using Rust.UI;
+using UnityEngine;
+
+public class UITwitchTrophy : UIDialog
+{
+	public HttpImage EventImage;
+
+	public RustText EventName;
+
+	public RustText WinningTeamName;
+
+	public RectTransform TeamMembersRoot;
+
+	public GameObject TeamMemberNamePrefab;
+
+	public GameObject MissingDataOverlay;
+}
+
+
+using System.Collections.Generic;
+using Facepunch;
+using UnityEngine;
+
+public class NPCDwelling : BaseEntity
+{
+	public NPCSpawner npcSpawner;
+
+	public float NPCSpawnChance = 1f;
+
+	public SpawnGroup[] spawnGroups;
+
+	public AIMovePoint[] movePoints;
+
+	public AICoverPoint[] coverPoints;
+
+	public override void ServerInit()
+	{
+		base.ServerInit();
+		UpdateInformationZone(remove: false);
+		if ((Object)(object)npcSpawner != (Object)null && Random.Range(0f, 1f) <= NPCSpawnChance)
+		{
+			npcSpawner.SpawnInitial();
+		}
+		SpawnGroup[] array = spawnGroups;
+		foreach (SpawnGroup spawnGroup in array)
+		{
+			if ((Object)(object)spawnGroup == (Object)null)
+			{
+				Debug.LogWarning((object)("Null spawn group in NPCDwelling " + ((Object)this).name + " - skipping"));
+			}
+			else
+			{
+				spawnGroup.SpawnInitial();
+			}
+		}
+	}
+
+	public override void DestroyShared()
+	{
+		if (base.isServer)
+		{
+			CleanupSpawned();
+		}
+		base.DestroyShared();
+		if (base.isServer)
+		{
+			UpdateInformationZone(remove: true);
+		}
+	}
+
+	public bool ValidateAIPoint(Vector3 pos)
+	{
+		//IL_000c: Unknown result type (might be due to invalid IL or missing references)
+		//IL_000d: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0017: Unknown result type (might be due to invalid IL or missing references)
+		//IL_001c: Unknown result type (might be due to invalid IL or missing references)
+		((Component)this).gameObject.SetActive(false);
+		bool result = !GamePhysics.CheckSphere(pos + Vector3.up * 0.6f, 0.5f, 65537, (QueryTriggerInteraction)0);
+		((Component)this).gameObject.SetActive(true);
+		return result;
+	}
+
+	public void UpdateInformationZone(bool remove)
+	{
+		//IL_0006: Unknown result type (might be due to invalid IL or missing references)
+		AIInformationZone forPoint = AIInformationZone.GetForPoint(((Component)this).transform.position);
+		if (!((Object)(object)forPoint == (Object)null))
+		{
+			if (remove)
+			{
+				forPoint.RemoveDynamicAIPoints(movePoints, coverPoints);
+			}
+			else
+			{
+				forPoint.AddDynamicAIPoints(movePoints, coverPoints, ValidateAIPoint);
+			}
+		}
+	}
+
+	public void CheckDespawn()
+	{
+		if (!PlayersNearby() && (!Object.op_Implicit((Object)(object)npcSpawner) || npcSpawner.currentPopulation <= 0))
+		{
+			CleanupSpawned();
+			Kill();
+		}
+	}
+
+	public void CleanupSpawned()
+	{
+		if (spawnGroups != null)
+		{
+			SpawnGroup[] array = spawnGroups;
+			for (int i = 0; i < array.Length; i++)
+			{
+				array[i].Clear();
+			}
+		}
+		if (Object.op_Implicit((Object)(object)npcSpawner))
+		{
+			npcSpawner.Clear();
+		}
+	}
+
+	public bool PlayersNearby()
+	{
+		//IL_000c: Unknown result type (might be due to invalid IL or missing references)
+		List<BasePlayer> list = Pool.Get<List<BasePlayer>>();
+		Vis.Entities(((Component)this).transform.position, TimeoutPlayerCheckRadius(), list, 131072, (QueryTriggerInteraction)2);
+		bool result = false;
+		foreach (BasePlayer item in list)
+		{
+			if (!item.IsSleeping() && item.IsAlive())
+			{
+				result = true;
+				break;
+			}
+		}
+		Pool.FreeUnmanaged<BasePlayer>(ref list);
+		return result;
+	}
+
+	public virtual float TimeoutPlayerCheckRadius()
+	{
+		return 10f;
+	}
+}
+
+
+using System;
+using System.Collections.Generic;
+using UnityEngine;
+
+public class HexagonGridGenerator : BaseEntity
+{
+	public GameObjectRef[] hexTilePrefabs;
+
+	[Space]
+	public int gridRadius = 5;
+
+	public float tileSpacing = 1.5f;
+
+	[Space]
+	public float levelCount = 5f;
+
+	public float levelSpacing = 20f;
+
+	private readonly List<HexagonTile> hexTiles = new List<HexagonTile>();
+
+	public static HexagonGridGenerator Instance;
+
+	public override void ServerInit()
+	{
+		base.ServerInit();
+		Instance = this;
+		GenerateHexGrid();
+	}
+
+	public void GenerateHexGrid()
+	{
+		//IL_0041: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0046: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0056: Unknown result type (might be due to invalid IL or missing references)
+		//IL_005b: Unknown result type (might be due to invalid IL or missing references)
+		for (int num = hexTiles.Count; num > 0; num--)
+		{
+			hexTiles[num - 1].Kill();
+		}
+		hexTiles.Clear();
+		for (int i = 0; (float)i < levelCount; i++)
+		{
+			GenerateLevel(((Component)this).transform.position + Vector3.up * (levelSpacing * (float)(i + 1)), i);
+		}
+	}
+
+	private void GenerateLevel(Vector3 basePos, int level)
+	{
+		//IL_0074: Unknown result type (might be due to invalid IL or missing references)
+		//IL_007e: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0083: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0088: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00b1: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00b6: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00ca: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00cc: Unknown result type (might be due to invalid IL or missing references)
+		float num = tileSpacing * 2f;
+		float num2 = Mathf.Sqrt(3f) * tileSpacing;
+		for (int i = -gridRadius; i <= gridRadius; i++)
+		{
+			int num3 = Mathf.Max(-gridRadius, -i - gridRadius);
+			int num4 = Mathf.Min(gridRadius, -i + gridRadius);
+			for (int j = num3; j <= num4; j++)
+			{
+				float num5 = ((float)i + (float)j / 2f) * num;
+				float num6 = (float)j * num2;
+				Vector3 pos = basePos + new Vector3(num5, 0f, num6);
+				int num7 = Random.Range(-5, 6);
+				float num8 = 30f + 180f * (float)num7;
+				Quaternion rot = Quaternion.Euler(0f, num8, 0f);
+				HexagonTile hexagonTile = GameManager.server.CreateEntity(hexTilePrefabs[level].resourcePath, pos, rot) as HexagonTile;
+				hexagonTile.Spawn();
+				hexTiles.Add(hexagonTile);
+			}
+		}
+	}
+
+	[ServerVar(Help = "<gridSize> 5 <tileSpacing> 1.35")]
+	public static void generategrid(Arg args)
+	{
+		int @int = args.GetInt(0, 5);
+		float @float = args.GetFloat(1, 1.35f);
+		@int = Math.Clamp(@int, 1, 50);
+		@float = Mathf.Clamp(@float, 1.35f, float.PositiveInfinity);
+		Instance.gridRadius = @int;
+		Instance.tileSpacing = @float;
+		Instance.GenerateHexGrid();
+	}
+}
+
+
+using System;
+using UnityEngine;
+
+public class HexagonTile : BaseCombatEntity, IDetector
+{
+	public GameObject[] variants;
+
+	public AnimationCurve tweenCurve;
+
+	private MeshRenderer mesh;
+
+	public bool ShouldTrigger()
+	{
+		return true;
+	}
+
+	public void OnObjects()
+	{
+		using FlagsUpdateScope flagsUpdateScope = StartSetFlags(FlagsUpdateMode.SendNetworkUpdate);
+		flagsUpdateScope.Set(Flags.Busy, b: true);
+	}
+
+	public void OnObjectAdded(GameObject obj, Collider col)
+	{
+	}
+
+	public void OnEmpty()
+	{
+	}
+
+	public override void OnDied(HitInfo info)
+	{
+		base.OnDied(info);
+		using FlagsUpdateScope flagsUpdateScope = StartSetFlags(FlagsUpdateMode.SendNetworkUpdate);
+		flagsUpdateScope.Set(Flags.Busy, b: true);
+	}
+
+	public override void OnFlagsChanged(Flags old, Flags next)
+	{
+		base.OnFlagsChanged(old, next);
+		if ((old & Flags.Busy) == Flags.Busy != ((next & Flags.Busy) == Flags.Busy) && base.isServer)
+		{
+			((FacepunchBehaviour)this).Invoke((Action)delegate
+			{
+				Kill();
+			}, 1.2f);
+		}
+	}
+}
+
+
+using UnityEngine;
+
+public class RaceWaypointVisual : MonoBehaviour
+{
+	public GameObject RegularCheckpoint;
+
+	public GameObject FinishCheckpoint;
+}
+
+
+using System;
+using System.Collections.Generic;
+using Facepunch;
+using ProtoBuf;
+using UnityEngine;
+
+public class WaypointRace : BaseEntity
+{
+	private class PendingRaceResults
+	{
+		private class Completion
+		{
+			public List<BasePlayer> players = new List<BasePlayer>();
+
+			public float time;
+
+			public bool valid;
+		}
+
+		private List<Completion> Completions = new List<Completion>();
+
+		public int totalParticipants;
+
+		public int RegisterCompletion(List<BasePlayer> forPlayers, float time, bool valid)
+		{
+			Completion completion = new Completion();
+			foreach (BasePlayer forPlayer in forPlayers)
+			{
+				completion.players.Add(forPlayer);
+			}
+			completion.time = time;
+			completion.valid = valid;
+			Completions.Add(completion);
+			if (Completions.Count == totalParticipants)
+			{
+				TextTable val = Pool.Get<TextTable>();
+				try
+				{
+					val.AddColumns(new string[3] { "Place", "Players", "Time" });
+					for (int i = 0; i < Completions.Count; i++)
+					{
+						Completion completion2 = Completions[i];
+						if (!completion2.valid)
+						{
+							continue;
+						}
+						string text = "";
+						foreach (BasePlayer player in completion2.players)
+						{
+							text = text + player.displayName + ",";
+						}
+						val.AddRow(new string[3]
+						{
+							$"P{i + 1}",
+							text,
+							MathEx.SnapTo(completion2.time, 0.1f).ToString()
+						});
+					}
+					string msg = ((object)val).ToString();
+					foreach (Completion completion3 in Completions)
+					{
+						foreach (BasePlayer player2 in completion3.players)
+						{
+							player2.ChatMessage(msg);
+						}
+					}
+				}
+				finally
+				{
+					((IDisposable)val)?.Dispose();
+				}
+			}
+			return Completions.Count;
+		}
+	}
+
+	public float WaypointRadius = 10f;
+
+	public RaceWaypointVisual TargetWaypointVisual;
+
+	public RaceWaypointVisual NextWaypointVisual;
+
+	private List<Vector3> racePoints = new List<Vector3>();
+
+	private EntityRef<BaseVehicle> racingVehicle;
+
+	private int currentWaypoint;
+
+	public static Phrase stageNotifyPhrase = new Phrase("race_notify", "Reached checkpoint {0}/{1} : {2}s");
+
+	public static Phrase raceCompletePhrase = new Phrase("race_complete", "Finished race {0}/{1} in {2}s");
+
+	private PendingRaceResults raceResults;
+
+	private TimeSince startTime;
+
+	[ServerVar(Saved = true, Help = "How long a race can go until it times out (in seconds)")]
+	public static float raceTimeout = 900f;
+
+	[ServerVar]
+	public static void startRace(Arg arg)
+	{
+		//IL_0063: Unknown result type (might be due to invalid IL or missing references)
+		//IL_01ec: Unknown result type (might be due to invalid IL or missing references)
+		//IL_01f1: Unknown result type (might be due to invalid IL or missing references)
+		string @string = arg.GetString(0, "");
+		List<Transform> list = Pool.Get<List<Transform>>();
+		WaypointRaceTarget.GetWaypoints(@string, list);
+		if (list.Count == 0)
+		{
+			arg.ReplyWith("Couldn't find any waypoints for " + @string + ", is the name correct?");
+			return;
+		}
+		Debug.Log((object)$"Starting race {@string} with {list.Count} waypoints");
+		List<BasePlayer> list2 = Pool.Get<List<BasePlayer>>();
+		Vis.Entities(list[0].position, 30f, list2, 131072, (QueryTriggerInteraction)2);
+		List<BaseVehicle> list3 = Pool.Get<List<BaseVehicle>>();
+		for (int i = 0; i < list2.Count; i++)
+		{
+			if (list2[i].isClient)
+			{
+				list2.RemoveAt(i);
+				i--;
+				continue;
+			}
+			if (!list2[i].isMounted)
+			{
+				Debug.Log((object)("Remove player " + list2[i].displayName + " from race, not mounted"));
+				list2.RemoveAt(i);
+				i--;
+				continue;
+			}
+			BaseMountable mounted = list2[i].GetMounted();
+			if ((Object)(object)mounted == (Object)null || (Object)(object)mounted.VehicleParent() == (Object)null)
+			{
+				Debug.Log((object)("Remove player " + list2[i].displayName + " from race, no vehicle"));
+				list2.RemoveAt(i);
+				i--;
+				continue;
+			}
+			BaseVehicle baseVehicle = mounted.VehicleParent();
+			if (!baseVehicle.IsDriver(list2[i]))
+			{
+				Debug.Log((object)("Remove player " + list2[i].displayName + " from race, not a driver"));
+				list2.RemoveAt(i);
+				i--;
+			}
+			else if (!list3.Contains(baseVehicle))
+			{
+				list3.Add(baseVehicle);
+			}
+		}
+		PendingRaceResults results = new PendingRaceResults
+		{
+			totalParticipants = list3.Count
+		};
+		foreach (BaseVehicle item in list3)
+		{
+			WaypointRace obj = GameManager.server.CreateEntity("assets/prefabs/misc/waypointrace/waypointrace.prefab", ((Component)item).transform.position, Quaternion.identity) as WaypointRace;
+			obj.Setup(list, item, results);
+			obj.Spawn();
+		}
+		Pool.FreeUnmanaged<BasePlayer>(ref list2);
+		Pool.FreeUnmanaged<BaseVehicle>(ref list3);
+		Pool.FreeUnmanaged<Transform>(ref list);
+	}
+
+	private void Setup(List<Transform> waypoints, BaseVehicle participant, PendingRaceResults results)
+	{
+		//IL_0024: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0054: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0059: Unknown result type (might be due to invalid IL or missing references)
+		racingVehicle.Set(participant);
+		foreach (Transform waypoint in waypoints)
+		{
+			racePoints.Add(waypoint.position);
+		}
+		raceResults = results;
+		startTime = TimeSince.op_Implicit(0f);
+	}
+
+	public override void Save(SaveInfo info)
+	{
+		//IL_005e: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0063: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0074: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00a4: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00a9: Unknown result type (might be due to invalid IL or missing references)
+		base.Save(info);
+		if (info.msg.waypointRace == null)
+		{
+			info.msg.waypointRace = Pool.Get<WaypointRace>();
+		}
+		info.msg.waypointRace.positions = Pool.Get<List<Vector3>>();
+		info.msg.waypointRace.positions.Clear();
+		foreach (Vector3 racePoint in racePoints)
+		{
+			info.msg.waypointRace.positions.Add(racePoint);
+		}
+		info.msg.waypointRace.racingVehicle = racingVehicle.uid;
+		info.msg.waypointRace.currentWaypoint = currentWaypoint;
+	}
+
+	public override void Load(LoadInfo info)
+	{
+		base.Load(info);
+	}
+
+	private void Update()
+	{
+		//IL_0054: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0037: Unknown result type (might be due to invalid IL or missing references)
+		//IL_007a: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00aa: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00af: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00b6: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00bb: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00bc: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00c1: Unknown result type (might be due to invalid IL or missing references)
+		//IL_011b: Unknown result type (might be due to invalid IL or missing references)
+		//IL_01fc: Unknown result type (might be due to invalid IL or missing references)
+		//IL_016b: Unknown result type (might be due to invalid IL or missing references)
+		if (!base.isServer)
+		{
+			return;
+		}
+		BaseVehicle baseVehicle = racingVehicle.Get(base.isServer);
+		if ((Object)(object)baseVehicle == (Object)null || baseVehicle.IsDestroyed || baseVehicle.IsDead() || TimeSince.op_Implicit(startTime) > raceTimeout)
+		{
+			raceResults.RegisterCompletion(new List<BasePlayer>(), TimeSince.op_Implicit(startTime), valid: false);
+			Kill();
+			return;
+		}
+		((Component)this).transform.position = ((Component)baseVehicle).transform.position;
+		if (racePoints.Count <= currentWaypoint + 1)
+		{
+			return;
+		}
+		Vector3 val = racePoints[currentWaypoint + 1];
+		Vector3 val2 = ((Component)baseVehicle).transform.position - val;
+		if (!(((Vector3)(ref val2)).sqrMagnitude <= WaypointRadius * WaypointRadius))
+		{
+			return;
+		}
+		currentWaypoint++;
+		List<BasePlayer> list = Pool.Get<List<BasePlayer>>();
+		baseVehicle.GetMountedPlayers(list);
+		if (currentWaypoint >= racePoints.Count - 1)
+		{
+			int num = raceResults.RegisterCompletion(list, TimeSince.op_Implicit(startTime), valid: true);
+			foreach (BasePlayer item in list)
+			{
+				item.ShowToast(GameTip.Styles.Blue_Normal, raceCompletePhrase, false, num.ToString(), raceResults.totalParticipants.ToString(), MathEx.SnapTo(TimeSince.op_Implicit(startTime), 0.1f).ToString());
+			}
+			Kill();
+		}
+		else
+		{
+			foreach (BasePlayer item2 in list)
+			{
+				item2.ShowToast(GameTip.Styles.Blue_Normal, stageNotifyPhrase, false, currentWaypoint.ToString(), (racePoints.Count - 1).ToString(), MathEx.SnapTo(TimeSince.op_Implicit(startTime), 0.1f).ToString());
+			}
+			SendNetworkUpdate();
+		}
+		Pool.FreeUnmanaged<BasePlayer>(ref list);
+	}
+}
+
+
+using System;
+using System.Collections.Generic;
+using Facepunch;
+using UnityEngine;
+
+private class PendingRaceResults
+{
+	private class Completion
+	{
+		public List<BasePlayer> players = new List<BasePlayer>();
+
+		public float time;
+
+		public bool valid;
+	}
+
+	private List<Completion> Completions = new List<Completion>();
+
+	public int totalParticipants;
+
+	public int RegisterCompletion(List<BasePlayer> forPlayers, float time, bool valid)
+	{
+		Completion completion = new Completion();
+		foreach (BasePlayer forPlayer in forPlayers)
+		{
+			completion.players.Add(forPlayer);
+		}
+		completion.time = time;
+		completion.valid = valid;
+		Completions.Add(completion);
+		if (Completions.Count == totalParticipants)
+		{
+			TextTable val = Pool.Get<TextTable>();
+			try
+			{
+				val.AddColumns(new string[3] { "Place", "Players", "Time" });
+				for (int i = 0; i < Completions.Count; i++)
+				{
+					Completion completion2 = Completions[i];
+					if (!completion2.valid)
+					{
+						continue;
+					}
+					string text = "";
+					foreach (BasePlayer player in completion2.players)
+					{
+						text = text + player.displayName + ",";
+					}
+					val.AddRow(new string[3]
+					{
+						$"P{i + 1}",
+						text,
+						MathEx.SnapTo(completion2.time, 0.1f).ToString()
+					});
+				}
+				string msg = ((object)val).ToString();
+				foreach (Completion completion3 in Completions)
+				{
+					foreach (BasePlayer player2 in completion3.players)
+					{
+						player2.ChatMessage(msg);
+					}
+				}
+			}
+			finally
+			{
+				((IDisposable)val)?.Dispose();
+			}
+		}
+		return Completions.Count;
+	}
+}
+
+
+using System.Collections.Generic;
+
+private class Completion
+{
+	public List<BasePlayer> players = new List<BasePlayer>();
+
+	public float time;
+
+	public bool valid;
+}
+
+
 using System.Collections.Generic;
 using UnityEngine;
 
@@ -1844,8 +3001,8 @@ public class ProceduralDynamicDungeon : BaseEntity
 		}
 	}
 
-	[ContextMenu("Test Grid")]
 	[ExecuteInEditMode]
+	[ContextMenu("Test Grid")]
 	public void GenerateGrid()
 	{
 		//IL_0006: Unknown result type (might be due to invalid IL or missing references)
@@ -8159,8 +9316,8 @@ public class EffectParent : EntityComponent<BaseEntity>, IClientComponent
 	[Tooltip("If true the effect isn't our direct child and is in another hierarchy - USE WITH CAUTION")]
 	public bool separatedEffect;
 
-	[Tooltip("If true the effect will be forced to the safe layer that doesn't interact with player colliders")]
 	[Header("USING COLLIDERS? - COLLIDER SAFETY")]
+	[Tooltip("If true the effect will be forced to the safe layer that doesn't interact with player colliders")]
 	public bool forceSafePlayerCollisionLayer;
 }
 
@@ -9123,8 +10280,8 @@ using UnityEngine.UI;
 
 public class HomingLauncherUIDialog : UIDialog
 {
-	[Header("Homing Launcher")]
 	[SerializeField]
+	[Header("Homing Launcher")]
 	private Canvas canvas;
 
 	[SerializeField]
@@ -14223,8 +15380,8 @@ public class BasePet : NPCPlayer, IThinker
 	[ServerVar]
 	public static bool onlyQueueBaseNavMovements = true;
 
-	[Help("How many miliseconds to budget for processing pet movements per frame")]
 	[ServerVar]
+	[Help("How many miliseconds to budget for processing pet movements per frame")]
 	public static float movementupdatebudgetms = 1f;
 
 	public float BaseAttackRate = 2f;
@@ -14919,8 +16076,8 @@ public class AIThinkManager : BaseMonoBehaviour, IServerComponent
 
 	public static ListHashSet<IThinker> _petRemovalQueue = new ListHashSet<IThinker>();
 
-	[Help("How many miliseconds to budget for processing AI entities per server frame")]
 	[ServerVar]
+	[Help("How many miliseconds to budget for processing AI entities per server frame")]
 	public static float framebudgetms = 2f;
 
 	[ServerVar]
@@ -26028,8 +27185,8 @@ public class BoatAI : BaseEntity
 
 	public const string DeepSeaPTBoatPath = "assets/content/vehicles/boats/ptboat/ptboat.deepsea.prefab";
 
-	[SerializeField]
 	[Header("Boat AI")]
+	[SerializeField]
 	private BaseBoat _boat;
 
 	[Header("Boat AI - General")]
@@ -26052,8 +27209,8 @@ public class BoatAI : BaseEntity
 	[SerializeField]
 	private float _awarenessDistance;
 
-	[SerializeField]
 	[Header("Boat AI - Debug")]
+	[SerializeField]
 	private Transform _debugMoveTo;
 
 	[ServerVar(Help = "(Generated) When enabled, draws DDraw visualisations of boat AI steering, avoidance, and pathfinding state")]
@@ -29209,1266 +30366,6 @@ public struct MaterialOption
 	public Material TargetMaterial;
 
 	public Color HudColour;
-}
-
-
-using System;
-using System.Runtime.CompilerServices;
-using ConVar;
-using Facepunch.Network.Raknet;
-using Facepunch.Rust;
-using Network;
-
-public static class PlayerNetworkingProfiler
-{
-	public static int level = 0;
-
-	public static TimeSpan MinFlushInterval = TimeSpan.FromSeconds(1.0);
-
-	public static int ConnectionsPerFrame = 30;
-
-	private static int currentIndex;
-
-	private static DateTime flushCooldown;
-
-	public static void Serialize(AnalyticsTable table, int frameIndex, DateTime timestamp)
-	{
-		if (level == 0)
-		{
-			return;
-		}
-		if (currentIndex >= Net.sv.connections.Count)
-		{
-			if (flushCooldown > DateTime.UtcNow)
-			{
-				return;
-			}
-			flushCooldown = DateTime.UtcNow + MinFlushInterval;
-			currentIndex = 0;
-		}
-		Server sv = Net.sv;
-		Server val = (Server)(object)((sv is Server) ? sv : null);
-		if (val != null)
-		{
-			SerializeRaknet(table, frameIndex, timestamp, val);
-		}
-	}
-
-	private static void SerializeRaknet(AnalyticsTable table, int frameIndex, DateTime timestamp, Server server)
-	{
-		//IL_00ca: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00da: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00ea: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00fa: Unknown result type (might be due to invalid IL or missing references)
-		//IL_010a: Unknown result type (might be due to invalid IL or missing references)
-		//IL_011a: Unknown result type (might be due to invalid IL or missing references)
-		//IL_012a: Unknown result type (might be due to invalid IL or missing references)
-		//IL_013a: Unknown result type (might be due to invalid IL or missing references)
-		//IL_014a: Unknown result type (might be due to invalid IL or missing references)
-		int num = Math.Min(((Server)server).connections.Count, currentIndex + ConnectionsPerFrame);
-		RaknetStats val2 = default(RaknetStats);
-		while (currentIndex < num)
-		{
-			Connection val = ((Server)server).connections[currentIndex];
-			if (server.TryGetConnectionStats(val, ref val2))
-			{
-				string value = val.IPAddressWithoutPort();
-				string value2 = val.Port();
-				int latestPing = server.GetLatestPing(val);
-				EventRecord eventRecord = EventRecord.CSV().AddField("", timestamp).AddField("", frameIndex)
-					.AddField("", Server.server_id)
-					.AddField("", val.guid)
-					.AddField("", val.userid)
-					.AddField("", value)
-					.AddField("", value2)
-					.AddField("", latestPing)
-					.AddField("", val2.connectionStartTime)
-					.AddField("", val2.isLimitedByCongestionControl)
-					.AddField("", val2.isLimitedByOutgoingBandwidthLimit)
-					.AddField("", val2.BPSLimitByCongestionControl)
-					.AddField("", val2.BPSLimitByOutgoingBandwidthLimit)
-					.AddField("", val2.messagesInResendBuffer)
-					.AddField("", val2.bytesInResendBuffer)
-					.AddField("", val2.packetlossLastSecond)
-					.AddField("", val2.packetlossTotal);
-				for (int i = 0; i < 4; i++)
-				{
-					eventRecord.AddField("", (ulong)Unsafe.Add(ref val2.bytesInSendBuffer.FixedElementField, i));
-				}
-				for (int j = 0; j < 4; j++)
-				{
-					eventRecord.AddField("", (ulong)Unsafe.Add(ref val2.messageInSendBuffer.FixedElementField, j));
-				}
-				eventRecord.AddField("", val2.runningTotal.FixedElementField);
-				eventRecord.AddField("", Unsafe.Add(ref val2.runningTotal.FixedElementField, 1));
-				eventRecord.AddField("", Unsafe.Add(ref val2.runningTotal.FixedElementField, 2));
-				eventRecord.AddField("", Unsafe.Add(ref val2.runningTotal.FixedElementField, 3));
-				eventRecord.AddField("", Unsafe.Add(ref val2.runningTotal.FixedElementField, 4));
-				eventRecord.AddField("", Unsafe.Add(ref val2.runningTotal.FixedElementField, 5));
-				eventRecord.AddField("", Unsafe.Add(ref val2.runningTotal.FixedElementField, 6));
-				table.Append(eventRecord);
-			}
-			currentIndex++;
-		}
-	}
-}
-
-
-using System;
-using System.Collections.Generic;
-using System.Text.RegularExpressions;
-
-public static class TypeNameCache
-{
-	private static Dictionary<Type, string> cache = new Dictionary<Type, string>();
-
-	private static Regex genericPrefixRegex = new Regex("`\\d+\\[");
-
-	public static string GetName(Type type)
-	{
-		if (!cache.TryGetValue(type, out var value))
-		{
-			value = CalculateName(type);
-			cache[type] = value;
-		}
-		return value;
-	}
-
-	private static string CalculateName(Type type)
-	{
-		string input = type.ToString();
-		input = genericPrefixRegex.Replace(input, "<");
-		return input.Replace("]", ">");
-	}
-
-	public static void ClearCache()
-	{
-		cache.Clear();
-	}
-}
-
-
-using System;
-using UnityEngine;
-
-public class DoorTextureScroll : FacepunchBehaviour
-{
-	[Serializable]
-	public class RendererMaterialIndex
-	{
-		public Renderer renderer;
-
-		public int materialIndex;
-	}
-
-	public Door doorEntity;
-
-	public Animator animator;
-
-	public Transform followTransform;
-
-	public RendererMaterialIndex[] rendererMaterialIndices;
-
-	public float scrollSpeed = 0.1f;
-
-	public bool scrollX;
-
-	public bool scrollY;
-}
-
-
-using System;
-using UnityEngine;
-
-[Serializable]
-public class RendererMaterialIndex
-{
-	public Renderer renderer;
-
-	public int materialIndex;
-}
-
-
-using System;
-using UnityEngine;
-
-public class HorseIdleMultiConditionCrossfade : StateMachineBehaviour
-{
-	[Serializable]
-	public struct Condition
-	{
-		public enum CondtionOperator
-		{
-			GreaterThan,
-			LessThan
-		}
-
-		public int FloatParameter;
-
-		public CondtionOperator Operator;
-
-		public float Value;
-	}
-
-	public string TargetState = "breathe";
-
-	public float NormalizedTransitionDuration = 0.1f;
-}
-
-
-using System;
-
-[Serializable]
-public struct Condition
-{
-	public enum CondtionOperator
-	{
-		GreaterThan,
-		LessThan
-	}
-
-	public int FloatParameter;
-
-	public CondtionOperator Operator;
-
-	public float Value;
-}
-
-
-public enum CondtionOperator
-{
-	GreaterThan,
-	LessThan
-}
-
-
-using UnityEngine;
-
-public class TriggerResetter : StateMachineBehaviour
-{
-	public string triggerName;
-
-	public override void OnStateEnter(Animator animator, AnimatorStateInfo stateInfo, int layerIndex)
-	{
-		//IL_0010: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0017: Invalid comparison between Unknown and I4
-		AnimatorControllerParameter[] parameters = animator.parameters;
-		foreach (AnimatorControllerParameter val in parameters)
-		{
-			if ((int)val.type == 9 && val.name == triggerName)
-			{
-				animator.ResetTrigger(val.name);
-			}
-		}
-	}
-}
-
-
-using System;
-using UnityEngine;
-
-public class WeightedAnimationRandomiser : StateMachineBehaviour
-{
-	[Serializable]
-	public struct IdleChance
-	{
-		public string StateName;
-
-		[Range(0f, 100f)]
-		public int Chance;
-	}
-
-	public int LoopRangeMin = 3;
-
-	public int LoopRangeMax = 5;
-
-	public float NormalizedTransitionDuration;
-
-	public IdleChance[] IdleTransitions = new IdleChance[0];
-
-	public bool AllowRepeats;
-}
-
-
-using System;
-using UnityEngine;
-
-[Serializable]
-public struct IdleChance
-{
-	public string StateName;
-
-	[Range(0f, 100f)]
-	public int Chance;
-}
-
-
-using System;
-using System.Collections.Generic;
-using UnityEngine;
-
-[CreateAssetMenu(menuName = "Rust/Ambience Definition")]
-public class AmbienceDefinition : ScriptableObject
-{
-	[Serializable]
-	public class ValueRange
-	{
-		public float min;
-
-		public float max;
-
-		public ValueRange(float min, float max)
-		{
-			this.min = min;
-			this.max = max;
-		}
-	}
-
-	[Header("Sound")]
-	public List<SoundDefinition> sounds;
-
-	[Horizontal(2, -1)]
-	public ValueRange stingFrequency = new ValueRange(15f, 30f);
-
-	[Header("Environment")]
-	[InspectorFlags]
-	public Enum biomes = (Enum)(-1);
-
-	[InspectorFlags]
-	public Enum topologies = (Enum)(-1);
-
-	public EnvironmentType environmentType = EnvironmentType.Underground;
-
-	public bool useEnvironmentType;
-
-	public AnimationCurve time = AnimationCurve.Linear(0f, 0f, 24f, 0f);
-
-	[Horizontal(2, -1)]
-	public ValueRange rain = new ValueRange(0f, 1f);
-
-	[Horizontal(2, -1)]
-	public ValueRange wind = new ValueRange(0f, 1f);
-
-	[Horizontal(2, -1)]
-	public ValueRange snow = new ValueRange(0f, 1f);
-
-	[Horizontal(2, -1)]
-	public ValueRange waves = new ValueRange(0f, 10f);
-}
-
-
-using System;
-
-[Serializable]
-public class ValueRange
-{
-	public float min;
-
-	public float max;
-
-	public ValueRange(float min, float max)
-	{
-		this.min = min;
-		this.max = max;
-	}
-}
-
-
-using System.Collections.Generic;
-using UnityEngine;
-
-[CreateAssetMenu(menuName = "Rust/Ambience Definition List")]
-public class AmbienceDefinitionList : ScriptableObject
-{
-	public List<AmbienceDefinition> defs;
-}
-
-
-using System;
-using System.Collections.Generic;
-using UnityEngine;
-
-public class AmbienceEmitter : MonoBehaviour, IClientComponent, IComparable<AmbienceEmitter>
-{
-	public AmbienceDefinitionList baseAmbience;
-
-	public AmbienceDefinitionList stings;
-
-	public bool isStatic = true;
-
-	public bool followCamera;
-
-	public bool isBaseEmitter;
-
-	public bool active;
-
-	public float cameraDistanceSq = float.PositiveInfinity;
-
-	public BoundingSphere boundingSphere;
-
-	public float crossfadeTime = 2f;
-
-	public Dictionary<AmbienceDefinition, float> nextStingTime = new Dictionary<AmbienceDefinition, float>();
-
-	public float deactivateTime = float.PositiveInfinity;
-
-	public bool playUnderwater = true;
-
-	public bool playAbovewater = true;
-
-	public Enum currentTopology { get; private set; }
-
-	public Enum currentBiome { get; private set; }
-
-	public int CompareTo(AmbienceEmitter other)
-	{
-		return cameraDistanceSq.CompareTo(other.cameraDistanceSq);
-	}
-}
-
-
-using UnityEngine;
-
-public class AmbienceLocalStings : MonoBehaviour
-{
-	public float maxDistance = 100f;
-
-	public float stingRadius = 10f;
-
-	public float stingFrequency = 30f;
-
-	public float stingFrequencyVariance = 15f;
-
-	public SoundDefinition[] stingSounds;
-}
-
-
-using System;
-using System.Collections.Generic;
-
-public class AmbienceManager : SingletonComponent<AmbienceManager>, IClientComponent
-{
-	[Serializable]
-	public class EmitterTypeLimit
-	{
-		public List<AmbienceDefinitionList> ambience;
-
-		public int limit = 1;
-
-		public int active;
-	}
-
-	public List<EmitterTypeLimit> localEmitterLimits = new List<EmitterTypeLimit>();
-
-	public EmitterTypeLimit catchallEmitterLimit = new EmitterTypeLimit();
-
-	public int maxActiveLocalEmitters = 5;
-
-	public int activeLocalEmitters;
-
-	public List<AmbienceEmitter> cameraEmitters = new List<AmbienceEmitter>();
-
-	public List<AmbienceEmitter> emittersInRange = new List<AmbienceEmitter>();
-
-	public List<AmbienceEmitter> activeEmitters = new List<AmbienceEmitter>();
-
-	public float localEmitterRange = 30f;
-
-	public List<AmbienceZone> currentAmbienceZones = new List<AmbienceZone>();
-
-	public bool isUnderwater;
-
-	public float ambienceZoneGain { get; private set; } = 1f;
-}
-
-
-using System;
-using System.Collections.Generic;
-
-[Serializable]
-public class EmitterTypeLimit
-{
-	public List<AmbienceDefinitionList> ambience;
-
-	public int limit = 1;
-
-	public int active;
-}
-
-
-using UnityEngine;
-
-public class AmbienceSpawnEmitters : MonoBehaviour, IClientComponent
-{
-	public int baseEmitterCount = 5;
-
-	public int baseEmitterDistance = 10;
-
-	public GameObjectRef emitterPrefab;
-}
-
-
-using UnityEngine;
-
-public class AmbienceWaveSoundZone : TriggerBase, IClientComponentEx
-{
-	public float priority;
-
-	public float gain = 1f;
-
-	public virtual void PreClientComponentCull(IPrefabProcessor p)
-	{
-		p.RemoveComponent((Component)(object)this);
-		p.NominateForDeletion(((Component)this).gameObject);
-	}
-}
-
-
-using System;
-using System.Collections.Generic;
-using UnityEngine;
-
-public class AmbienceWaveSounds : SingletonComponent<AmbienceWaveSounds>, IClientComponent
-{
-	[Serializable]
-	public class WaveLayer
-	{
-		public SoundDefinition soundDefinition;
-
-		public AnimationCurve oceanScaleGainCurve;
-	}
-
-	public int emitterCount = 3;
-
-	public float emitterDistance = 10f;
-
-	public List<WaveLayer> waveLayers = new List<WaveLayer>();
-}
-
-
-using System;
-using UnityEngine;
-
-[Serializable]
-public class WaveLayer
-{
-	public SoundDefinition soundDefinition;
-
-	public AnimationCurve oceanScaleGainCurve;
-}
-
-
-using UnityEngine;
-
-public class AmbienceZone : TriggerBase, IClientComponentEx
-{
-	public AmbienceDefinitionList baseAmbience;
-
-	public AmbienceDefinitionList stings;
-
-	public float priority;
-
-	public bool overrideCrossfadeTime;
-
-	public float crossfadeTime = 1f;
-
-	public float ambienceGain = 1f;
-
-	public virtual void PreClientComponentCull(IPrefabProcessor p)
-	{
-		p.RemoveComponent((Component)(object)this);
-		p.NominateForDeletion(((Component)this).gameObject);
-	}
-}
-
-
-using System;
-using System.Collections.Generic;
-using UnityEngine;
-
-public class RainSurfaceAmbience : SingletonComponent<RainSurfaceAmbience>, IClientComponent
-{
-	[Serializable]
-	public class SurfaceSound
-	{
-		public AmbienceDefinitionList baseAmbience;
-
-		public List<PhysicsMaterial> materials = new List<PhysicsMaterial>();
-	}
-
-	public List<SurfaceSound> surfaces = new List<SurfaceSound>();
-
-	public GameObjectRef emitterPrefab;
-
-	public Dictionary<ParticlePatch, AmbienceEmitter> spawnedEmitters = new Dictionary<ParticlePatch, AmbienceEmitter>();
-}
-
-
-using System;
-using System.Collections.Generic;
-using UnityEngine;
-
-[Serializable]
-public class SurfaceSound
-{
-	public AmbienceDefinitionList baseAmbience;
-
-	public List<PhysicsMaterial> materials = new List<PhysicsMaterial>();
-}
-
-
-using System;
-using UnityEngine;
-
-[CreateAssetMenu(menuName = "Rust/Blended Engine Loop Definition")]
-public class BlendedEngineLoopDefinition : ScriptableObject
-{
-	[Serializable]
-	public class EngineLoopDefinition
-	{
-		public SoundDefinition soundDefinition;
-
-		public float RPM;
-
-		public float startRPM;
-
-		public float startFullRPM;
-
-		public float stopFullRPM;
-
-		public float stopRPM;
-
-		public float GetPitchForRPM(float targetRPM)
-		{
-			return targetRPM / RPM;
-		}
-	}
-
-	public EngineLoopDefinition[] engineLoops;
-
-	public float minRPM;
-
-	public float maxRPM;
-
-	public float RPMChangeRateUp = 0.5f;
-
-	public float RPMChangeRateDown = 0.2f;
-}
-
-
-using System;
-
-[Serializable]
-public class EngineLoopDefinition
-{
-	public SoundDefinition soundDefinition;
-
-	public float RPM;
-
-	public float startRPM;
-
-	public float startFullRPM;
-
-	public float stopFullRPM;
-
-	public float stopRPM;
-
-	public float GetPitchForRPM(float targetRPM)
-	{
-		return targetRPM / RPM;
-	}
-}
-
-
-using UnityEngine;
-
-public class BlendedLoopEngineSound : MonoBehaviour, IClientComponent
-{
-	public class EngineLoop
-	{
-		public BlendedEngineLoopDefinition.EngineLoopDefinition definition;
-
-		public BlendedLoopEngineSound parent;
-
-		public Sound sound;
-
-		public SoundModulation.Modulator gainMod;
-
-		public SoundModulation.Modulator pitchMod;
-	}
-
-	public BlendedEngineLoopDefinition loopDefinition;
-
-	public bool engineOn;
-
-	[Range(0f, 1f)]
-	public float RPMControl;
-
-	public float smoothedRPMControl;
-
-	private EngineLoop[] engineLoops;
-
-	public bool debugPlayImmediately;
-
-	public float maxDistance => loopDefinition.engineLoops[0].soundDefinition.maxDistance;
-
-	public EngineLoop[] GetEngineLoops()
-	{
-		return engineLoops;
-	}
-
-	public float GetLoopGain(int idx)
-	{
-		if (engineLoops != null && engineLoops[idx] != null && engineLoops[idx].gainMod != null)
-		{
-			return engineLoops[idx].gainMod.value;
-		}
-		return 0f;
-	}
-
-	public float GetLoopPitch(int idx)
-	{
-		if (engineLoops != null && engineLoops[idx] != null && engineLoops[idx].pitchMod != null)
-		{
-			return engineLoops[idx].pitchMod.value;
-		}
-		return 0f;
-	}
-}
-
-
-public class EngineLoop
-{
-	public BlendedEngineLoopDefinition.EngineLoopDefinition definition;
-
-	public BlendedLoopEngineSound parent;
-
-	public Sound sound;
-
-	public SoundModulation.Modulator gainMod;
-
-	public SoundModulation.Modulator pitchMod;
-}
-
-
-using UnityEngine;
-
-public class BlendedSoundLoopSpeedControl : MonoBehaviour, IClientComponent
-{
-	public BlendedSoundLoops loops;
-
-	public float speed;
-
-	public float speedMax = 10f;
-}
-
-
-using System;
-using System.Collections.Generic;
-using UnityEngine;
-
-public class BlendedSoundLoops : MonoBehaviour, IClientComponent
-{
-	[Serializable]
-	public class Loop
-	{
-		public SoundDefinition soundDef;
-
-		public AnimationCurve gainCurve;
-
-		public AnimationCurve pitchCurve;
-
-		[HideInInspector]
-		public Sound sound;
-
-		[HideInInspector]
-		public SoundModulation.Modulator gainMod;
-
-		[HideInInspector]
-		public SoundModulation.Modulator pitchMod;
-	}
-
-	[Range(0f, 1f)]
-	public float blend;
-
-	public float blendSmoothing = 1f;
-
-	public float loopFadeOutTime = 0.5f;
-
-	public float loopFadeInTime = 0.5f;
-
-	public float gainModSmoothing = 1f;
-
-	public float pitchModSmoothing = 1f;
-
-	public bool shouldPlay = true;
-
-	public float gain = 1f;
-
-	public List<Loop> loops = new List<Loop>();
-
-	public float maxDistance;
-}
-
-
-using System;
-using UnityEngine;
-
-[Serializable]
-public class Loop
-{
-	public SoundDefinition soundDef;
-
-	public AnimationCurve gainCurve;
-
-	public AnimationCurve pitchCurve;
-
-	[HideInInspector]
-	public Sound sound;
-
-	[HideInInspector]
-	public SoundModulation.Modulator gainMod;
-
-	[HideInInspector]
-	public SoundModulation.Modulator pitchMod;
-}
-
-
-using System;
-using System.Collections.Generic;
-using Facepunch;
-using JSON;
-using UnityEngine;
-
-public class EngineAudioClip : MonoBehaviour, IClientComponent
-{
-	[Serializable]
-	public class EngineCycle
-	{
-		public int RPM;
-
-		public int startSample;
-
-		public int endSample;
-
-		public float period;
-
-		public int id;
-
-		public EngineCycle(int RPM, int startSample, int endSample, float period, int id)
-		{
-			this.RPM = RPM;
-			this.startSample = startSample;
-			this.endSample = endSample;
-			this.period = period;
-			this.id = id;
-		}
-	}
-
-	public class EngineCycleBucket
-	{
-		public int RPM;
-
-		public List<EngineCycle> cycles = new List<EngineCycle>();
-
-		public List<int> remainingCycles = new List<int>();
-
-		public EngineCycleBucket(int RPM)
-		{
-			this.RPM = RPM;
-		}
-
-		public EngineCycle GetCycle(Random random, int lastCycleId)
-		{
-			if (remainingCycles.Count == 0)
-			{
-				ResetRemainingCycles(random);
-			}
-			int index = Extensions.Pop<int>(remainingCycles);
-			if (cycles[index].id == lastCycleId)
-			{
-				if (remainingCycles.Count == 0)
-				{
-					ResetRemainingCycles(random);
-				}
-				index = Extensions.Pop<int>(remainingCycles);
-			}
-			return cycles[index];
-		}
-
-		private void ResetRemainingCycles(Random random)
-		{
-			for (int i = 0; i < cycles.Count; i++)
-			{
-				remainingCycles.Add(i);
-			}
-			ListEx.Shuffle<int>(remainingCycles, (uint)random.Next());
-		}
-
-		public void Add(EngineCycle cycle)
-		{
-			if (!cycles.Contains(cycle))
-			{
-				cycles.Add(cycle);
-			}
-		}
-	}
-
-	public class Grain : IPooled
-	{
-		private float[] sourceData;
-
-		private int startSample;
-
-		private int currentSample;
-
-		private int attackTimeSamples;
-
-		private int sustainTimeSamples;
-
-		private int releaseTimeSamples;
-
-		private float gain;
-
-		private float gainPerSampleAttack;
-
-		private float gainPerSampleRelease;
-
-		private int attackEndSample;
-
-		private int releaseStartSample;
-
-		private int endSample;
-
-		public bool finished => currentSample >= endSample;
-
-		public void Init(float[] source, EngineCycle cycle, int cyclePadding)
-		{
-			sourceData = source;
-			startSample = cycle.startSample - cyclePadding;
-			currentSample = startSample;
-			attackTimeSamples = cyclePadding;
-			sustainTimeSamples = cycle.endSample - cycle.startSample;
-			releaseTimeSamples = cyclePadding;
-			gainPerSampleAttack = 1f / (float)attackTimeSamples;
-			gainPerSampleRelease = -1f / (float)releaseTimeSamples;
-			attackEndSample = startSample + attackTimeSamples;
-			releaseStartSample = attackEndSample + sustainTimeSamples;
-			endSample = releaseStartSample + releaseTimeSamples;
-			gain = 0f;
-		}
-
-		void IPooled.LeavePool()
-		{
-		}
-
-		void IPooled.EnterPool()
-		{
-			sourceData = null;
-			startSample = 0;
-			currentSample = 0;
-			attackTimeSamples = 0;
-			sustainTimeSamples = 0;
-			releaseTimeSamples = 0;
-			gain = 0f;
-			gainPerSampleAttack = 0f;
-			gainPerSampleRelease = 0f;
-			attackEndSample = 0;
-			releaseStartSample = 0;
-			endSample = 0;
-		}
-
-		public float GetSample()
-		{
-			if (currentSample >= sourceData.Length)
-			{
-				return 0f;
-			}
-			float num = sourceData[currentSample];
-			if (currentSample <= attackEndSample)
-			{
-				gain += gainPerSampleAttack;
-				if (gain > 0.8f)
-				{
-					gain = 0.8f;
-				}
-			}
-			else if (currentSample >= releaseStartSample)
-			{
-				gain += gainPerSampleRelease;
-				if (gain < 0f)
-				{
-					gain = 0f;
-				}
-			}
-			currentSample++;
-			return num * gain;
-		}
-	}
-
-	public AudioClip granularClip;
-
-	public AudioClip accelerationClip;
-
-	public TextAsset accelerationCyclesJson;
-
-	public List<EngineCycle> accelerationCycles = new List<EngineCycle>();
-
-	public List<EngineCycleBucket> cycleBuckets = new List<EngineCycleBucket>();
-
-	public Dictionary<int, EngineCycleBucket> accelerationCyclesByRPM = new Dictionary<int, EngineCycleBucket>();
-
-	public Dictionary<int, int> rpmBucketLookup = new Dictionary<int, int>();
-
-	public int sampleRate = 44100;
-
-	public int samplesUntilNextGrain;
-
-	public int lastCycleId;
-
-	public List<Grain> grains = new List<Grain>();
-
-	public int currentRPM;
-
-	public int targetRPM = 1500;
-
-	public int minRPM;
-
-	public int maxRPM;
-
-	public int cyclePadding;
-
-	[Range(0f, 1f)]
-	public float RPMControl;
-
-	public AudioSource source;
-
-	public float rpmLerpSpeed = 0.025f;
-
-	public float rpmLerpSpeedDown = 0.01f;
-
-	private int GetBucketRPM(int RPM)
-	{
-		return Mathf.RoundToInt((float)(RPM / 25)) * 25;
-	}
-}
-
-
-using System;
-
-[Serializable]
-public class EngineCycle
-{
-	public int RPM;
-
-	public int startSample;
-
-	public int endSample;
-
-	public float period;
-
-	public int id;
-
-	public EngineCycle(int RPM, int startSample, int endSample, float period, int id)
-	{
-		this.RPM = RPM;
-		this.startSample = startSample;
-		this.endSample = endSample;
-		this.period = period;
-		this.id = id;
-	}
-}
-
-
-using System;
-using System.Collections.Generic;
-using JSON;
-
-public class EngineCycleBucket
-{
-	public int RPM;
-
-	public List<EngineCycle> cycles = new List<EngineCycle>();
-
-	public List<int> remainingCycles = new List<int>();
-
-	public EngineCycleBucket(int RPM)
-	{
-		this.RPM = RPM;
-	}
-
-	public EngineCycle GetCycle(Random random, int lastCycleId)
-	{
-		if (remainingCycles.Count == 0)
-		{
-			ResetRemainingCycles(random);
-		}
-		int index = Extensions.Pop<int>(remainingCycles);
-		if (cycles[index].id == lastCycleId)
-		{
-			if (remainingCycles.Count == 0)
-			{
-				ResetRemainingCycles(random);
-			}
-			index = Extensions.Pop<int>(remainingCycles);
-		}
-		return cycles[index];
-	}
-
-	private void ResetRemainingCycles(Random random)
-	{
-		for (int i = 0; i < cycles.Count; i++)
-		{
-			remainingCycles.Add(i);
-		}
-		ListEx.Shuffle<int>(remainingCycles, (uint)random.Next());
-	}
-
-	public void Add(EngineCycle cycle)
-	{
-		if (!cycles.Contains(cycle))
-		{
-			cycles.Add(cycle);
-		}
-	}
-}
-
-
-using Facepunch;
-
-public class Grain : IPooled
-{
-	private float[] sourceData;
-
-	private int startSample;
-
-	private int currentSample;
-
-	private int attackTimeSamples;
-
-	private int sustainTimeSamples;
-
-	private int releaseTimeSamples;
-
-	private float gain;
-
-	private float gainPerSampleAttack;
-
-	private float gainPerSampleRelease;
-
-	private int attackEndSample;
-
-	private int releaseStartSample;
-
-	private int endSample;
-
-	public bool finished => currentSample >= endSample;
-
-	public void Init(float[] source, EngineCycle cycle, int cyclePadding)
-	{
-		sourceData = source;
-		startSample = cycle.startSample - cyclePadding;
-		currentSample = startSample;
-		attackTimeSamples = cyclePadding;
-		sustainTimeSamples = cycle.endSample - cycle.startSample;
-		releaseTimeSamples = cyclePadding;
-		gainPerSampleAttack = 1f / (float)attackTimeSamples;
-		gainPerSampleRelease = -1f / (float)releaseTimeSamples;
-		attackEndSample = startSample + attackTimeSamples;
-		releaseStartSample = attackEndSample + sustainTimeSamples;
-		endSample = releaseStartSample + releaseTimeSamples;
-		gain = 0f;
-	}
-
-	void IPooled.LeavePool()
-	{
-	}
-
-	void IPooled.EnterPool()
-	{
-		sourceData = null;
-		startSample = 0;
-		currentSample = 0;
-		attackTimeSamples = 0;
-		sustainTimeSamples = 0;
-		releaseTimeSamples = 0;
-		gain = 0f;
-		gainPerSampleAttack = 0f;
-		gainPerSampleRelease = 0f;
-		attackEndSample = 0;
-		releaseStartSample = 0;
-		endSample = 0;
-	}
-
-	public float GetSample()
-	{
-		if (currentSample >= sourceData.Length)
-		{
-			return 0f;
-		}
-		float num = sourceData[currentSample];
-		if (currentSample <= attackEndSample)
-		{
-			gain += gainPerSampleAttack;
-			if (gain > 0.8f)
-			{
-				gain = 0.8f;
-			}
-		}
-		else if (currentSample >= releaseStartSample)
-		{
-			gain += gainPerSampleRelease;
-			if (gain < 0f)
-			{
-				gain = 0f;
-			}
-		}
-		currentSample++;
-		return num * gain;
-	}
-}
-
-
-using UnityEngine;
-
-public class FlybySound : MonoBehaviour, IClientComponent
-{
-	public SoundDefinition flybySound;
-
-	public float flybySoundDistance = 7f;
-
-	public SoundDefinition closeFlybySound;
-
-	public float closeFlybyDistance = 3f;
-}
-
-
-using UnityEngine;
-
-public class FootstepSound : MonoBehaviour, IClientComponent
-{
-	public enum Hardness
-	{
-		Light = 1,
-		Medium,
-		Hard
-	}
-
-	public SoundDefinition lightSound;
-
-	public SoundDefinition medSound;
-
-	public SoundDefinition hardSound;
-
-	private const float panAmount = 0.05f;
-}
-
-
-public enum Hardness
-{
-	Light = 1,
-	Medium,
-	Hard
 }
 
 

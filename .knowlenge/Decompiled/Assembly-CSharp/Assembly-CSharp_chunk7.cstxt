@@ -1,5 +1,547 @@
 using System;
 using System.Collections.Generic;
+using System.Runtime.CompilerServices;
+using ConVar;
+using Facepunch;
+using Network;
+using Oxide.Core;
+using ProtoBuf;
+using UnityEngine;
+using UnityEngine.Assertions;
+
+public class Mannequin : StorageContainer
+{
+	public static class MannequinFlags
+	{
+		public const Flags IsEquipping = Flags.Reserved1;
+	}
+
+	[Header("Mannequin Settings")]
+	public GameObjectRef EquipSound;
+
+	public GameObjectRef ChangePoseSound;
+
+	public GameObject SupportRoot;
+
+	public Transform MannequinSpawnPoint;
+
+	public BaseCollision HitBoxCollision;
+
+	public PhysicsMaterial OverrideHitBoxMaterial;
+
+	[Range(0f, 1f)]
+	public float LodRange0 = 0.3f;
+
+	[Range(0f, 1f)]
+	public float LodRange1 = 0.15f;
+
+	[Range(0f, 1f)]
+	public float LodRange2 = 0.08f;
+
+	[Range(0f, 1f)]
+	public float LodRange3 = 0.02f;
+
+	private const int BACKPACK_SLOT_INDEX = 7;
+
+	protected static string headPartPath = "assets/prefabs/clothes/skin/mannequin/head.male.mannequin.prefab";
+
+	protected static string torsoPartPath = "assets/prefabs/clothes/skin/mannequin/torso.male.mannequin.prefab";
+
+	protected static string handsPartPath = "assets/prefabs/clothes/skin/mannequin/hands.male.mannequin.prefab";
+
+	protected static string legsPartPath = "assets/prefabs/clothes/skin/mannequin/legs.male.mannequin.prefab";
+
+	public static HumanBodyBones[] ValidBoneArray;
+
+	public MannequinPose[] AvailablePoses;
+
+	private static Item[] clothingBuffer;
+
+	private static Item[] lockerBuffer;
+
+	private int __sync_PoseIndex;
+
+	[Sync(Autosave = true)]
+	public int PoseIndex
+	{
+		[CompilerGenerated]
+		get
+		{
+			return __sync_PoseIndex;
+		}
+		[CompilerGenerated]
+		set
+		{
+			if (!IsSyncVarEqual(__sync_PoseIndex, value))
+			{
+				__sync_PoseIndex = value;
+				byte nameID = __GetWeaverID("PoseIndex");
+				QueueSyncVar(nameID);
+			}
+		}
+	}
+
+	public TimeSince LastPoseChange { get; set; }
+
+	public override bool OnRpcMessage(BasePlayer player, uint rpc, Message msg)
+	{
+		TimeWarning val = TimeWarning.New("Mannequin.OnRpcMessage", 0);
+		try
+		{
+			if (rpc == 1116452643 && (Object)(object)player != (Object)null)
+			{
+				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
+				if (Global.developer > 2)
+				{
+					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - Server_ChangePose"));
+				}
+				TimeWarning val2 = TimeWarning.New("Server_ChangePose", 0);
+				try
+				{
+					TimeWarning val3 = TimeWarning.New("Conditions", 0);
+					try
+					{
+						if (!RPC_Server.CallsPerSecond.Test(1116452643u, "Server_ChangePose", this, player, 5uL))
+						{
+							return true;
+						}
+						if (!RPC_Server.IsVisible.Test(1116452643u, "Server_ChangePose", this, player, 3f))
+						{
+							return true;
+						}
+					}
+					finally
+					{
+						((IDisposable)val3)?.Dispose();
+					}
+					try
+					{
+						val3 = TimeWarning.New("Call", 0);
+						try
+						{
+							RPCMessage rPCMessage = default(RPCMessage);
+							rPCMessage.connection = msg.connection;
+							rPCMessage.player = player;
+							rPCMessage.read = msg.read;
+							RPCMessage msg2 = rPCMessage;
+							Server_ChangePose(msg2);
+						}
+						finally
+						{
+							((IDisposable)val3)?.Dispose();
+						}
+					}
+					catch (Exception ex)
+					{
+						Debug.LogException(ex);
+						player.Kick("RPC Error in Server_ChangePose");
+					}
+				}
+				finally
+				{
+					((IDisposable)val2)?.Dispose();
+				}
+				return true;
+			}
+			if (rpc == 1422897100 && (Object)(object)player != (Object)null)
+			{
+				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
+				if (Global.developer > 2)
+				{
+					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - Server_RequestSwap"));
+				}
+				TimeWarning val2 = TimeWarning.New("Server_RequestSwap", 0);
+				try
+				{
+					TimeWarning val3 = TimeWarning.New("Conditions", 0);
+					try
+					{
+						if (!RPC_Server.CallsPerSecond.Test(1422897100u, "Server_RequestSwap", this, player, 1uL))
+						{
+							return true;
+						}
+						if (!RPC_Server.IsVisible.Test(1422897100u, "Server_RequestSwap", this, player, 3f))
+						{
+							return true;
+						}
+					}
+					finally
+					{
+						((IDisposable)val3)?.Dispose();
+					}
+					try
+					{
+						val3 = TimeWarning.New("Call", 0);
+						try
+						{
+							RPCMessage rPCMessage = default(RPCMessage);
+							rPCMessage.connection = msg.connection;
+							rPCMessage.player = player;
+							rPCMessage.read = msg.read;
+							RPCMessage msg3 = rPCMessage;
+							Server_RequestSwap(msg3);
+						}
+						finally
+						{
+							((IDisposable)val3)?.Dispose();
+						}
+					}
+					catch (Exception ex2)
+					{
+						Debug.LogException(ex2);
+						player.Kick("RPC Error in Server_RequestSwap");
+					}
+				}
+				finally
+				{
+					((IDisposable)val2)?.Dispose();
+				}
+				return true;
+			}
+		}
+		finally
+		{
+			((IDisposable)val)?.Dispose();
+		}
+		return base.OnRpcMessage(player, rpc, msg);
+	}
+
+	public bool IsEquipping()
+	{
+		return HasFlag(Flags.Reserved1);
+	}
+
+	public override void Load(LoadInfo info)
+	{
+		base.Load(info);
+	}
+
+	public override void Save(SaveInfo info)
+	{
+		//IL_006c: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0071: Unknown result type (might be due to invalid IL or missing references)
+		base.Save(info);
+		info.msg.mannequin = Pool.Get<Mannequin>();
+		info.msg.mannequin.clothingItems = Pool.Get<List<ClothingItem>>();
+		foreach (Item item in base.inventory.itemList)
+		{
+			ClothingItem val = Pool.Get<ClothingItem>();
+			val.itemId = item.info.itemid;
+			val.skin = item.skin;
+			val.uid = item.uid;
+			val.reserved_int_0 = item.instanceData?.dataInt ?? 0;
+			info.msg.mannequin.clothingItems.Add(val);
+		}
+	}
+
+	protected override void OnInventoryDirty()
+	{
+		base.OnInventoryDirty();
+		SendNetworkUpdate();
+	}
+
+	private bool IsBackpackSlot(int slot)
+	{
+		return (slot - 7) % 14 == 0;
+	}
+
+	public override bool ItemFilter(Item item, int targetSlot)
+	{
+		if (!base.ItemFilter(item, targetSlot))
+		{
+			return false;
+		}
+		bool num = item.IsBackpack();
+		bool flag = IsBackpackSlot(targetSlot);
+		if (num != flag)
+		{
+			return false;
+		}
+		if ((Object)(object)item.info.ItemModWearable != (Object)null && item.info.ItemModWearable.blockFromMannequin)
+		{
+			return false;
+		}
+		return CanAcceptItem(item, targetSlot);
+	}
+
+	private bool CanAcceptItem(Item newItem, int slot)
+	{
+		ItemModWearable itemModWearable = default(ItemModWearable);
+		if (!((Component)newItem.info).TryGetComponent<ItemModWearable>(ref itemModWearable))
+		{
+			return false;
+		}
+		ItemModWearable wearable = default(ItemModWearable);
+		for (int i = 0; i < base.inventory.capacity; i++)
+		{
+			Item slot2 = base.inventory.GetSlot(i);
+			if (slot2 != null && ((Component)slot2.info).TryGetComponent<ItemModWearable>(ref wearable) && !itemModWearable.CanExistWith(wearable) && slot != i)
+			{
+				return false;
+			}
+		}
+		return true;
+	}
+
+	public void ClearEquipping()
+	{
+		using FlagsUpdateScope flagsUpdateScope = StartSetFlags(FlagsUpdateMode.SendNetworkUpdate);
+		flagsUpdateScope.Set(Flags.Reserved1, b: false);
+	}
+
+	public override void OnInventoryFirstCreated(ItemContainer container)
+	{
+		base.OnInventoryFirstCreated(container);
+		container.flags = ItemContainer.Flag.Clothing;
+	}
+
+	[RPC_Server]
+	[RPC_Server.IsVisible(3f)]
+	[RPC_Server.CallsPerSecond(5uL)]
+	private void Server_ChangePose(RPCMessage msg)
+	{
+		//IL_0072: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0079: Unknown result type (might be due to invalid IL or missing references)
+		//IL_007f: Unknown result type (might be due to invalid IL or missing references)
+		if (!((Object)(object)msg.player == (Object)null) && msg.player.CanBuild(cached: true) && Interface.CallHook("CanMannequinChangePose", (object)this, (object)msg.player) == null)
+		{
+			int num = PoseIndex + 1;
+			if (num >= AvailablePoses.Length)
+			{
+				num = 0;
+			}
+			PoseIndex = num;
+			if (ChangePoseSound.isValid)
+			{
+				Effect.server.Run(ChangePoseSound.resourcePath, ((Component)this).transform.position);
+			}
+		}
+	}
+
+	[RPC_Server]
+	[RPC_Server.CallsPerSecond(1uL)]
+	[RPC_Server.IsVisible(3f)]
+	private void Server_RequestSwap(RPCMessage msg)
+	{
+		//IL_006b: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0071: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00a7: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00ac: Unknown result type (might be due to invalid IL or missing references)
+		if (IsEquipping())
+		{
+			return;
+		}
+		BasePlayer player = msg.player;
+		if (!CanBeLooted(player) || player.IsDead() || Interface.CallHook("CanMannequinSwap", (object)this, (object)player) != null)
+		{
+			return;
+		}
+		BaseLock @lock = GetLock();
+		if ((Object)(object)@lock != (Object)null && !@lock.OnTryToOpen(player))
+		{
+			player.ShowToast(GameTip.Styles.Error, PlayerInventoryErrors.ContainerLocked, false);
+		}
+		else if (SwapPlayerInventoryWithContainer(msg.player, base.inventory, GetDropPosition(), GetDropVelocity(), FilterItems))
+		{
+			if (EquipSound != null)
+			{
+				Effect.server.Run(EquipSound.resourcePath, player, StringPool.Get("spine3"), Vector3.zero, Vector3.zero);
+			}
+			using (FlagsUpdateScope flagsUpdateScope = StartSetFlags(FlagsUpdateMode.SendNetworkUpdate))
+			{
+				flagsUpdateScope.Set(Flags.Reserved1, b: true);
+			}
+			((FacepunchBehaviour)this).Invoke((Action)ClearEquipping, 1.5f);
+		}
+	}
+
+	private bool FilterItems(Item item)
+	{
+		if ((Object)(object)item.info.ItemModWearable != (Object)null && item.info.ItemModWearable.blockFromMannequin)
+		{
+			return false;
+		}
+		return true;
+	}
+
+	public static bool SwapPlayerInventoryWithContainer(BasePlayer player, ItemContainer inventory, Vector3 dropPosition, Vector3 dropVelocity, Func<Item, bool> filterItems = null)
+	{
+		//IL_00d0: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00d1: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00d4: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00da: Unknown result type (might be due to invalid IL or missing references)
+		//IL_012d: Unknown result type (might be due to invalid IL or missing references)
+		//IL_012e: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0131: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0137: Unknown result type (might be due to invalid IL or missing references)
+		bool result = false;
+		for (int i = 0; i < clothingBuffer.Length; i++)
+		{
+			Item slot = player.inventory.containerWear.GetSlot(i);
+			if (slot != null && (filterItems == null || filterItems(slot)))
+			{
+				slot.RemoveFromContainer();
+				clothingBuffer[i] = slot;
+			}
+		}
+		for (int j = 0; j < lockerBuffer.Length; j++)
+		{
+			Item slot2 = inventory.GetSlot(j);
+			if (slot2 != null && (filterItems == null || filterItems(slot2)))
+			{
+				slot2.RemoveFromContainer();
+				lockerBuffer[j] = slot2;
+			}
+		}
+		for (int k = 0; k < clothingBuffer.Length; k++)
+		{
+			Item item = lockerBuffer[k];
+			Item item2 = clothingBuffer[k];
+			if (item != null)
+			{
+				result = true;
+				if (item.info.category != ItemCategory.Attire || !item.MoveToContainer(player.inventory.containerWear, k))
+				{
+					item.Drop(dropPosition, dropVelocity);
+				}
+			}
+			if (item2 != null)
+			{
+				result = true;
+				if (!item2.MoveToContainer(inventory, k) && !item2.MoveToContainer(player.inventory.containerWear, k) && !item2.MoveToContainer(player.inventory.containerMain))
+				{
+					item2.Drop(dropPosition, dropVelocity);
+				}
+			}
+			clothingBuffer[k] = null;
+			lockerBuffer[k] = null;
+		}
+		return result;
+	}
+
+	protected override bool WriteSyncVar(byte id, NetWrite writer)
+	{
+		//IL_0017: Unknown result type (might be due to invalid IL or missing references)
+		//IL_001c: Unknown result type (might be due to invalid IL or missing references)
+		if (id == 0)
+		{
+			if (Global.developer > 2)
+			{
+				NetworkableId iD = net.ID;
+				Debug.Log((object)("SyncVar Writing: PoseIndex for " + ((object)(NetworkableId)(ref iD)/*cast due to .constrained prefix*/).ToString()));
+			}
+			SyncVarNetWrite(writer, __sync_PoseIndex);
+			return true;
+		}
+		return base.WriteSyncVar(id, writer);
+	}
+
+	protected override bool OnSyncVar(byte id, NetRead reader, bool fromAutoSave = false)
+	{
+		if (id == 0)
+		{
+			try
+			{
+				_ = __sync_PoseIndex;
+				int _sync_PoseIndex = reader.Int32();
+				__sync_PoseIndex = _sync_PoseIndex;
+			}
+			catch (Exception ex)
+			{
+				Debug.LogException(ex);
+			}
+			return true;
+		}
+		return base.OnSyncVar(id, reader, fromAutoSave);
+	}
+
+	private byte __GetWeaverID(string propertyName)
+	{
+		if (propertyName == "PoseIndex")
+		{
+			return 0;
+		}
+		return byte.MaxValue;
+	}
+
+	protected override void WriteAutoSaveSyncVars(NetWrite writer)
+	{
+		base.WriteAutoSaveSyncVars(writer);
+		WriteSyncVar(0, writer);
+	}
+
+	protected override void ReadAutoSaveSyncVars(NetRead reader)
+	{
+		base.ReadAutoSaveSyncVars(reader);
+		OnSyncVar(0, reader, fromAutoSave: true);
+	}
+
+	protected override bool AutoSaveSyncVars(SaveInfo save)
+	{
+		NetWrite val = ((BaseNetwork)Net.sv).StartWrite();
+		WriteAutoSaveSyncVars(val);
+		var (src, num) = val.GetBuffer();
+		if (_autosaveBuffer == null)
+		{
+			_autosaveBuffer = BaseEntity._autosaveBufferPool.Rent(num);
+		}
+		if (_autosaveBuffer.Length < num)
+		{
+			BaseEntity._autosaveBufferPool.Return(_autosaveBuffer);
+			_autosaveBuffer = BaseEntity._autosaveBufferPool.Rent(num);
+		}
+		Buffer.BlockCopy(src, 0, _autosaveBuffer, 0, num);
+		save.msg.baseEntity.syncVars = _autosaveBuffer;
+		Pool.Free<NetWrite>(ref val);
+		return true;
+	}
+
+	protected override bool AutoLoadSyncVars(LoadInfo load)
+	{
+		if (load.msg.baseEntity != null && load.msg.baseEntity.syncVars != null)
+		{
+			NetRead val = Pool.Get<NetRead>();
+			val.Init(load.msg.baseEntity.syncVars.AsSpan());
+			ReadAutoSaveSyncVars(val);
+			Pool.Free<NetRead>(ref val);
+		}
+		return true;
+	}
+
+	protected override void ResetSyncVars()
+	{
+		base.ResetSyncVars();
+		__sync_PoseIndex = 0;
+	}
+
+	protected override bool ShouldInvalidateCache(byte id)
+	{
+		if (id == 0)
+		{
+			return true;
+		}
+		return base.ShouldInvalidateCache(id);
+	}
+
+	static Mannequin()
+	{
+		HumanBodyBones[] array = new HumanBodyBones[49];
+		RuntimeHelpers.InitializeArray(array, (RuntimeFieldHandle)/*OpCode not supported: LdMemberToken*/);
+		ValidBoneArray = (HumanBodyBones[])(object)array;
+		clothingBuffer = new Item[8];
+		lockerBuffer = new Item[8];
+	}
+}
+
+
+public static class MannequinFlags
+{
+	public const Flags IsEquipping = Flags.Reserved1;
+}
+
+
+using System;
+using System.Collections.Generic;
 using ConVar;
 using Facepunch;
 using Network;
@@ -550,8 +1092,8 @@ public class MarketTerminal : StorageContainer
 	}
 
 	[RPC_Server.CallsPerSecond(3uL)]
-	[RPC_Server]
 	[RPC_Server.IsVisible(3f)]
+	[RPC_Server]
 	public void Server_TryOpenMarket(RPCMessage msg)
 	{
 		if (!CanPlayerInteract(msg.player))
@@ -576,9 +1118,9 @@ public class MarketTerminal : StorageContainer
 		}
 	}
 
-	[RPC_Server]
-	[RPC_Server.IsVisible(3f)]
 	[RPC_Server.CallsPerSecond(10uL)]
+	[RPC_Server.IsVisible(3f)]
+	[RPC_Server]
 	public void Server_Purchase(RPCMessage msg)
 	{
 		//IL_002f: Unknown result type (might be due to invalid IL or missing references)
@@ -1113,8 +1655,8 @@ public class MedicalTool : AttackEntity
 		}
 	}
 
-	[RPC_Server]
 	[RPC_Server.IsActiveItem]
+	[RPC_Server]
 	private void UseSelf(RPCMessage msg)
 	{
 		BasePlayer player = msg.player;
@@ -1602,8 +2144,8 @@ public class MissionSlowUseObject : BaseEntity
 		return false;
 	}
 
-	[RPC_Server]
 	[RPC_Server.IsVisible(3f)]
+	[RPC_Server]
 	private void ServerUse(RPCMessage msg)
 	{
 		//IL_0019: Unknown result type (might be due to invalid IL or missing references)
@@ -1833,10 +2375,10 @@ public class MixingTable : StorageContainer
 		}
 	}
 
-	[RPC_Server.IsVisible(3f)]
-	[RPC_Server.MaxDistance(3f)]
 	[RPC_Server.CallsPerSecond(5uL)]
 	[RPC_Server]
+	[RPC_Server.MaxDistance(3f)]
+	[RPC_Server.IsVisible(3f)]
 	private void SV_FillInventoryForRecipe(RPCMessage msg)
 	{
 		if ((Object)(object)msg.player == (Object)null)
@@ -1952,8 +2494,8 @@ public class MixingTable : StorageContainer
 		ItemManager.DoRemoves();
 	}
 
-	[RPC_Server.MaxDistance(3f)]
 	[RPC_Server]
+	[RPC_Server.MaxDistance(3f)]
 	private void SVSwitch(RPCMessage msg)
 	{
 		if (Interface.CallHook("OnMixingTableToggle", (object)this, (object)msg.player) != null)
@@ -2382,8 +2924,8 @@ public class MLRS : BaseMountable
 
 	public static readonly Phrase RaidWindowBlockedToast = new Phrase("mlrs.raidwindowblocked", "The MLRS can only be fired during the raid window");
 
-	[Header("MLRS Components")]
 	[SerializeField]
+	[Header("MLRS Components")]
 	private GameObjectRef rocketStoragePrefab;
 
 	[SerializeField]
@@ -2410,12 +2952,12 @@ public class MLRS : BaseMountable
 	private Transform hydraulics;
 
 	[Tooltip("Minimum distance from the MLRS to a targeted hit point. In metres.")]
-	[Header("MLRS Weaponry")]
 	[SerializeField]
+	[Header("MLRS Weaponry")]
 	public float minRange = 200f;
 
-	[SerializeField]
 	[Tooltip("The size of the area that the rockets may hit, minus rocket damage radius.")]
+	[SerializeField]
 	public float targetAreaRadius = 30f;
 
 	[SerializeField]
@@ -3113,9 +3655,9 @@ public class MLRS : BaseMountable
 		return false;
 	}
 
-	[RPC_Server.InputValidation(new Type[] { typeof(Vector3) })]
-	[RPC_Server.MaxDistance(3f)]
 	[RPC_Server]
+	[RPC_Server.MaxDistance(3f)]
+	[RPC_Server.InputValidation(new Type[] { typeof(Vector3) })]
 	public void RPC_SetTargetHitPos(RPCMessage msg)
 	{
 		//IL_0018: Unknown result type (might be due to invalid IL or missing references)
@@ -4203,8 +4745,8 @@ public class MobilePhone : HeldEntity
 		Controller.SetCurrentUser(msg);
 	}
 
-	[RPC_Server.FromOwner]
 	[RPC_Server]
+	[RPC_Server.FromOwner]
 	public void InitiateCall(RPCMessage msg)
 	{
 		Controller.InitiateCall(msg);
@@ -4217,8 +4759,8 @@ public class MobilePhone : HeldEntity
 		Controller.AnswerPhone(msg);
 	}
 
-	[RPC_Server]
 	[RPC_Server.FromOwner]
+	[RPC_Server]
 	private void ServerHangUp(RPCMessage msg)
 	{
 		Controller.ServerHangUp(msg);
@@ -4230,25 +4772,25 @@ public class MobilePhone : HeldEntity
 		Controller.DestroyShared();
 	}
 
-	[RPC_Server]
 	[RPC_Server.CallsPerSecond(5uL)]
 	[RPC_Server.FromOwner]
+	[RPC_Server]
 	public void UpdatePhoneName(RPCMessage msg)
 	{
 		Controller.RPC_UpdatePhoneName(msg);
 	}
 
-	[RPC_Server]
-	[RPC_Server.FromOwner]
 	[RPC_Server.CallsPerSecond(5uL)]
+	[RPC_Server.FromOwner]
+	[RPC_Server]
 	public void Server_RequestPhoneDirectory(RPCMessage msg)
 	{
 		Controller.Server_RequestPhoneDirectory(msg);
 	}
 
-	[RPC_Server]
 	[RPC_Server.CallsPerSecond(5uL)]
 	[RPC_Server.FromOwner]
+	[RPC_Server]
 	public void Server_AddSavedNumber(RPCMessage msg)
 	{
 		Controller.Server_AddSavedNumber(msg);
@@ -4262,23 +4804,23 @@ public class MobilePhone : HeldEntity
 		Controller.Server_RemoveSavedNumber(msg);
 	}
 
-	[RPC_Server.FromOwner]
 	[RPC_Server]
+	[RPC_Server.FromOwner]
 	public void Server_RequestCurrentState(RPCMessage msg)
 	{
 		Controller.SetPhoneStateWithPlayer(Controller.serverState);
 	}
 
-	[RPC_Server.CallsPerSecond(5uL)]
 	[RPC_Server]
+	[RPC_Server.CallsPerSecond(5uL)]
 	public void ServerSendVoicemail(RPCMessage msg)
 	{
 		Controller.ServerSendVoicemail(msg);
 	}
 
-	[RPC_Server.FromOwner]
-	[RPC_Server.CallsPerSecond(5uL)]
 	[RPC_Server]
+	[RPC_Server.CallsPerSecond(5uL)]
+	[RPC_Server.FromOwner]
 	public void ServerPlayVoicemail(RPCMessage msg)
 	{
 		Controller.ServerPlayVoicemail(msg);
@@ -4492,8 +5034,8 @@ public class ModularCar : BaseModularVehicle, TakeCollisionDamage.ICanRestoreVel
 	[SerializeField]
 	public SpawnSettings spawnSettings;
 
-	[HideInInspector]
 	[SerializeField]
+	[HideInInspector]
 	public MeshRenderer[] damageShowingRenderers;
 
 	[ServerVar(Help = "Population active on the server", ShowInAdminUI = true)]
@@ -5751,8 +6293,8 @@ public class ModularCarGarage : ContainerIOEntity
 
 	public MagnetSnap magnetSnap;
 
-	[SerializeField]
 	[Header("ModularCarGarage")]
+	[SerializeField]
 	public Transform vehicleLift;
 
 	[SerializeField]
@@ -6794,9 +7336,9 @@ public class ModularCarGarage : ContainerIOEntity
 		flagsUpdateScope.Set(Flags.Reserved6, b: false);
 	}
 
+	[RPC_Server]
 	[RPC_Server.MaxDistance(3f)]
 	[RPC_Server.IsVisible(3f)]
-	[RPC_Server]
 	public void RPC_RepairItem(RPCMessage msg)
 	{
 		//IL_000d: Unknown result type (might be due to invalid IL or missing references)
@@ -6831,9 +7373,9 @@ public class ModularCarGarage : ContainerIOEntity
 		}
 	}
 
-	[RPC_Server]
-	[RPC_Server.MaxDistance(3f)]
 	[RPC_Server.IsVisible(3f)]
+	[RPC_Server.MaxDistance(3f)]
+	[RPC_Server]
 	public void RPC_OpenEditing(RPCMessage msg)
 	{
 		BasePlayer player = msg.player;
@@ -6843,9 +7385,9 @@ public class ModularCarGarage : ContainerIOEntity
 		}
 	}
 
-	[RPC_Server]
-	[RPC_Server.MaxDistance(3f)]
 	[RPC_Server.IsVisible(3f)]
+	[RPC_Server.MaxDistance(3f)]
+	[RPC_Server]
 	public void RPC_DiedWithKeypadOpen(RPCMessage msg)
 	{
 		using (FlagsUpdateScope flagsUpdateScope = StartSetFlags(FlagsUpdateMode.SendNetworkUpdate))
@@ -6856,8 +7398,8 @@ public class ModularCarGarage : ContainerIOEntity
 		RefreshLiftState();
 	}
 
-	[RPC_Server]
 	[RPC_Server.MaxDistance(3f)]
+	[RPC_Server]
 	public void RPC_SelectedLootItem(RPCMessage msg)
 	{
 		//IL_000d: Unknown result type (might be due to invalid IL or missing references)
@@ -6903,8 +7445,8 @@ public class ModularCarGarage : ContainerIOEntity
 		Interface.CallHook("OnVehicleModuleSelected", (object)vehicleItem, (object)this, (object)player);
 	}
 
-	[RPC_Server.MaxDistance(3f)]
 	[RPC_Server]
+	[RPC_Server.MaxDistance(3f)]
 	public void RPC_DeselectedLootItem(RPCMessage msg)
 	{
 		BasePlayer player = msg.player;
@@ -6918,17 +7460,17 @@ public class ModularCarGarage : ContainerIOEntity
 		}
 	}
 
-	[RPC_Server.MaxDistance(3f)]
 	[RPC_Server]
+	[RPC_Server.MaxDistance(3f)]
 	public void RPC_StartKeycodeEntry(RPCMessage msg)
 	{
 		using FlagsUpdateScope flagsUpdateScope = StartSetFlags(FlagsUpdateMode.SendNetworkUpdate);
 		flagsUpdateScope.Set(Flags.Reserved7, b: true);
 	}
 
-	[RPC_Server]
-	[RPC_Server.IsVisible(3f)]
 	[RPC_Server.MaxDistance(3f)]
+	[RPC_Server.IsVisible(3f)]
+	[RPC_Server]
 	public void RPC_RequestAddLock(RPCMessage msg)
 	{
 		//IL_00c6: Unknown result type (might be due to invalid IL or missing references)
@@ -6954,9 +7496,9 @@ public class ModularCarGarage : ContainerIOEntity
 		}
 	}
 
-	[RPC_Server.IsVisible(3f)]
-	[RPC_Server.MaxDistance(3f)]
 	[RPC_Server]
+	[RPC_Server.MaxDistance(3f)]
+	[RPC_Server.IsVisible(3f)]
 	public void RPC_RequestRemoveLock(RPCMessage msg)
 	{
 		//IL_0053: Unknown result type (might be due to invalid IL or missing references)
@@ -6968,8 +7510,8 @@ public class ModularCarGarage : ContainerIOEntity
 		}
 	}
 
-	[RPC_Server.MaxDistance(3f)]
 	[RPC_Server]
+	[RPC_Server.MaxDistance(3f)]
 	[RPC_Server.IsVisible(3f)]
 	public void RPC_RequestNewCode(RPCMessage msg)
 	{
@@ -6990,10 +7532,10 @@ public class ModularCarGarage : ContainerIOEntity
 		}
 	}
 
-	[RPC_Server]
-	[RPC_Server.MaxDistance(3f)]
 	[RPC_Server.CallsPerSecond(1uL)]
 	[RPC_Server.IsVisible(3f)]
+	[RPC_Server.MaxDistance(3f)]
+	[RPC_Server]
 	public void RPC_StartDestroyingChassis(RPCMessage msg)
 	{
 		if (carOccupant.HasAnyModules)
@@ -7005,9 +7547,9 @@ public class ModularCarGarage : ContainerIOEntity
 		flagsUpdateScope.Set(Flags.Reserved6, b: true);
 	}
 
+	[RPC_Server.CallsPerSecond(1uL)]
 	[RPC_Server.IsVisible(3f)]
 	[RPC_Server.MaxDistance(3f)]
-	[RPC_Server.CallsPerSecond(1uL)]
 	[RPC_Server]
 	public void RPC_StopDestroyingChassis(RPCMessage msg)
 	{
@@ -7025,8 +7567,8 @@ public class ModularCarGarage : ContainerIOEntity
 		flagsUpdateScope.Set(Flags.Reserved6, b: false);
 	}
 
-	[RPC_Server]
 	[RPC_Server.IsVisible(3f)]
+	[RPC_Server]
 	private void Server_RequestFuelExtract(RPCMessage msg)
 	{
 		if (!lootingPlayers.Contains(msg.player))
@@ -7519,17 +8061,17 @@ public class ModularCarRadio : BaseCombatEntity
 		return false;
 	}
 
-	[RPC_Server]
-	[RPC_Server.IsVisible(3f)]
 	[RPC_Server.CallsPerSecond(2uL)]
+	[RPC_Server.IsVisible(3f)]
+	[RPC_Server]
 	public void ServerTogglePlay(RPCMessage msg)
 	{
 		CarRadio.ServerTogglePlay(msg, bypassPower: true);
 	}
 
-	[RPC_Server]
-	[RPC_Server.CallsPerSecond(2uL)]
 	[RPC_Server.IsVisible(3f)]
+	[RPC_Server.CallsPerSecond(2uL)]
+	[RPC_Server]
 	private void Server_UpdateRadioIP(RPCMessage msg)
 	{
 		CarRadio.Server_UpdateRadioIP(msg);
@@ -7559,8 +8101,8 @@ using UnityEngine.Assertions;
 
 public class Mortar : Cannon
 {
-	[Header("Mortar")]
 	[SerializeField]
+	[Header("Mortar")]
 	private Vector2 minMaxDistance = new Vector2(0f, 200f);
 
 	[SerializeField]
@@ -7590,8 +8132,8 @@ public class Mortar : Cannon
 	[SerializeField]
 	private float remoteAimDirSmoothSpeed;
 
-	[Header("Condition")]
 	[SerializeField]
+	[Header("Condition")]
 	private float conditionLossPerShot;
 
 	[SerializeField]
@@ -7610,15 +8152,15 @@ public class Mortar : Cannon
 	[SerializeField]
 	private float recoilPitchDuration;
 
-	[SerializeField]
 	[Header("Mortar Handle")]
+	[SerializeField]
 	private Transform handleBone;
 
 	[SerializeField]
 	private AnimationCurve handleMinMaxRotation;
 
-	[Header("Display")]
 	[SerializeField]
+	[Header("Display")]
 	private MortarDisplay mortarDisplayPrefab;
 
 	[ClientVar(ClientAdmin = true)]
@@ -8287,8 +8829,8 @@ public class MortarEntityOld : StorageContainer
 		return IsMortarAmmo(item);
 	}
 
-	[RPC_Server]
 	[RPC_Server.IsVisible(3f)]
+	[RPC_Server]
 	public void FireGun(RPCMessage rpc)
 	{
 		if (!CanFireGun())
@@ -8352,16 +8894,16 @@ public class MortarEntityOld : StorageContainer
 		Debug.Log((object)$"Launching mortar with velocity of {Math.Round(((Vector3)(ref overrideVel)).magnitude, 1)}m/s with drag of {component.drag} and gravity of {component.gravityModifier}");
 	}
 
-	[RPC_Server]
 	[RPC_Server.IsVisible(3f)]
+	[RPC_Server]
 	public void SwitchAdjustmentAngle(RPCMessage rpc)
 	{
 		using FlagsUpdateScope flagsUpdateScope = StartSetFlags(FlagsUpdateMode.SendNetworkUpdate);
 		flagsUpdateScope.Set(IsIncreasingAngleFlag, !HasFlag(IsIncreasingAngleFlag));
 	}
 
-	[RPC_Server.IsVisible(3f)]
 	[RPC_Server]
+	[RPC_Server.IsVisible(3f)]
 	public void AdjustAngle(RPCMessage rpc)
 	{
 		bool flag = rpc.read.Bool();
@@ -9328,8 +9870,8 @@ public class MountedWeapon : StorageContainer
 
 	private static readonly int Up = Animator.StringToHash("up");
 
-	[Header("Mounted Weapon")]
 	[SerializeField]
+	[Header("Mounted Weapon")]
 	private Transform _eyes;
 
 	[SerializeField]
@@ -9344,12 +9886,12 @@ public class MountedWeapon : StorageContainer
 	[SerializeField]
 	private bool _clientAuthority;
 
-	[SerializeField]
 	[ItemSelector]
+	[SerializeField]
 	private ItemDefinition _ammoItem;
 
-	[SerializeField]
 	[Header("Mounted Weapon - Weapon")]
+	[SerializeField]
 	private ItemDefinition _weapon;
 
 	[SerializeField]
@@ -9411,8 +9953,8 @@ public class MountedWeapon : StorageContainer
 	[SerializeField]
 	private bool _forceSeatPositionUpdates;
 
-	[SerializeField]
 	[Header("Mounted Weapon - Player Camera Animation")]
+	[SerializeField]
 	private Transform _cameraAnimation;
 
 	[SerializeField]
@@ -9421,15 +9963,15 @@ public class MountedWeapon : StorageContainer
 	[SerializeField]
 	private float _fovMultiplier = 1f;
 
-	[SerializeField]
 	[Header("Mounted Weapon - Viewmodel")]
+	[SerializeField]
 	private bool _useViewmodel;
 
 	[SerializeField]
 	private ViewModel _viewmodel;
 
-	[Header("Mounted Weapon - Aim Movement Sounds")]
 	[SerializeField]
+	[Header("Mounted Weapon - Aim Movement Sounds")]
 	private SoundDefinition aimMovementSoundDef;
 
 	[SerializeField]
@@ -10748,10 +11290,10 @@ public class MountedWeapon : StorageContainer
 		}
 	}
 
-	[RPC_Server.CallsPerSecond(100uL)]
-	[RPC_Server.MaxDistance(3f)]
-	[RPC_Server.InputValidation(new Type[] { typeof(ServersideMountedWeaponSnapshot) })]
 	[RPC_Server]
+	[RPC_Server.MaxDistance(3f)]
+	[RPC_Server.CallsPerSecond(100uL)]
+	[RPC_Server.InputValidation(new Type[] { typeof(ServersideMountedWeaponSnapshot) })]
 	private void SV_ReceiveClientAim(RPCMessage msg)
 	{
 		//IL_00a3: Unknown result type (might be due to invalid IL or missing references)
@@ -11495,8 +12037,8 @@ public class NeonSign : Signage
 	}
 
 	[RPC_Server]
-	[RPC_Server.MaxDistance(3f)]
 	[RPC_Server.CallsPerSecond(5uL)]
+	[RPC_Server.MaxDistance(3f)]
 	public void UpdateNeonColors(RPCMessage msg)
 	{
 		//IL_0043: Unknown result type (might be due to invalid IL or missing references)
@@ -12315,8 +12857,8 @@ public class NPCTalking : NPCShopKeeper, IConversationProvider
 	}
 
 	[RPC_Server.MaxDistance(3f)]
-	[RPC_Server.CallsPerSecond(1uL)]
 	[RPC_Server]
+	[RPC_Server.CallsPerSecond(1uL)]
 	public void Server_BeginTalking(RPCMessage msg)
 	{
 		BasePlayer player = msg.player;
@@ -12424,9 +12966,9 @@ public class NPCTalking : NPCShopKeeper, IConversationProvider
 	{
 	}
 
-	[RPC_Server.CallsPerSecond(1uL)]
-	[RPC_Server.MaxDistance(3f)]
 	[RPC_Server]
+	[RPC_Server.MaxDistance(3f)]
+	[RPC_Server.CallsPerSecond(1uL)]
 	public void Server_EndTalking(RPCMessage msg)
 	{
 		Server_OnConversationEnded(msg.player);
@@ -12447,9 +12989,9 @@ public class NPCTalking : NPCShopKeeper, IConversationProvider
 		return true;
 	}
 
+	[RPC_Server]
 	[RPC_Server.MaxDistance(3f)]
 	[RPC_Server.CallsPerSecond(5uL)]
-	[RPC_Server]
 	public void Server_ResponsePressed(RPCMessage msg)
 	{
 		BasePlayer player = msg.player;
@@ -13405,9 +13947,9 @@ public class OrientableLight : SimpleLight
 		ClientRPC(RpcTarget.Player("CLIENT_OnDeployed", deployedBy));
 	}
 
+	[RPC_Server.IsVisible(3f)]
 	[RPC_Server]
 	[RPC_Server.CallsPerSecond(3uL)]
-	[RPC_Server.IsVisible(3f)]
 	public void SERVER_SetDir(RPCMessage msg)
 	{
 		//IL_0016: Unknown result type (might be due to invalid IL or missing references)
@@ -13665,9 +14207,9 @@ public class OrnateFrame : PhotoFrame
 		TextColour = Color.black;
 	}
 
-	[RPC_Server]
 	[RPC_Server.IsVisible(3f)]
 	[RPC_Server.CallsPerSecond(2uL)]
+	[RPC_Server]
 	public void RPC_ConfigureFrame(RPCMessage msg)
 	{
 		//IL_0018: Unknown result type (might be due to invalid IL or missing references)
@@ -13993,8 +14535,8 @@ public class PagerEntity : BaseEntity, IRFObject
 		frequency = newFreq;
 	}
 
-	[RPC_Server.IsVisible(3f)]
 	[RPC_Server]
+	[RPC_Server.IsVisible(3f)]
 	public void ServerSetFrequency(RPCMessage msg)
 	{
 		if (!((Object)(object)msg.player == (Object)null) && msg.player.CanBuild() && !(Time.time < nextChangeTime))
@@ -14170,8 +14712,8 @@ public class PaintballGun : BaseProjectile
 		SendNetworkUpdate();
 	}
 
-	[RPC_Server.IsActiveItem]
 	[RPC_Server]
+	[RPC_Server.IsActiveItem]
 	private void Server_PaintballColorChanged(RPCMessage msg)
 	{
 		if (PaintballColorLookup.instance == null)
@@ -14334,8 +14876,8 @@ public class PaintedItemStorageEntity : BaseEntity, IServerFileReceiver, IUGCBro
 		info.msg.paintedItem.editedBy = lastEditedBy;
 	}
 
-	[RPC_Server.CallsPerSecond(3uL)]
 	[RPC_Server]
+	[RPC_Server.CallsPerSecond(3uL)]
 	private void Server_UpdateImage(RPCMessage msg)
 	{
 		//IL_005a: Unknown result type (might be due to invalid IL or missing references)
@@ -14751,9 +15293,9 @@ public class PartyBalloon : BaseCombatEntity
 		TextColour = Color.white;
 	}
 
+	[RPC_Server.IsVisible(3f)]
 	[RPC_Server]
 	[RPC_Server.CallsPerSecond(2uL)]
-	[RPC_Server.IsVisible(3f)]
 	public void RPC_ConfigureBalloon(RPCMessage msg)
 	{
 		//IL_0018: Unknown result type (might be due to invalid IL or missing references)
@@ -16249,8 +16791,8 @@ public class PhotoFrame : StorageContainer, ILOD, IImageReceiver, ISignage, IUGC
 		}
 	}
 
-	[RPC_Server]
 	[RPC_Server.MaxDistance(3f)]
+	[RPC_Server]
 	public void UnLockSign(RPCMessage msg)
 	{
 		if (msg.player.CanInteract() && CanUnlockSign(msg.player))
@@ -16721,8 +17263,8 @@ public class Planner : HeldEntity
 		return base.OnRpcMessage(player, rpc, msg);
 	}
 
-	[RPC_Server.IsActiveItem]
 	[RPC_Server]
+	[RPC_Server.IsActiveItem]
 	private void DoPlace(RPCMessage msg)
 	{
 		if (!msg.player.CanInteract())
@@ -18013,8 +18555,8 @@ public class PlanterBox : StorageContainer, ISplashable
 		Pool.FreeUnmanaged<uint>(ref list);
 	}
 
-	[RPC_Server.MaxDistance(3f)]
 	[RPC_Server]
+	[RPC_Server.MaxDistance(3f)]
 	private void RPC_RequestSaturationUpdate(RPCMessage msg)
 	{
 		if ((Object)(object)msg.player != (Object)null)
@@ -18088,8 +18630,8 @@ public class PlayerHelicopter : BaseHelicopter, IEngineControllerUser, IEntity, 
 		}
 	}
 
-	[Header("Player Helicopter")]
 	[SerializeField]
+	[Header("Player Helicopter")]
 	public Wheel[] wheels;
 
 	[SerializeField]
@@ -18166,8 +18708,8 @@ public class PlayerHelicopter : BaseHelicopter, IEngineControllerUser, IEntity, 
 	[SerializeField]
 	public float maxYawAnim = 1f;
 
-	[Header("Fuel")]
 	[SerializeField]
+	[Header("Fuel")]
 	public GameObjectRef fuelStoragePrefab;
 
 	[SerializeField]
@@ -18835,8 +19377,8 @@ public class PlayerHelicopter : BaseHelicopter, IEngineControllerUser, IEntity, 
 		return IsOn();
 	}
 
-	[RPC_Server.IsVisible(6f)]
 	[RPC_Server]
+	[RPC_Server.IsVisible(6f)]
 	public void RPC_OpenFuel(RPCMessage msg)
 	{
 		BasePlayer player = msg.player;
@@ -19938,8 +20480,8 @@ public class PlayerInventory : EntityComponent<BasePlayer>, IAmmoContainer
 		}
 	}
 
-	[BaseEntity.RPC_Server.CallsPerSecond(2uL)]
 	[BaseEntity.RPC_Server.FromOwner]
+	[BaseEntity.RPC_Server.CallsPerSecond(2uL)]
 	[BaseEntity.RPC_Server]
 	private void UpdateAccessoryOnItem(BaseEntity.RPCMessage msg)
 	{
@@ -20012,22 +20554,22 @@ public class PlayerInventory : EntityComponent<BasePlayer>, IAmmoContainer
 		//IL_0019: Unknown result type (might be due to invalid IL or missing references)
 		//IL_0020: Unknown result type (might be due to invalid IL or missing references)
 		//IL_0025: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0049: Unknown result type (might be due to invalid IL or missing references)
-		//IL_004c: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0090: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00a2: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0176: Unknown result type (might be due to invalid IL or missing references)
-		//IL_017c: Unknown result type (might be due to invalid IL or missing references)
-		//IL_02d7: Unknown result type (might be due to invalid IL or missing references)
-		//IL_01ec: Unknown result type (might be due to invalid IL or missing references)
-		//IL_01ee: Unknown result type (might be due to invalid IL or missing references)
+		//IL_004e: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0051: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0095: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00a7: Unknown result type (might be due to invalid IL or missing references)
+		//IL_017b: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0181: Unknown result type (might be due to invalid IL or missing references)
+		//IL_02dc: Unknown result type (might be due to invalid IL or missing references)
+		//IL_01f1: Unknown result type (might be due to invalid IL or missing references)
 		//IL_01f3: Unknown result type (might be due to invalid IL or missing references)
-		//IL_01f4: Unknown result type (might be due to invalid IL or missing references)
-		//IL_01f5: Unknown result type (might be due to invalid IL or missing references)
-		//IL_01b7: Unknown result type (might be due to invalid IL or missing references)
-		//IL_01ba: Unknown result type (might be due to invalid IL or missing references)
-		//IL_01bc: Invalid comparison between Unknown and I4
-		//IL_02b3: Unknown result type (might be due to invalid IL or missing references)
+		//IL_01f8: Unknown result type (might be due to invalid IL or missing references)
+		//IL_01f9: Unknown result type (might be due to invalid IL or missing references)
+		//IL_01fa: Unknown result type (might be due to invalid IL or missing references)
+		//IL_01bc: Unknown result type (might be due to invalid IL or missing references)
+		//IL_01bf: Unknown result type (might be due to invalid IL or missing references)
+		//IL_01c1: Invalid comparison between Unknown and I4
+		//IL_02b8: Unknown result type (might be due to invalid IL or missing references)
 		if (base.baseEntity.IsTransferring())
 		{
 			return;
@@ -20035,6 +20577,10 @@ public class PlayerInventory : EntityComponent<BasePlayer>, IAmmoContainer
 		ItemId id = msg.read.ItemID();
 		ItemContainerId val = msg.read.ItemContainerID();
 		int num = msg.read.Int8();
+		if (num < -1)
+		{
+			return;
+		}
 		int num2 = (int)msg.read.UInt32();
 		ItemMoveModifier val2 = (ItemMoveModifier)msg.read.Int32();
 		Item item = FindItemByUID(id);
@@ -22697,8 +23243,8 @@ public class Pooltable : BaseCombatEntity
 
 	private TimeSince timeSinceLastMove;
 
-	[SerializeField]
 	[Header("Shared")]
+	[SerializeField]
 	private float ballRadius;
 
 	[SerializeField]
@@ -22724,23 +23270,23 @@ public class Pooltable : BaseCombatEntity
 	[SerializeField]
 	private float splineTableCloseness = 0.25f;
 
-	[SerializeField]
 	[Tooltip("Block walking the mountable into geometry (e.g. an adjacent boat's hull). Turn off to restore pre-check behaviour.")]
+	[SerializeField]
 	private bool runWalkClippingChecks = true;
 
 	[Tooltip("Player body volume tested at each candidate walk pose, in MOUNTABLE space: origin is the pulled spline point, +z points at the cue ball, y=0 is 1m above the player's feet.")]
 	[SerializeField]
 	private Bounds walkAreaCheck = new Bounds(new Vector3(0f, 0f, 0.24f), new Vector3(0.55f, 1.3f, 0.44f));
 
-	[Header("Server")]
 	[SerializeField]
+	[Header("Server")]
 	private GameObjectRef mountableRef;
 
 	[SerializeField]
 	private GameObjectRef winEffect;
 
-	[SerializeField]
 	[Header("Client")]
+	[SerializeField]
 	private List<GameObject> clientRenderingPoolBalls;
 
 	[SerializeField]
@@ -22771,8 +23317,8 @@ public class Pooltable : BaseCombatEntity
 	private float ballCollisionSoundInterval = 0.02f;
 
 	[Header("Ball Return")]
-	[Tooltip("All pocketed balls spawn a fake visual at the start of this path and follow it into the basket.")]
 	[SerializeField]
+	[Tooltip("All pocketed balls spawn a fake visual at the start of this path and follow it into the basket.")]
 	private WorldSpline ballReturnPath;
 
 	[SerializeField]
@@ -23278,18 +23824,24 @@ public class Pooltable : BaseCombatEntity
 		}
 	}
 
-	[RPC_Server.IsVisible(3f)]
 	[RPC_Server]
+	[RPC_Server.IsVisible(3f)]
 	public void RPC_StartSinglePlayerGame(RPCMessage msg)
 	{
-		BeginGame(msg.player, solo: true);
+		if (!((Object)(object)msg.player == (Object)null) && msg.player.CanInteract())
+		{
+			BeginGame(msg.player, solo: true);
+		}
 	}
 
 	[RPC_Server.IsVisible(3f)]
 	[RPC_Server]
 	public void RPC_StartMultiplayerGame(RPCMessage msg)
 	{
-		BeginGame(msg.player, solo: false);
+		if (!((Object)(object)msg.player == (Object)null) && msg.player.CanInteract())
+		{
+			BeginGame(msg.player, solo: false);
+		}
 	}
 
 	private void BeginGame(BasePlayer player, bool solo)
@@ -23334,17 +23886,17 @@ public class Pooltable : BaseCombatEntity
 	[RPC_Server]
 	public void RPC_JoinGame(RPCMessage msg)
 	{
-		if (!((Object)(object)msg.player == (Object)null) && gameController != null)
+		if (!((Object)(object)msg.player == (Object)null) && msg.player.CanInteract() && gameController != null)
 		{
 			gameController.AddSecondPlayer(msg.player.userID);
 		}
 	}
 
-	[RPC_Server]
 	[RPC_Server.IsVisible(3f)]
+	[RPC_Server]
 	public void RPC_RequestMount(RPCMessage msg)
 	{
-		if (!((Object)(object)msg.player == (Object)null) && gameController != null && gameController.HasGame && gameController.CanMount(msg.player.userID))
+		if (!((Object)(object)msg.player == (Object)null) && msg.player.CanInteract() && gameController != null && gameController.HasGame && gameController.CanMount(msg.player.userID))
 		{
 			MountPlayerAtTable(msg.player);
 		}
@@ -23378,25 +23930,39 @@ public class Pooltable : BaseCombatEntity
 		}
 	}
 
-	[RPC_Server]
 	[RPC_Server.MaxDistance(3f)]
+	[RPC_Server]
 	public void RPC_RequestShoot(RPCMessage msg)
 	{
 		//IL_0050: Unknown result type (might be due to invalid IL or missing references)
 		//IL_0055: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0073: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0078: Unknown result type (might be due to invalid IL or missing references)
-		//IL_007e: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0090: Unknown result type (might be due to invalid IL or missing references)
-		if (!((Object)(object)msg.player == (Object)null) && !((FacepunchBehaviour)this).IsInvoking((Action)DismountAllSeatedPlayers) && gameController != null && gameController.CanShoot(msg.player.userID))
+		//IL_0062: Unknown result type (might be due to invalid IL or missing references)
+		//IL_007f: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0085: Unknown result type (might be due to invalid IL or missing references)
+		//IL_008a: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00bc: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00c1: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00c7: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00d9: Unknown result type (might be due to invalid IL or missing references)
+		if ((Object)(object)msg.player == (Object)null || ((FacepunchBehaviour)this).IsInvoking((Action)DismountAllSeatedPlayers) || gameController == null || !gameController.CanShoot(msg.player.userID))
 		{
-			Vector3 val = msg.read.Vector3();
-			float num = msg.read.Float();
-			gameController.OnShotFired();
-			timeSinceLastMove = TimeSince.op_Implicit(0f);
-			ApplyShotShared(val, num);
-			ClientRPC(RpcTarget.NetworkGroup("ClientOnShotFired"), val, num, gameController.ShotId);
-			SendNetworkUpdateImmediate();
+			return;
+		}
+		Vector3 val = msg.read.Vector3();
+		float num = msg.read.Float();
+		if (!Vector3Ex.IsNaNOrInfinity(val) && !FloatEx.IsNaNOrInfinity(num))
+		{
+			val.y = 0f;
+			val = Vector3.ClampMagnitude(val, 1f);
+			num = Mathf.Clamp(num, 1f, 8f);
+			if (!(((Vector3)(ref val)).sqrMagnitude <= Mathf.Epsilon))
+			{
+				gameController.OnShotFired();
+				timeSinceLastMove = TimeSince.op_Implicit(0f);
+				ApplyShotShared(val, num);
+				ClientRPC(RpcTarget.NetworkGroup("ClientOnShotFired"), val, num, gameController.ShotId);
+				SendNetworkUpdateImmediate();
+			}
 		}
 	}
 
@@ -23410,8 +23976,8 @@ public class Pooltable : BaseCombatEntity
 		}
 	}
 
-	[RPC_Server.MaxDistance(3f)]
 	[RPC_Server]
+	[RPC_Server.MaxDistance(3f)]
 	public void RPC_RequestCancelGame(RPCMessage msg)
 	{
 		if (!((Object)(object)msg.player == (Object)null) && CanCancelGame(msg.player))
@@ -24264,8 +24830,8 @@ public class PooltableMountable : BaseMountable
 	[Space]
 	private ViewModel poolCueViewmodel;
 
-	[Header("3p Cue")]
 	[SerializeField]
+	[Header("3p Cue")]
 	[Tooltip("World-space 3p cue prop, locked to the right-hand prop bone each frame (like darts' held prop).")]
 	private Transform cueHeldProp;
 
@@ -24277,8 +24843,8 @@ public class PooltableMountable : BaseMountable
 	[SerializeField]
 	private Vector3 cueHeldPropEulerOffset;
 
-	[Header("Cue Material")]
 	[Tooltip("Cue material for the player in seat 0 (whoever started the game). Applies to the 3p prop and the viewmodel. Leave empty to keep whatever the prefabs ship with.")]
+	[Header("Cue Material")]
 	[SerializeField]
 	private Material player1CueMaterial;
 
@@ -24289,8 +24855,8 @@ public class PooltableMountable : BaseMountable
 	[SerializeField]
 	private float movementSpeed;
 
-	[Tooltip("Max spline travel per second from mouse aim. Well above movementSpeed - the mouse is the fine aim and has to feel 1:1 - but bounded so a violent flick can't spin you round the table.")]
 	[SerializeField]
+	[Tooltip("Max spline travel per second from mouse aim. Well above movementSpeed - the mouse is the fine aim and has to feel 1:1 - but bounded so a violent flick can't spin you round the table.")]
 	private float mouseAimMaxSpeed = 8f;
 
 	private static readonly int RightHash = Animator.StringToHash("right");
@@ -24301,19 +24867,19 @@ public class PooltableMountable : BaseMountable
 
 	private float currentRight;
 
-	[SerializeField]
 	[Tooltip("Metres of spline travel per unit of mouse movement. Deliberately tiny - the mouse is the fine aim, A/D is for walking round the table.")]
+	[SerializeField]
 	private float mouseAimSensitivity = 0.002f;
 
 	[SerializeField]
 	private float pullbackSensitivity = 0.01f;
 
-	[SerializeField]
 	[Tooltip("Normalized cue travel per second required to turn forward movement into a shot.")]
+	[SerializeField]
 	private float strikeSpeedThreshold = 1f;
 
-	[SerializeField]
 	[Tooltip("Minimum pullback required before a fast forward movement can strike.")]
+	[SerializeField]
 	private float minimumStrikePower = 0.05f;
 
 	private float cuePullback = 0.5f;
@@ -24485,9 +25051,9 @@ public class PooltableMountable : BaseMountable
 		}
 	}
 
-	[RPC_Server.CallsPerSecond(30uL)]
-	[RPC_Server.FromMounted]
 	[RPC_Server]
+	[RPC_Server.FromMounted]
+	[RPC_Server.CallsPerSecond(30uL)]
 	public void RPC_UpdateSplineDistance(RPCMessage msg)
 	{
 		if (!((Object)(object)poolTable == (Object)null) && !((Object)(object)msg.player == (Object)null) && poolTable.CanPlayerMove(msg.player.userID))
@@ -24690,8 +25256,8 @@ public class PowerCounter : IOEntity
 		return targetCounterNumber;
 	}
 
-	[RPC_Server.IsVisible(3f)]
 	[RPC_Server]
+	[RPC_Server.IsVisible(3f)]
 	public void SERVER_SetTarget(RPCMessage msg)
 	{
 		int num = msg.read.Int32();
@@ -25160,8 +25726,8 @@ public class PoweredRemoteControlEntity : IOEntity, IRemoteControllable, IAdminU
 		}
 	}
 
-	[RPC_Server]
 	[RPC_Server.MaxDistance(3f)]
+	[RPC_Server]
 	public void Server_SetID(RPCMessage msg)
 	{
 		string oldID = msg.read.String(256, false);
@@ -25189,10 +25755,10 @@ public class PoweredRemoteControlEntity : IOEntity, IRemoteControllable, IAdminU
 		}
 	}
 
-	[RPC_Server.CallsPerSecond(3uL)]
-	[RPC_Server.MaxDistance(3f)]
-	[RPC_Server.IsVisible(3f)]
 	[RPC_Server]
+	[RPC_Server.CallsPerSecond(3uL)]
+	[RPC_Server.IsVisible(3f)]
+	[RPC_Server.MaxDistance(3f)]
 	public void SERVER_RequestOpenRCPanel(RPCMessage msg)
 	{
 		BasePlayer player = msg.player;
@@ -25606,8 +26172,8 @@ public class PowergridFuseBox : BaseEntity, IContainerSounds, ILootableEntity, P
 		ClientRPC(RpcTarget.NetworkGroup("ClientRPC_OnPowergridStageChanged"), PointEntity<PowergridManager>.ServerInstance.CurrentStage);
 	}
 
-	[RPC_Server]
 	[RPC_Server.IsVisible(3f)]
+	[RPC_Server]
 	private void RPC_OpenLoot(RPCMessage rpc)
 	{
 		if (inventory != null)
@@ -25973,8 +26539,8 @@ public class ProceduralLift : BaseEntity
 		}
 	}
 
-	[RPC_Server.MaxDistance(3f)]
 	[RPC_Server]
+	[RPC_Server.MaxDistance(3f)]
 	private void RPC_UseLift(RPCMessage rpc)
 	{
 		if (rpc.player.CanInteract() && Interface.CallHook("OnLiftUse", (object)this, (object)rpc.player) == null && !IsBusy())
@@ -26598,8 +27164,8 @@ using UnityEngine;
 
 public class Ragdoll : EntityComponent<BaseEntity>, IPrefabPreProcess
 {
-	[Header("Ragdoll")]
 	[Tooltip("If true, ragdoll physics are simulated on the server instead of the client")]
+	[Header("Ragdoll")]
 	public bool simOnServer;
 
 	public float lerpToServerSimTime = 0.5f;
@@ -26635,24 +27201,24 @@ public class Ragdoll : EntityComponent<BaseEntity>, IPrefabPreProcess
 	[SerializeField]
 	private List<CharacterJoint> characterJoints = new List<CharacterJoint>();
 
-	[SerializeField]
 	[ReadOnly]
+	[SerializeField]
 	private List<ConfigurableJoint> configurableJoints = new List<ConfigurableJoint>();
 
-	[SerializeField]
 	[ReadOnly]
+	[SerializeField]
 	private List<Collider> colliders = new List<Collider>();
 
 	[SerializeField]
 	[ReadOnly]
 	private int[] boneIndex;
 
-	[ReadOnly]
 	[SerializeField]
+	[ReadOnly]
 	private Vector3[] genericBonePos;
 
-	[ReadOnly]
 	[SerializeField]
+	[ReadOnly]
 	private Quaternion[] genericBoneRot;
 
 	[SerializeField]
@@ -27562,8 +28128,8 @@ public class ReclaimTerminal : StorageContainer
 	}
 
 	[RPC_Server]
-	[RPC_Server.CallsPerSecond(1uL)]
 	[RPC_Server.MaxDistance(3f)]
+	[RPC_Server.CallsPerSecond(1uL)]
 	public void RPC_ReloadLoot(RPCMessage msg)
 	{
 		BasePlayer player = msg.player;
@@ -27815,9 +28381,9 @@ public class RecorderTool : ThrownWeapon, ICassettePlayer
 		return (Object)(object)cachedCassette != (Object)null;
 	}
 
-	[RPC_Server.FromOwner]
 	[RPC_Server]
 	[RPC_Server.CallsPerSecond(2uL)]
+	[RPC_Server.FromOwner]
 	public void Server_TogglePlaying(RPCMessage msg)
 	{
 		bool b = ((Stream)(object)msg.read).ReadByte() == 1;
@@ -27855,9 +28421,9 @@ public class RecorderTool : ThrownWeapon, ICassettePlayer
 		}
 	}
 
-	[RPC_Server.FromOwner]
-	[RPC_Server.CallsPerSecond(3uL)]
 	[RPC_Server]
+	[RPC_Server.CallsPerSecond(3uL)]
+	[RPC_Server.FromOwner]
 	public void OnCassetteRecordingEnded(RPCMessage rpc)
 	{
 		if (GetItem() != null)
@@ -28165,8 +28731,8 @@ public class Recycler : StorageContainer, IPowergridEntity
 		return true;
 	}
 
-	[RPC_Server.MaxDistance(3f)]
 	[RPC_Server]
+	[RPC_Server.MaxDistance(3f)]
 	private void SVSwitch(RPCMessage msg)
 	{
 		bool flag = msg.read.Bit();
@@ -28761,6 +29327,9 @@ public class RelationshipManager : BaseEntity
 		[NonSerialized]
 		public float lastMugshotTime;
 
+		[NonSerialized]
+		public bool awaitingMugshot;
+
 		public ulong UserId => player;
 
 		public string UserName => displayName;
@@ -28794,6 +29363,7 @@ public class RelationshipManager : BaseEntity
 			mugshotCrc = 0u;
 			notes = "";
 			lastMugshotTime = 0f;
+			awaitingMugshot = false;
 		}
 
 		public PlayerRelationshipInfo ToProto()
@@ -29776,6 +30346,7 @@ public class RelationshipManager : BaseEntity
 				float num5 = Vector3Ex.Distance2D(((Component)player).transform.position, ((Component)otherPlayer).transform.position);
 				if (flag2 && num5 < num4 && flag4)
 				{
+					relations.awaitingMugshot = true;
 					ClientRPC(RpcTarget.Player("CLIENT_DoMugshot", player), num2);
 					relations.lastMugshotTime = Time.realtimeSinceStartup;
 				}
@@ -29899,8 +30470,8 @@ public class RelationshipManager : BaseEntity
 		return playerRelationships;
 	}
 
-	[RPC_Server.CallsPerSecond(1uL)]
 	[RPC_Server]
+	[RPC_Server.CallsPerSecond(1uL)]
 	public void SERVER_SendFreshContacts(RPCMessage msg)
 	{
 		BasePlayer player = msg.player;
@@ -29951,17 +30522,27 @@ public class RelationshipManager : BaseEntity
 		MarkRelationshipsDirtyFor(userID);
 	}
 
-	[RPC_Server]
 	[RPC_Server.CallsPerSecond(10uL)]
+	[RPC_Server]
 	public void SERVER_ReceiveMugshot(RPCMessage msg)
 	{
-		//IL_008e: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00c9: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00bb: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00f6: Unknown result type (might be due to invalid IL or missing references)
 		EncryptedValue<ulong> userID = msg.player.userID;
 		ulong num = msg.read.UInt64();
 		uint num2 = msg.read.UInt32();
+		if (!relationships.TryGetValue(userID, out var value) || !value.relations.TryGetValue(num, out var value2))
+		{
+			return;
+		}
+		RelationshipType type = value2.type;
+		if ((type != RelationshipType.Acquaintance && type != RelationshipType.Friend && type != RelationshipType.Enemy) || !value2.awaitingMugshot)
+		{
+			return;
+		}
+		value2.awaitingMugshot = false;
 		byte[] array = msg.read.BytesWithSize(65536u, false);
-		if (array != null && ImageProcessing.IsValidJPG(array, 256, 512) && relationships.TryGetValue(userID, out var value) && value.relations.TryGetValue(num, out var value2))
+		if (array != null && ImageProcessing.IsValidJPG(array, 256, 512))
 		{
 			uint steamIdHash = GetSteamIdHash(userID, num);
 			uint num3 = FileStorage.server.Store(array, FileStorage.Type.jpg, net.ID, steamIdHash);
@@ -30688,6 +31269,9 @@ public class PlayerRelationshipInfo : IPooled, IServerFileReceiver, IPlayerInfo
 	[NonSerialized]
 	public float lastMugshotTime;
 
+	[NonSerialized]
+	public bool awaitingMugshot;
+
 	public ulong UserId => player;
 
 	public string UserName => displayName;
@@ -30721,6 +31305,7 @@ public class PlayerRelationshipInfo : IPooled, IServerFileReceiver, IPlayerInfo
 		mugshotCrc = 0u;
 		notes = "";
 		lastMugshotTime = 0f;
+		awaitingMugshot = false;
 	}
 
 	public PlayerRelationshipInfo ToProto()
@@ -31415,8 +32000,8 @@ public class RemoteControlEntity : BaseCombatEntity, IRemoteControllable, IAdmin
 		return true;
 	}
 
-	[RPC_Server]
 	[RPC_Server.MaxDistance(3f)]
+	[RPC_Server]
 	public void Server_SetID(RPCMessage msg)
 	{
 		string oldID = msg.read.String(256, false);
@@ -32576,9 +33161,9 @@ public class RentableShop : BaseEntity
 		}
 	}
 
+	[RPC_Server.CallsPerSecond(1uL)]
 	[RPC_Server]
 	[RPC_Server.IsVisible(3f)]
-	[RPC_Server.CallsPerSecond(1uL)]
 	private void Server_RetrieveAllStoredItems(RPCMessage msg)
 	{
 		BasePlayer player = msg.player;
@@ -32599,8 +33184,8 @@ public class RentableShop : BaseEntity
 		SendNetworkUpdate();
 	}
 
-	[RPC_Server]
 	[RPC_Server.IsVisible(3f)]
+	[RPC_Server]
 	[RPC_Server.CallsPerSecond(5uL)]
 	private void Server_Shop(RPCMessage msg)
 	{
@@ -33174,557 +33759,6 @@ public class PlayerStoreContents : IPooled
 			ItemContainer.Drop("assets/prefabs/misc/item drop/item_drop_backpack.prefab", player.GetDropPosition(), default(Quaternion), items);
 		}
 		items.Clear();
-	}
-}
-
-
-using System;
-using ConVar;
-using Network;
-using UnityEngine;
-using UnityEngine.Assertions;
-
-public class RentableShopVendingMachine : InvisibleVendingMachine
-{
-	private RentableShop _cachedParent;
-
-	[SerializeField]
-	private ItemListScriptableObject BannedItemsList;
-
-	private RentableShop ParentRentableShop
-	{
-		get
-		{
-			if ((Object)(object)_cachedParent == (Object)null)
-			{
-				_cachedParent = GetParentEntity() as RentableShop;
-			}
-			return _cachedParent;
-		}
-	}
-
-	public override bool ShouldRecordStats => true;
-
-	public override bool OnRpcMessage(BasePlayer player, uint rpc, Message msg)
-	{
-		TimeWarning val = TimeWarning.New("RentableShopVendingMachine.OnRpcMessage", 0);
-		try
-		{
-			if (rpc == 892362950 && (Object)(object)player != (Object)null)
-			{
-				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
-				if (Global.developer > 2)
-				{
-					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - RPC_AddSellOrderRelaxedDistance"));
-				}
-				TimeWarning val2 = TimeWarning.New("RPC_AddSellOrderRelaxedDistance", 0);
-				try
-				{
-					TimeWarning val3 = TimeWarning.New("Conditions", 0);
-					try
-					{
-						if (!RPC_Server.MaxDistance.Test(892362950u, "RPC_AddSellOrderRelaxedDistance", this, player, 12f))
-						{
-							return true;
-						}
-					}
-					finally
-					{
-						((IDisposable)val3)?.Dispose();
-					}
-					try
-					{
-						val3 = TimeWarning.New("Call", 0);
-						try
-						{
-							RPCMessage rPCMessage = default(RPCMessage);
-							rPCMessage.connection = msg.connection;
-							rPCMessage.player = player;
-							rPCMessage.read = msg.read;
-							RPCMessage msg2 = rPCMessage;
-							RPC_AddSellOrderRelaxedDistance(msg2);
-						}
-						finally
-						{
-							((IDisposable)val3)?.Dispose();
-						}
-					}
-					catch (Exception ex)
-					{
-						Debug.LogException(ex);
-						player.Kick("RPC Error in RPC_AddSellOrderRelaxedDistance");
-					}
-				}
-				finally
-				{
-					((IDisposable)val2)?.Dispose();
-				}
-				return true;
-			}
-			if (rpc == 169239598 && (Object)(object)player != (Object)null)
-			{
-				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
-				if (Global.developer > 2)
-				{
-					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - RPC_Broadcast"));
-				}
-				TimeWarning val2 = TimeWarning.New("RPC_Broadcast", 0);
-				try
-				{
-					TimeWarning val3 = TimeWarning.New("Conditions", 0);
-					try
-					{
-						if (!RPC_Server.IsVisible.Test(169239598u, "RPC_Broadcast", this, player, 3f))
-						{
-							return true;
-						}
-					}
-					finally
-					{
-						((IDisposable)val3)?.Dispose();
-					}
-					try
-					{
-						val3 = TimeWarning.New("Call", 0);
-						try
-						{
-							RPCMessage rPCMessage = default(RPCMessage);
-							rPCMessage.connection = msg.connection;
-							rPCMessage.player = player;
-							rPCMessage.read = msg.read;
-							RPCMessage msg3 = rPCMessage;
-							RPC_Broadcast(msg3);
-						}
-						finally
-						{
-							((IDisposable)val3)?.Dispose();
-						}
-					}
-					catch (Exception ex2)
-					{
-						Debug.LogException(ex2);
-						player.Kick("RPC Error in RPC_Broadcast");
-					}
-				}
-				finally
-				{
-					((IDisposable)val2)?.Dispose();
-				}
-				return true;
-			}
-			if (rpc == 1017551721 && (Object)(object)player != (Object)null)
-			{
-				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
-				if (Global.developer > 2)
-				{
-					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - RPC_BuyItem"));
-				}
-				TimeWarning val2 = TimeWarning.New("RPC_BuyItem", 0);
-				try
-				{
-					TimeWarning val3 = TimeWarning.New("Conditions", 0);
-					try
-					{
-						if (!RPC_Server.MaxDistance.Test(1017551721u, "RPC_BuyItem", this, player, 9f))
-						{
-							return true;
-						}
-					}
-					finally
-					{
-						((IDisposable)val3)?.Dispose();
-					}
-					try
-					{
-						val3 = TimeWarning.New("Call", 0);
-						try
-						{
-							RPCMessage rPCMessage = default(RPCMessage);
-							rPCMessage.connection = msg.connection;
-							rPCMessage.player = player;
-							rPCMessage.read = msg.read;
-							RPCMessage msg4 = rPCMessage;
-							RPC_BuyItem(msg4);
-						}
-						finally
-						{
-							((IDisposable)val3)?.Dispose();
-						}
-					}
-					catch (Exception ex3)
-					{
-						Debug.LogException(ex3);
-						player.Kick("RPC Error in RPC_BuyItem");
-					}
-				}
-				finally
-				{
-					((IDisposable)val2)?.Dispose();
-				}
-				return true;
-			}
-			if (rpc == 3483523947u && (Object)(object)player != (Object)null)
-			{
-				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
-				if (Global.developer > 2)
-				{
-					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - RPC_DeleteAllSellOrdersDistanceCheckOnly"));
-				}
-				TimeWarning val2 = TimeWarning.New("RPC_DeleteAllSellOrdersDistanceCheckOnly", 0);
-				try
-				{
-					TimeWarning val3 = TimeWarning.New("Conditions", 0);
-					try
-					{
-						if (!RPC_Server.MaxDistance.Test(3483523947u, "RPC_DeleteAllSellOrdersDistanceCheckOnly", this, player, 9f))
-						{
-							return true;
-						}
-					}
-					finally
-					{
-						((IDisposable)val3)?.Dispose();
-					}
-					try
-					{
-						val3 = TimeWarning.New("Call", 0);
-						try
-						{
-							RPCMessage rPCMessage = default(RPCMessage);
-							rPCMessage.connection = msg.connection;
-							rPCMessage.player = player;
-							rPCMessage.read = msg.read;
-							RPCMessage msg5 = rPCMessage;
-							RPC_DeleteAllSellOrdersDistanceCheckOnly(msg5);
-						}
-						finally
-						{
-							((IDisposable)val3)?.Dispose();
-						}
-					}
-					catch (Exception ex4)
-					{
-						Debug.LogException(ex4);
-						player.Kick("RPC Error in RPC_DeleteAllSellOrdersDistanceCheckOnly");
-					}
-				}
-				finally
-				{
-					((IDisposable)val2)?.Dispose();
-				}
-				return true;
-			}
-			if (rpc == 2204790576u && (Object)(object)player != (Object)null)
-			{
-				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
-				if (Global.developer > 2)
-				{
-					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - RPC_DeleteSellOrderDistanceCheckOnly"));
-				}
-				TimeWarning val2 = TimeWarning.New("RPC_DeleteSellOrderDistanceCheckOnly", 0);
-				try
-				{
-					TimeWarning val3 = TimeWarning.New("Conditions", 0);
-					try
-					{
-						if (!RPC_Server.MaxDistance.Test(2204790576u, "RPC_DeleteSellOrderDistanceCheckOnly", this, player, 9f))
-						{
-							return true;
-						}
-					}
-					finally
-					{
-						((IDisposable)val3)?.Dispose();
-					}
-					try
-					{
-						val3 = TimeWarning.New("Call", 0);
-						try
-						{
-							RPCMessage rPCMessage = default(RPCMessage);
-							rPCMessage.connection = msg.connection;
-							rPCMessage.player = player;
-							rPCMessage.read = msg.read;
-							RPCMessage msg6 = rPCMessage;
-							RPC_DeleteSellOrderDistanceCheckOnly(msg6);
-						}
-						finally
-						{
-							((IDisposable)val3)?.Dispose();
-						}
-					}
-					catch (Exception ex5)
-					{
-						Debug.LogException(ex5);
-						player.Kick("RPC Error in RPC_DeleteSellOrderDistanceCheckOnly");
-					}
-				}
-				finally
-				{
-					((IDisposable)val2)?.Dispose();
-				}
-				return true;
-			}
-			if (rpc == 407432418 && (Object)(object)player != (Object)null)
-			{
-				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
-				if (Global.developer > 2)
-				{
-					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - RPC_RequestLongTermData"));
-				}
-				TimeWarning val2 = TimeWarning.New("RPC_RequestLongTermData", 0);
-				try
-				{
-					TimeWarning val3 = TimeWarning.New("Conditions", 0);
-					try
-					{
-						if (!RPC_Server.MaxDistance.Test(407432418u, "RPC_RequestLongTermData", this, player, 9f))
-						{
-							return true;
-						}
-					}
-					finally
-					{
-						((IDisposable)val3)?.Dispose();
-					}
-					try
-					{
-						val3 = TimeWarning.New("Call", 0);
-						try
-						{
-							RPCMessage rPCMessage = default(RPCMessage);
-							rPCMessage.connection = msg.connection;
-							rPCMessage.player = player;
-							rPCMessage.read = msg.read;
-							RPCMessage msg7 = rPCMessage;
-							RPC_RequestLongTermData(msg7);
-						}
-						finally
-						{
-							((IDisposable)val3)?.Dispose();
-						}
-					}
-					catch (Exception ex6)
-					{
-						Debug.LogException(ex6);
-						player.Kick("RPC Error in RPC_RequestLongTermData");
-					}
-				}
-				finally
-				{
-					((IDisposable)val2)?.Dispose();
-				}
-				return true;
-			}
-			if (rpc == 1907075143 && (Object)(object)player != (Object)null)
-			{
-				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
-				if (Global.developer > 2)
-				{
-					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - RPC_RequestPurchaseData"));
-				}
-				TimeWarning val2 = TimeWarning.New("RPC_RequestPurchaseData", 0);
-				try
-				{
-					TimeWarning val3 = TimeWarning.New("Conditions", 0);
-					try
-					{
-						if (!RPC_Server.MaxDistance.Test(1907075143u, "RPC_RequestPurchaseData", this, player, 9f))
-						{
-							return true;
-						}
-					}
-					finally
-					{
-						((IDisposable)val3)?.Dispose();
-					}
-					try
-					{
-						val3 = TimeWarning.New("Call", 0);
-						try
-						{
-							RPCMessage rPCMessage = default(RPCMessage);
-							rPCMessage.connection = msg.connection;
-							rPCMessage.player = player;
-							rPCMessage.read = msg.read;
-							RPCMessage msg8 = rPCMessage;
-							RPC_RequestPurchaseData(msg8);
-						}
-						finally
-						{
-							((IDisposable)val3)?.Dispose();
-						}
-					}
-					catch (Exception ex7)
-					{
-						Debug.LogException(ex7);
-						player.Kick("RPC Error in RPC_RequestPurchaseData");
-					}
-				}
-				finally
-				{
-					((IDisposable)val2)?.Dispose();
-				}
-				return true;
-			}
-			if (rpc == 81697804 && (Object)(object)player != (Object)null)
-			{
-				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
-				if (Global.developer > 2)
-				{
-					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - RPC_UpdateShopNameDistanceCheckOnly"));
-				}
-				TimeWarning val2 = TimeWarning.New("RPC_UpdateShopNameDistanceCheckOnly", 0);
-				try
-				{
-					TimeWarning val3 = TimeWarning.New("Conditions", 0);
-					try
-					{
-						if (!RPC_Server.MaxDistance.Test(81697804u, "RPC_UpdateShopNameDistanceCheckOnly", this, player, 9f))
-						{
-							return true;
-						}
-					}
-					finally
-					{
-						((IDisposable)val3)?.Dispose();
-					}
-					try
-					{
-						val3 = TimeWarning.New("Call", 0);
-						try
-						{
-							RPCMessage rPCMessage = default(RPCMessage);
-							rPCMessage.connection = msg.connection;
-							rPCMessage.player = player;
-							rPCMessage.read = msg.read;
-							RPCMessage msg9 = rPCMessage;
-							RPC_UpdateShopNameDistanceCheckOnly(msg9);
-						}
-						finally
-						{
-							((IDisposable)val3)?.Dispose();
-						}
-					}
-					catch (Exception ex8)
-					{
-						Debug.LogException(ex8);
-						player.Kick("RPC Error in RPC_UpdateShopNameDistanceCheckOnly");
-					}
-				}
-				finally
-				{
-					((IDisposable)val2)?.Dispose();
-				}
-				return true;
-			}
-		}
-		finally
-		{
-			((IDisposable)val)?.Dispose();
-		}
-		return base.OnRpcMessage(player, rpc, msg);
-	}
-
-	public override bool CanPlayerAdmin(BasePlayer player)
-	{
-		if ((Object)(object)ParentRentableShop != (Object)null)
-		{
-			return ParentRentableShop.IsOwner(player);
-		}
-		return false;
-	}
-
-	public override void ServerInit()
-	{
-		base.ServerInit();
-		if (BannedItemsList != null)
-		{
-			base.inventory.SetBlacklist(BannedItemsList.Items);
-		}
-	}
-
-	public override void RPC_Broadcast(RPCMessage msg)
-	{
-	}
-
-	[RPC_Server]
-	[RPC_Server.MaxDistance(12f)]
-	public void RPC_AddSellOrderRelaxedDistance(RPCMessage msg)
-	{
-		RPC_AddSellOrder(msg);
-	}
-
-	[RPC_Server]
-	[RPC_Server.MaxDistance(9f)]
-	private void RPC_UpdateShopNameDistanceCheckOnly(RPCMessage msg)
-	{
-		base.RPC_UpdateShopName(msg);
-	}
-
-	[RPC_Server]
-	[RPC_Server.MaxDistance(9f)]
-	private void RPC_BuyItem(RPCMessage msg)
-	{
-		BuyItem(msg);
-	}
-
-	[RPC_Server]
-	[RPC_Server.MaxDistance(9f)]
-	private void RPC_RequestLongTermData(RPCMessage msg)
-	{
-		SV_RequestLongTermData(msg);
-	}
-
-	[RPC_Server]
-	[RPC_Server.MaxDistance(9f)]
-	private void RPC_RequestPurchaseData(RPCMessage msg)
-	{
-		SV_RequestPurchaseData(msg);
-	}
-
-	[RPC_Server]
-	[RPC_Server.MaxDistance(9f)]
-	private void RPC_DeleteSellOrderDistanceCheckOnly(RPCMessage msg)
-	{
-		RPC_DeleteSellOrder(msg);
-	}
-
-	[RPC_Server]
-	[RPC_Server.MaxDistance(9f)]
-	private void RPC_DeleteAllSellOrdersDistanceCheckOnly(RPCMessage msg)
-	{
-		RPC_DeleteAllSellOrders(msg);
-	}
-
-	public override void TakeCurrencyItem(Item takenCurrencyItem)
-	{
-		//IL_001a: Unknown result type (might be due to invalid IL or missing references)
-		//IL_001f: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0026: Unknown result type (might be due to invalid IL or missing references)
-		//IL_002c: Unknown result type (might be due to invalid IL or missing references)
-		if (!takenCurrencyItem.MoveToContainer(base.inventory))
-		{
-			takenCurrencyItem.Drop(base.inventory.dropPosition, Vector3.zero);
-		}
-	}
-
-	public override bool CanOpenLootPanel(BasePlayer player, string panelName)
-	{
-		if ((Object)(object)player != (Object)null && GetParentEntity() is RentableShop rentableShop && rentableShop.IsIntruder(player.userID))
-		{
-			return true;
-		}
-		return base.CanOpenLootPanel(player, panelName);
-	}
-
-	public override PlayerInventory.CanMoveFromResponse CanMoveFrom(BasePlayer player, Item item)
-	{
-		if ((Object)(object)player != (Object)null && GetParentEntity() is RentableShop rentableShop && rentableShop.IsIntruder(player.userID))
-		{
-			return PlayerInventory.CanMoveFromResponse.Success();
-		}
-		return base.CanMoveFrom(player, item);
 	}
 }
 

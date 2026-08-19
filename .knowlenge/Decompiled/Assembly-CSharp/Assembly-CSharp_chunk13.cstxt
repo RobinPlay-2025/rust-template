@@ -1,3 +1,253 @@
+using System.Collections.Generic;
+using ConVar;
+using Oxide.Core;
+using UnityEngine;
+
+public class HelicopterTurret : MonoBehaviour
+{
+	public PatrolHelicopterAI _heliAI;
+
+	public float fireRate = 0.125f;
+
+	public float burstLength = 3f;
+
+	public float timeBetweenBursts = 3f;
+
+	public float maxTargetRange = 300f;
+
+	public float loseTargetAfter = 5f;
+
+	public Transform gun_yaw;
+
+	public Transform gun_pitch;
+
+	public Transform muzzleTransform;
+
+	public bool left;
+
+	public BaseCombatEntity _target;
+
+	private float lastBurstTime = float.NegativeInfinity;
+
+	private float lastFireTime = float.NegativeInfinity;
+
+	private float lastSeenTargetTime = float.NegativeInfinity;
+
+	private bool targetVisible;
+
+	public void SetTarget(BaseCombatEntity newTarget)
+	{
+		if (Interface.CallHook("OnHelicopterTarget", (object)this, (object)newTarget) == null)
+		{
+			_target = newTarget;
+			UpdateTargetVisibility();
+		}
+	}
+
+	public bool NeedsNewTarget()
+	{
+		if (HasTarget())
+		{
+			if (!targetVisible)
+			{
+				return TimeSinceTargetLastSeen() > loseTargetAfter;
+			}
+			return false;
+		}
+		return true;
+	}
+
+	public bool UpdateTargetFromList(List<PatrolHelicopterAI.targetinfo> newTargetList)
+	{
+		int num = Random.Range(0, newTargetList.Count);
+		int num2 = newTargetList.Count;
+		while (num2 >= 0)
+		{
+			num2--;
+			PatrolHelicopterAI.targetinfo targetinfo = newTargetList[num];
+			if (targetinfo != null && (Object)(object)targetinfo.ent != (Object)null && targetinfo.IsVisible() && InFiringArc(targetinfo.ply))
+			{
+				SetTarget(targetinfo.ply);
+				return true;
+			}
+			num++;
+			if (num >= newTargetList.Count)
+			{
+				num = 0;
+			}
+		}
+		return false;
+	}
+
+	public bool TargetVisible()
+	{
+		UpdateTargetVisibility();
+		return targetVisible;
+	}
+
+	public float TimeSinceTargetLastSeen()
+	{
+		return Time.realtimeSinceStartup - lastSeenTargetTime;
+	}
+
+	public bool HasTarget()
+	{
+		return (Object)(object)_target != (Object)null;
+	}
+
+	public void ClearTarget()
+	{
+		_target = null;
+		targetVisible = false;
+	}
+
+	public void TurretThink()
+	{
+		if (HasTarget() && TimeSinceTargetLastSeen() > loseTargetAfter * 2f)
+		{
+			ClearTarget();
+		}
+		if (HasTarget())
+		{
+			if (Time.time - lastBurstTime > burstLength + timeBetweenBursts && TargetVisible())
+			{
+				lastBurstTime = Time.time;
+			}
+			if (Time.time < lastBurstTime + burstLength && Time.time - lastFireTime >= fireRate && InFiringArc(_target))
+			{
+				lastFireTime = Time.time;
+				FireGun();
+			}
+		}
+	}
+
+	public void FireGun()
+	{
+		//IL_0011: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0025: Unknown result type (might be due to invalid IL or missing references)
+		//IL_002a: Unknown result type (might be due to invalid IL or missing references)
+		_heliAI.FireGun(((Component)_target).transform.position + new Vector3(0f, 0.25f, 0f), ConVar.PatrolHelicopter.bulletAccuracy, left);
+	}
+
+	public Vector3 GetPositionForEntity(BaseCombatEntity potentialtarget)
+	{
+		//IL_0006: Unknown result type (might be due to invalid IL or missing references)
+		return ((Component)potentialtarget).transform.position;
+	}
+
+	public float AngleToTarget(BaseCombatEntity potentialtarget)
+	{
+		//IL_0002: Unknown result type (might be due to invalid IL or missing references)
+		//IL_000d: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0012: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0013: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0014: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0019: Unknown result type (might be due to invalid IL or missing references)
+		//IL_001c: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0021: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0047: Unknown result type (might be due to invalid IL or missing references)
+		//IL_004c: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0035: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0051: Unknown result type (might be due to invalid IL or missing references)
+		Vector3 positionForEntity = GetPositionForEntity(potentialtarget);
+		Vector3 position = muzzleTransform.position;
+		Vector3 val = positionForEntity - position;
+		Vector3 normalized = ((Vector3)(ref val)).normalized;
+		return Vector3.Angle(left ? (-((Component)_heliAI).transform.right) : ((Component)_heliAI).transform.right, normalized);
+	}
+
+	public bool InFiringArc(BaseCombatEntity potentialtarget)
+	{
+		object obj = Interface.CallHook("CanBeTargeted", (object)potentialtarget, (object)this);
+		if (obj is bool)
+		{
+			return (bool)obj;
+		}
+		return AngleToTarget(potentialtarget) < 80f;
+	}
+
+	public void UpdateTargetVisibility()
+	{
+		//IL_0014: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0019: Unknown result type (might be due to invalid IL or missing references)
+		//IL_003c: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0043: Unknown result type (might be due to invalid IL or missing references)
+		//IL_004f: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0056: Unknown result type (might be due to invalid IL or missing references)
+		//IL_005b: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0060: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0064: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0069: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0034: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0039: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0089: Unknown result type (might be due to invalid IL or missing references)
+		//IL_008e: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0095: Unknown result type (might be due to invalid IL or missing references)
+		//IL_009a: Unknown result type (might be due to invalid IL or missing references)
+		//IL_009f: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00a1: Unknown result type (might be due to invalid IL or missing references)
+		if (HasTarget())
+		{
+			Vector3 position = ((Component)_target).transform.position;
+			BasePlayer basePlayer = _target as BasePlayer;
+			if (Object.op_Implicit((Object)(object)basePlayer))
+			{
+				position = basePlayer.eyes.position;
+			}
+			bool flag = false;
+			float num = Vector3.Distance(position, muzzleTransform.position);
+			Vector3 val = position - muzzleTransform.position;
+			Vector3 normalized = ((Vector3)(ref val)).normalized;
+			if (num < maxTargetRange && InFiringArc(_target) && GamePhysics.Trace(new Ray(muzzleTransform.position + normalized * 6f, normalized), 0f, out var hitInfo, num * 1.1f, 1218652417, (QueryTriggerInteraction)0) && (Object)(object)((Component)((RaycastHit)(ref hitInfo)).collider).gameObject.ToBaseEntity() == (Object)(object)_target)
+			{
+				flag = true;
+			}
+			if (flag)
+			{
+				lastSeenTargetTime = Time.realtimeSinceStartup;
+			}
+			targetVisible = flag;
+		}
+	}
+}
+
+
+using System;
+using UnityEngine;
+
+public class LockedByEntCrate : LootContainer
+{
+	public GameObject lockingEnt;
+
+	public void SetLockingEnt(GameObject ent)
+	{
+		((FacepunchBehaviour)this).CancelInvoke((Action)Think);
+		SetLocked(isLocked: false);
+		lockingEnt = ent;
+		if ((Object)(object)lockingEnt != (Object)null)
+		{
+			((FacepunchBehaviour)this).InvokeRepeating((Action)Think, Random.Range(0f, 1f), 1f);
+			SetLocked(isLocked: true);
+		}
+	}
+
+	public void SetLocked(bool isLocked)
+	{
+		using FlagsUpdateScope flagsUpdateScope = StartSetFlags(FlagsUpdateMode.SendNetworkUpdate);
+		flagsUpdateScope.Set(Flags.OnFire, isLocked);
+		flagsUpdateScope.Set(Flags.Locked, isLocked);
+	}
+
+	public void Think()
+	{
+		if ((Object)(object)lockingEnt == (Object)null && IsLocked())
+		{
+			SetLockingEnt(null);
+		}
+	}
+}
+
+
 using System;
 using System.Collections.Generic;
 using System.Text;
@@ -4380,8 +4630,8 @@ using UnityEngine;
 
 public class TorpedoServerProjectile : ServerProjectile
 {
-	[SerializeField]
 	[Tooltip("Make sure to leave some allowance for waves, which affect the true depth.")]
+	[SerializeField]
 	private float minWaterDepth = 0.5f;
 
 	[SerializeField]
@@ -4732,8 +4982,8 @@ using UnityEngine;
 
 public class TravellingVendorSounds : MonoBehaviour
 {
-	[SerializeField]
 	[Header("Engine")]
+	[SerializeField]
 	private EngineAudioSet EngineAudioSet;
 
 	[SerializeField]
@@ -4789,15 +5039,15 @@ public class TravellingVendorSounds : MonoBehaviour
 	[SerializeField]
 	private AnimationCurve tireGainCurve;
 
-	[Header("Movement")]
 	[SerializeField]
+	[Header("Movement")]
 	private SoundDefinition movementLoopDef;
 
 	[SerializeField]
 	private AnimationCurve movementLoopGainCurve;
 
-	[SerializeField]
 	[Header("Brakes")]
+	[SerializeField]
 	private SoundDefinition brakeLoopDef;
 
 	[SerializeField]
@@ -7298,8 +7548,8 @@ using UnityEngine;
 
 public class AirfieldCallChinookTerminal : ChargeUpIOEntity
 {
-	[Tooltip("Only used for reference")]
 	[Header("Airfield Call Chinook Terminal")]
+	[Tooltip("Only used for reference")]
 	public EventSchedule chinookEventPrefab;
 
 	public CH47DropZone associatedDropZone;
@@ -8074,8 +8324,8 @@ public abstract class AnimationSubSystem : MonoBehaviour, IClientComponent
 
 	public const int TotalPriorityLevels = 3;
 
-	[Tooltip("Used for debugging, should describe what this system does")]
 	[SerializeField]
+	[Tooltip("Used for debugging, should describe what this system does")]
 	[SubSystemVariable]
 	private string SubSystemName = string.Empty;
 
@@ -8277,8 +8527,8 @@ public class TwoAnimBlendSubSystem : AnimationSubSystem
 	private AnimationClip ClipB;
 
 	[SerializeField]
-	[Range(0f, 1f)]
 	[SubSystemVariable]
+	[Range(0f, 1f)]
 	private float Blend;
 }
 
@@ -8299,8 +8549,8 @@ public class TwoAxisOneShotBlend : AnimationSubSystem
 	[SerializeField]
 	private AnimationClip WestClip;
 
-	[SerializeField]
 	[Range(-1f, 1f)]
+	[SerializeField]
 	private float XAxis;
 
 	[SerializeField]
@@ -13306,8 +13556,8 @@ public class SatelliteCrash : BaseCombatEntity
 	public GameObjectRef groundImpactEffect;
 
 	[FormerlySerializedAs("maxCratesToSpawn")]
-	[Header("Crash Config")]
 	[Tooltip("Loot budget at 1.0x mass scale, in crate-equivalents. Multiplied by the mass-to-loot curve; the result spawns as crates up to Max Crates Per Crash, with any overflow going into extra items per crate.")]
+	[Header("Crash Config")]
 	public int baselineCrateSpawnCount = 6;
 
 	public int maxFireballs = 10;
@@ -15273,8 +15523,8 @@ using UnityEngine.UI;
 
 public class SatelliteSpectatorScreenUI : MonoBehaviour
 {
-	[SerializeField]
 	[Header("Map")]
+	[SerializeField]
 	private RawImage mapImage;
 
 	[SerializeField]
@@ -15283,8 +15533,8 @@ public class SatelliteSpectatorScreenUI : MonoBehaviour
 	[SerializeField]
 	private float mapZoom = 2f;
 
-	[Header("Markers (optional — created procedurally if unset)")]
 	[SerializeField]
+	[Header("Markers (optional — created procedurally if unset)")]
 	private RectTransform reticleRect;
 
 	[SerializeField]
@@ -15293,8 +15543,8 @@ public class SatelliteSpectatorScreenUI : MonoBehaviour
 	[SerializeField]
 	private RectTransform lockedCrashRect;
 
-	[SerializeField]
 	[Header("Text")]
+	[SerializeField]
 	private RustText statusText;
 
 	[SerializeField]
@@ -15934,8 +16184,8 @@ public class Ballista : BaseSiegeWeapon
 
 	public Transform dismountPositionsParent;
 
-	[Header("Effects")]
 	[SerializeField]
+	[Header("Effects")]
 	private GameObjectRef fireEffectPrefab;
 
 	public override float DriveWheelVelocity { get; }
@@ -16110,8 +16360,8 @@ public class SiegeWeaponVehicleAudio : GroundVehicleAudio
 
 	public SoundDefinition reloadCompleteDef;
 
-	[Header("Rattles")]
 	[SerializeField]
+	[Header("Rattles")]
 	private SoundDefinition movementRattleLoop;
 
 	[SerializeField]
@@ -17525,8 +17775,8 @@ public class TimedExplosive : BaseEntity, ServerProjectile.IProjectileImpact
 	[Header("Water")]
 	public float underwaterExplosionDepth = 1f;
 
-	[Tooltip("Optional: Will fall back to underwaterExplosionEffect or explosionEffect if not assigned.")]
 	[MinMax(0f, 100f)]
+	[Tooltip("Optional: Will fall back to underwaterExplosionEffect or explosionEffect if not assigned.")]
 	public MinMax watersurfaceExplosionDepth = new MinMax(0.5f, 10f);
 
 	public bool waterCausesExplosion;
@@ -18189,8 +18439,8 @@ public class TimedExplosive : BaseEntity, ServerProjectile.IProjectileImpact
 		//IL_0067: Unknown result type (might be due to invalid IL or missing references)
 		//IL_0020: Unknown result type (might be due to invalid IL or missing references)
 		//IL_0025: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00cf: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00d4: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00ec: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00f1: Unknown result type (might be due to invalid IL or missing references)
 		if ((Object)(object)ent == (Object)null)
 		{
 			return;
@@ -18205,28 +18455,37 @@ public class TimedExplosive : BaseEntity, ServerProjectile.IProjectileImpact
 			ent = ent.parentEntity.Get(serverside: true);
 		}
 		SetMotionEnabled(wantsMotion: false);
-		if (!HasChild(ent))
+		if (HasChild(ent))
 		{
-			((Component)this).transform.position = position;
-			((Component)this).transform.rotation = Quaternion.LookRotation(normal, ((Component)this).transform.up);
-			if ((Object)(object)collider != (Object)null)
+			return;
+		}
+		((Component)this).transform.position = position;
+		((Component)this).transform.rotation = Quaternion.LookRotation(normal, ((Component)this).transform.up);
+		if ((Object)(object)collider != (Object)null)
+		{
+			uint num = ent.FindBoneID(((Component)collider).transform);
+			if (ent is MotorRowboat && num == StringPool.closest)
 			{
-				SetParent(ent, ent.FindBoneID(((Component)collider).transform), worldPositionStays: true);
+				SetParent(ent, worldPositionStays: true);
 			}
 			else
 			{
-				SetParent(ent, StringPool.closest, worldPositionStays: true);
+				SetParent(ent, num, worldPositionStays: true);
 			}
-			if (ent is BaseCombatEntity baseCombatEntity)
-			{
-				baseCombatEntity.SetJustAttacked();
-			}
-			if (stickEffect.isValid)
-			{
-				Effect.server.Run(stickEffect.resourcePath, ((Component)this).transform.position, Vector3.up, null, broadcast: true);
-			}
-			ReceiveCollisionMessages(b: false);
 		}
+		else
+		{
+			SetParent(ent, StringPool.closest, worldPositionStays: true);
+		}
+		if (ent is BaseCombatEntity baseCombatEntity)
+		{
+			baseCombatEntity.SetJustAttacked();
+		}
+		if (stickEffect.isValid)
+		{
+			Effect.server.Run(stickEffect.resourcePath, ((Component)this).transform.position, Vector3.up, null, broadcast: true);
+		}
+		ReceiveCollisionMessages(b: false);
 	}
 
 	public void UnStick()
@@ -18872,8 +19131,8 @@ using UnityEngine;
 
 public class BaseVehicleMountPoint : BaseMountable
 {
-	[Header("BaseVehicleMountPoint")]
 	[Tooltip("Only Set this if you definitely need a VehicleFixedUpdate tick on the seat for some reason")]
+	[Header("BaseVehicleMountPoint")]
 	public bool RequiresVehicleFixedUpdateOnSeat;
 
 	public override bool DirectlyMountable()
@@ -19553,8 +19812,8 @@ public class BikeVehicleAudio : GroundVehicleAudio
 	[SerializeField]
 	private AnimationCurve tireGainCurve;
 
-	[Header("Skid")]
 	[SerializeField]
+	[Header("Skid")]
 	private SoundDefinition skidSoundLoop;
 
 	[SerializeField]
@@ -19710,8 +19969,8 @@ public class BaseBoat : BaseVehicle
 
 	protected virtual bool SkipBoatForcedUpdate => false;
 
-	[Help("Seconds until boat starts drifting to shore if there's nobody around")]
 	[ServerVar]
+	[Help("Seconds until boat starts drifting to shore if there's nobody around")]
 	public static int seconds_until_shore_drift(Arg arg)
 	{
 		secondsUntilShoreDrift = arg.GetInt(0, secondsUntilShoreDrift);
@@ -20516,8 +20775,8 @@ public class Buoyancy : ListComponent<Buoyancy>, IServerComponent, IPrefabPrePro
 	public float underwaterDrag = 2f;
 
 	[Range(0f, 1f)]
-	[Tooltip("How much this object will pay attention to the wave system, 0 = flat water, 1 = full waves (default 1)")]
 	[FormerlySerializedAs("flatWaterLerp")]
+	[Tooltip("How much this object will pay attention to the wave system, 0 = flat water, 1 = full waves (default 1)")]
 	public float wavesEffect = 1f;
 
 	public Action<bool> SubmergedChanged;
@@ -21630,9 +21889,9 @@ using UnityEngine;
 public class BuoyancyBurstUtility
 {
 	[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-	internal delegate void FillPointData_000057CC$PostfixBurstDelegate(in int pointIndexOffset, ref NativeArray<Vector2> pointPositionArray, ref NativeArray<Vector2> pointPositionUVArray, in Matrix4x4 rootToWorld, ref NativeArray<Buoyancy.BuoyancyPointData> pointData, in Bounds deepSeaBounds, in Vector3 terrainPosition, in Vector3 terrainOneOverSize, in bool isDeepSea, ref NativeArray<Vector3> allPositions3D, out int pointCount);
+	internal delegate void FillPointData_000057D5$PostfixBurstDelegate(in int pointIndexOffset, ref NativeArray<Vector2> pointPositionArray, ref NativeArray<Vector2> pointPositionUVArray, in Matrix4x4 rootToWorld, ref NativeArray<Buoyancy.BuoyancyPointData> pointData, in Bounds deepSeaBounds, in Vector3 terrainPosition, in Vector3 terrainOneOverSize, in bool isDeepSea, ref NativeArray<Vector3> allPositions3D, out int pointCount);
 
-	internal static class FillPointData_000057CC$BurstDirectCall
+	internal static class FillPointData_000057D5$BurstDirectCall
 	{
 		private static IntPtr Pointer;
 
@@ -21643,7 +21902,7 @@ public class BuoyancyBurstUtility
 			//IL_001b: Unknown result type (might be due to invalid IL or missing references)
 			if (Pointer == (IntPtr)0)
 			{
-				Pointer = BurstCompiler.CompileFunctionPointer<FillPointData_000057CC$PostfixBurstDelegate>((FillPointData_000057CC$PostfixBurstDelegate)FillPointData).Value;
+				Pointer = BurstCompiler.CompileFunctionPointer<FillPointData_000057D5$PostfixBurstDelegate>((FillPointData_000057D5$PostfixBurstDelegate)FillPointData).Value;
 			}
 			P_0 = Pointer;
 		}
@@ -21670,11 +21929,11 @@ public class BuoyancyBurstUtility
 		}
 	}
 
-	[MonoPInvokeCallback(typeof(FillPointData_000057CC$PostfixBurstDelegate))]
+	[MonoPInvokeCallback(typeof(FillPointData_000057D5$PostfixBurstDelegate))]
 	[BurstCompile]
 	public static void FillPointData(in int pointIndexOffset, ref NativeArray<Vector2> pointPositionArray, ref NativeArray<Vector2> pointPositionUVArray, in Matrix4x4 rootToWorld, ref NativeArray<Buoyancy.BuoyancyPointData> pointData, in Bounds deepSeaBounds, in Vector3 terrainPosition, in Vector3 terrainOneOverSize, in bool isDeepSea, ref NativeArray<Vector3> allPositions3D, out int pointCount)
 	{
-		FillPointData_000057CC$BurstDirectCall.Invoke(in pointIndexOffset, ref pointPositionArray, ref pointPositionUVArray, in rootToWorld, ref pointData, in deepSeaBounds, in terrainPosition, in terrainOneOverSize, in isDeepSea, ref allPositions3D, out pointCount);
+		FillPointData_000057D5$BurstDirectCall.Invoke(in pointIndexOffset, ref pointPositionArray, ref pointPositionUVArray, in rootToWorld, ref pointData, in deepSeaBounds, in terrainPosition, in terrainOneOverSize, in isDeepSea, ref allPositions3D, out pointCount);
 	}
 
 	[MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -21734,7 +21993,7 @@ using Unity.Collections;
 using UnityEngine;
 
 [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-internal delegate void FillPointData_000057CC$PostfixBurstDelegate(in int pointIndexOffset, ref NativeArray<Vector2> pointPositionArray, ref NativeArray<Vector2> pointPositionUVArray, in Matrix4x4 rootToWorld, ref NativeArray<Buoyancy.BuoyancyPointData> pointData, in Bounds deepSeaBounds, in Vector3 terrainPosition, in Vector3 terrainOneOverSize, in bool isDeepSea, ref NativeArray<Vector3> allPositions3D, out int pointCount);
+internal delegate void FillPointData_000057D5$PostfixBurstDelegate(in int pointIndexOffset, ref NativeArray<Vector2> pointPositionArray, ref NativeArray<Vector2> pointPositionUVArray, in Matrix4x4 rootToWorld, ref NativeArray<Buoyancy.BuoyancyPointData> pointData, in Bounds deepSeaBounds, in Vector3 terrainPosition, in Vector3 terrainOneOverSize, in bool isDeepSea, ref NativeArray<Vector3> allPositions3D, out int pointCount);
 
 
 using System;
@@ -21742,7 +22001,7 @@ using Unity.Burst;
 using Unity.Collections;
 using UnityEngine;
 
-internal static class FillPointData_000057CC$BurstDirectCall
+internal static class FillPointData_000057D5$BurstDirectCall
 {
 	private static IntPtr Pointer;
 
@@ -21753,7 +22012,7 @@ internal static class FillPointData_000057CC$BurstDirectCall
 		//IL_001b: Unknown result type (might be due to invalid IL or missing references)
 		if (Pointer == (IntPtr)0)
 		{
-			Pointer = BurstCompiler.CompileFunctionPointer<FillPointData_000057CC$PostfixBurstDelegate>((FillPointData_000057CC$PostfixBurstDelegate)FillPointData).Value;
+			Pointer = BurstCompiler.CompileFunctionPointer<FillPointData_000057D5$PostfixBurstDelegate>((FillPointData_000057D5$PostfixBurstDelegate)FillPointData).Value;
 		}
 		P_0 = Pointer;
 	}
@@ -21824,9 +22083,9 @@ public static class BuoyancyForceAccumulationBurst
 	}
 
 	[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-	internal delegate void Compute_000057CE$PostfixBurstDelegate(in NativeArray<InstanceInput> instances, in NativeArray<float3> allPositions3D, in NativeArray<float> pointShoreDistance, in NativeArray<WaterLevel.WaterInfo> pointWaterInfo, in NativeArray<float> pointSize, in NativeArray<float> pointBuoyancyForce, in NativeArray<float> pointRandomOffset, in NativeArray<float> pointWaveFrequency, in NativeArray<float> pointWaveScale, in NativeArray<float3> pointFlowDirection, float time, ref NativeArray<InstanceOutput> results);
+	internal delegate void Compute_000057D7$PostfixBurstDelegate(in NativeArray<InstanceInput> instances, in NativeArray<float3> allPositions3D, in NativeArray<float> pointShoreDistance, in NativeArray<WaterLevel.WaterInfo> pointWaterInfo, in NativeArray<float> pointSize, in NativeArray<float> pointBuoyancyForce, in NativeArray<float> pointRandomOffset, in NativeArray<float> pointWaveFrequency, in NativeArray<float> pointWaveScale, in NativeArray<float3> pointFlowDirection, float time, ref NativeArray<InstanceOutput> results);
 
-	internal static class Compute_000057CE$BurstDirectCall
+	internal static class Compute_000057D7$BurstDirectCall
 	{
 		private static IntPtr Pointer;
 
@@ -21837,7 +22096,7 @@ public static class BuoyancyForceAccumulationBurst
 			//IL_001b: Unknown result type (might be due to invalid IL or missing references)
 			if (Pointer == (IntPtr)0)
 			{
-				Pointer = BurstCompiler.CompileFunctionPointer<Compute_000057CE$PostfixBurstDelegate>((Compute_000057CE$PostfixBurstDelegate)Compute).Value;
+				Pointer = BurstCompiler.CompileFunctionPointer<Compute_000057D7$PostfixBurstDelegate>((Compute_000057D7$PostfixBurstDelegate)Compute).Value;
 			}
 			P_0 = Pointer;
 		}
@@ -21864,11 +22123,11 @@ public static class BuoyancyForceAccumulationBurst
 		}
 	}
 
-	[MonoPInvokeCallback(typeof(Compute_000057CE$PostfixBurstDelegate))]
 	[BurstCompile]
+	[MonoPInvokeCallback(typeof(Compute_000057D7$PostfixBurstDelegate))]
 	public static void Compute(in NativeArray<InstanceInput> instances, in NativeArray<float3> allPositions3D, in NativeArray<float> pointShoreDistance, in NativeArray<WaterLevel.WaterInfo> pointWaterInfo, in NativeArray<float> pointSize, in NativeArray<float> pointBuoyancyForce, in NativeArray<float> pointRandomOffset, in NativeArray<float> pointWaveFrequency, in NativeArray<float> pointWaveScale, in NativeArray<float3> pointFlowDirection, float time, ref NativeArray<InstanceOutput> results)
 	{
-		Compute_000057CE$BurstDirectCall.Invoke(in instances, in allPositions3D, in pointShoreDistance, in pointWaterInfo, in pointSize, in pointBuoyancyForce, in pointRandomOffset, in pointWaveFrequency, in pointWaveScale, in pointFlowDirection, time, ref results);
+		Compute_000057D7$BurstDirectCall.Invoke(in instances, in allPositions3D, in pointShoreDistance, in pointWaterInfo, in pointSize, in pointBuoyancyForce, in pointRandomOffset, in pointWaveFrequency, in pointWaveScale, in pointFlowDirection, time, ref results);
 	}
 
 	[MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -22043,7 +22302,7 @@ using Unity.Collections;
 using Unity.Mathematics;
 
 [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-internal delegate void Compute_000057CE$PostfixBurstDelegate(in NativeArray<InstanceInput> instances, in NativeArray<float3> allPositions3D, in NativeArray<float> pointShoreDistance, in NativeArray<WaterLevel.WaterInfo> pointWaterInfo, in NativeArray<float> pointSize, in NativeArray<float> pointBuoyancyForce, in NativeArray<float> pointRandomOffset, in NativeArray<float> pointWaveFrequency, in NativeArray<float> pointWaveScale, in NativeArray<float3> pointFlowDirection, float time, ref NativeArray<InstanceOutput> results);
+internal delegate void Compute_000057D7$PostfixBurstDelegate(in NativeArray<InstanceInput> instances, in NativeArray<float3> allPositions3D, in NativeArray<float> pointShoreDistance, in NativeArray<WaterLevel.WaterInfo> pointWaterInfo, in NativeArray<float> pointSize, in NativeArray<float> pointBuoyancyForce, in NativeArray<float> pointRandomOffset, in NativeArray<float> pointWaveFrequency, in NativeArray<float> pointWaveScale, in NativeArray<float3> pointFlowDirection, float time, ref NativeArray<InstanceOutput> results);
 
 
 using System;
@@ -22051,7 +22310,7 @@ using Unity.Burst;
 using Unity.Collections;
 using Unity.Mathematics;
 
-internal static class Compute_000057CE$BurstDirectCall
+internal static class Compute_000057D7$BurstDirectCall
 {
 	private static IntPtr Pointer;
 
@@ -22062,7 +22321,7 @@ internal static class Compute_000057CE$BurstDirectCall
 		//IL_001b: Unknown result type (might be due to invalid IL or missing references)
 		if (Pointer == (IntPtr)0)
 		{
-			Pointer = BurstCompiler.CompileFunctionPointer<Compute_000057CE$PostfixBurstDelegate>((Compute_000057CE$PostfixBurstDelegate)Compute).Value;
+			Pointer = BurstCompiler.CompileFunctionPointer<Compute_000057D7$PostfixBurstDelegate>((Compute_000057D7$PostfixBurstDelegate)Compute).Value;
 		}
 		P_0 = Pointer;
 	}
@@ -22367,8 +22626,8 @@ public class TugboatSounds : MonoBehaviour, IClientComponent
 
 	private float soundCullDistanceSq;
 
-	[Header("Engine")]
 	[SerializeField]
+	[Header("Engine")]
 	private SoundDefinition engineLoopDef;
 
 	private Sound engineLoop;
@@ -22450,8 +22709,8 @@ public class TugboatSounds : MonoBehaviour, IClientComponent
 	[SerializeField]
 	private Vector3 sideSoundLineBow;
 
-	[SerializeField]
 	[Header("Ambient")]
+	[SerializeField]
 	private SoundDefinition ambientActiveLoopDef;
 
 	private Sound ambientActiveSound;
@@ -22488,19 +22747,19 @@ public class TugboatSounds : MonoBehaviour, IClientComponent
 	[SerializeField]
 	private SoundDefinition hornStop;
 
-	[Min(0f)]
 	[Tooltip("The maximum amount of time a looped horn can last. If 0s then this is ignored.")]
+	[Min(0f)]
 	[SerializeField]
 	private float maxHornTime;
 
-	[Min(0f)]
 	[Tooltip("Used for rate limiting. This defines the maximum number of horn spams that can be invoked one after another.")]
+	[Min(0f)]
 	[SerializeField]
 	private int hornTokenCapacity = 3;
 
-	[SerializeField]
-	[Min(0f)]
 	[Tooltip("Used for rate limiting. This defines how quickly a new token regenerates, permitting another horn honk.")]
+	[Min(0f)]
+	[SerializeField]
 	private float hornTokenRegenerationTime = 1f;
 
 	private Line leftSoundLine;
@@ -22522,8 +22781,8 @@ using UnityEngine;
 [Serializable]
 public class CarSettings
 {
-	[Header("Vehicle Setup")]
 	[Range(0f, 1f)]
+	[Header("Vehicle Setup")]
 	public float rollingResistance = 0.05f;
 
 	[Range(0f, 1f)]
@@ -22575,8 +22834,8 @@ public class CarSettings
 
 	public bool disableHandbrakes;
 
-	[Header("Front/Rear Vehicle Balance")]
 	[Range(0f, 1f)]
+	[Header("Front/Rear Vehicle Balance")]
 	public float handlingBias = 0.5f;
 }
 
@@ -23724,8 +23983,8 @@ public class DamageRenderer : MonoBehaviour, IClientComponent
 	[HideInInspector]
 	private List<DamageShowingRenderer> damageShowingRenderers;
 
-	[SerializeField]
 	[HideInInspector]
+	[SerializeField]
 	private List<GlassPane> damageShowingGlassRenderers;
 }
 
@@ -24437,8 +24696,8 @@ public abstract class BaseHelicopter : BaseVehicle, SeekerTarget.ISeekerTargetOw
 		}
 	}
 
-	[Header("Helicopter")]
 	[SerializeField]
+	[Header("Helicopter")]
 	public float engineThrustMax;
 
 	[SerializeField]
@@ -24474,8 +24733,8 @@ public abstract class BaseHelicopter : BaseVehicle, SeekerTarget.ISeekerTargetOw
 	[SerializeField]
 	public float altForceDotMin = 0.85f;
 
-	[Range(0.1f, 0.95f)]
 	[SerializeField]
+	[Range(0.1f, 0.95f)]
 	public float liftFraction = 0.25f;
 
 	[SerializeField]
@@ -27601,8 +27860,8 @@ public class Minicopter : PlayerHelicopterWithFlares
 	[ServerVar(Help = "Population active on the server", ShowInAdminUI = true)]
 	public static float population;
 
-	[SerializeField]
 	[Header(" Minicopter Specific ")]
+	[SerializeField]
 	private ParticleSystemContainer fxMediumDamage;
 
 	[SerializeField]
@@ -28379,8 +28638,8 @@ public class RidableHorseAnimation : EntityComponent<RidableHorse>, IClientCompo
 	[SerializeField]
 	public LegsAnimator legsAnimator;
 
-	[SerializeField]
 	[Space]
+	[SerializeField]
 	private Transform backHipTransform;
 
 	[SerializeField]
@@ -28390,8 +28649,8 @@ public class RidableHorseAnimation : EntityComponent<RidableHorse>, IClientCompo
 	private Vector3 skiddingHipRotation;
 
 	[Header("Head")]
-	[Range(0f, 1f)]
 	[SerializeField]
+	[Range(0f, 1f)]
 	private float headBlend = 1f;
 
 	[ReadOnly]
@@ -28413,9 +28672,9 @@ public class RidableHorseAnimation : EntityComponent<RidableHorse>, IClientCompo
 
 	public Vector3 headLookOffset = Vector3.zero;
 
+	[Header("Spine")]
 	[Range(0f, 1f)]
 	[SerializeField]
-	[Header("Spine")]
 	private float spineBlend = 0.5f;
 
 	[ReadOnly]
@@ -28427,12 +28686,12 @@ public class RidableHorseAnimation : EntityComponent<RidableHorse>, IClientCompo
 
 	public float spineYawInertiaFactor = 150f;
 
-	[ReadOnly]
 	[SerializeField]
+	[ReadOnly]
 	private Quaternion[] targetNeckRotations;
 
-	[ReadOnly]
 	[SerializeField]
+	[ReadOnly]
 	private Quaternion[] targetSpineRotations;
 
 	[SerializeField]
@@ -28443,8 +28702,8 @@ public class RidableHorseAnimation : EntityComponent<RidableHorse>, IClientCompo
 	[ReadOnly]
 	private Vector3 originalHipPosition;
 
-	[SerializeField]
 	[ReadOnly]
+	[SerializeField]
 	private Quaternion originalHipRotation;
 
 	public Vector3 spineOffset;
@@ -28491,15 +28750,15 @@ public class RidableHorseAudio : FacepunchBehaviour, IClientComponent
 	[SerializeField]
 	private Transform[] feet;
 
-	[SerializeField]
 	[Space]
+	[SerializeField]
 	private GameObjectRef swimmingSloshEffect;
 
 	[SerializeField]
 	private string BaseFolder;
 
-	[SerializeField]
 	[Space]
+	[SerializeField]
 	private SoundDefinition skidLoopSoundDef;
 
 	[SerializeField]

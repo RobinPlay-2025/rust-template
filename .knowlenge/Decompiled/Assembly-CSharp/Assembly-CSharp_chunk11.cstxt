@@ -1,4 +1,1264 @@
 using System;
+using System.Runtime.CompilerServices;
+using ConVar;
+using Facepunch.Network.Raknet;
+using Facepunch.Rust;
+using Network;
+
+public static class PlayerNetworkingProfiler
+{
+	public static int level = 0;
+
+	public static TimeSpan MinFlushInterval = TimeSpan.FromSeconds(1.0);
+
+	public static int ConnectionsPerFrame = 30;
+
+	private static int currentIndex;
+
+	private static DateTime flushCooldown;
+
+	public static void Serialize(AnalyticsTable table, int frameIndex, DateTime timestamp)
+	{
+		if (level == 0)
+		{
+			return;
+		}
+		if (currentIndex >= Net.sv.connections.Count)
+		{
+			if (flushCooldown > DateTime.UtcNow)
+			{
+				return;
+			}
+			flushCooldown = DateTime.UtcNow + MinFlushInterval;
+			currentIndex = 0;
+		}
+		Server sv = Net.sv;
+		Server val = (Server)(object)((sv is Server) ? sv : null);
+		if (val != null)
+		{
+			SerializeRaknet(table, frameIndex, timestamp, val);
+		}
+	}
+
+	private static void SerializeRaknet(AnalyticsTable table, int frameIndex, DateTime timestamp, Server server)
+	{
+		//IL_00ca: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00da: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00ea: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00fa: Unknown result type (might be due to invalid IL or missing references)
+		//IL_010a: Unknown result type (might be due to invalid IL or missing references)
+		//IL_011a: Unknown result type (might be due to invalid IL or missing references)
+		//IL_012a: Unknown result type (might be due to invalid IL or missing references)
+		//IL_013a: Unknown result type (might be due to invalid IL or missing references)
+		//IL_014a: Unknown result type (might be due to invalid IL or missing references)
+		int num = Math.Min(((Server)server).connections.Count, currentIndex + ConnectionsPerFrame);
+		RaknetStats val2 = default(RaknetStats);
+		while (currentIndex < num)
+		{
+			Connection val = ((Server)server).connections[currentIndex];
+			if (server.TryGetConnectionStats(val, ref val2))
+			{
+				string value = val.IPAddressWithoutPort();
+				string value2 = val.Port();
+				int latestPing = server.GetLatestPing(val);
+				EventRecord eventRecord = EventRecord.CSV().AddField("", timestamp).AddField("", frameIndex)
+					.AddField("", Server.server_id)
+					.AddField("", val.guid)
+					.AddField("", val.userid)
+					.AddField("", value)
+					.AddField("", value2)
+					.AddField("", latestPing)
+					.AddField("", val2.connectionStartTime)
+					.AddField("", val2.isLimitedByCongestionControl)
+					.AddField("", val2.isLimitedByOutgoingBandwidthLimit)
+					.AddField("", val2.BPSLimitByCongestionControl)
+					.AddField("", val2.BPSLimitByOutgoingBandwidthLimit)
+					.AddField("", val2.messagesInResendBuffer)
+					.AddField("", val2.bytesInResendBuffer)
+					.AddField("", val2.packetlossLastSecond)
+					.AddField("", val2.packetlossTotal);
+				for (int i = 0; i < 4; i++)
+				{
+					eventRecord.AddField("", (ulong)Unsafe.Add(ref val2.bytesInSendBuffer.FixedElementField, i));
+				}
+				for (int j = 0; j < 4; j++)
+				{
+					eventRecord.AddField("", (ulong)Unsafe.Add(ref val2.messageInSendBuffer.FixedElementField, j));
+				}
+				eventRecord.AddField("", val2.runningTotal.FixedElementField);
+				eventRecord.AddField("", Unsafe.Add(ref val2.runningTotal.FixedElementField, 1));
+				eventRecord.AddField("", Unsafe.Add(ref val2.runningTotal.FixedElementField, 2));
+				eventRecord.AddField("", Unsafe.Add(ref val2.runningTotal.FixedElementField, 3));
+				eventRecord.AddField("", Unsafe.Add(ref val2.runningTotal.FixedElementField, 4));
+				eventRecord.AddField("", Unsafe.Add(ref val2.runningTotal.FixedElementField, 5));
+				eventRecord.AddField("", Unsafe.Add(ref val2.runningTotal.FixedElementField, 6));
+				table.Append(eventRecord);
+			}
+			currentIndex++;
+		}
+	}
+}
+
+
+using System;
+using System.Collections.Generic;
+using System.Text.RegularExpressions;
+
+public static class TypeNameCache
+{
+	private static Dictionary<Type, string> cache = new Dictionary<Type, string>();
+
+	private static Regex genericPrefixRegex = new Regex("`\\d+\\[");
+
+	public static string GetName(Type type)
+	{
+		if (!cache.TryGetValue(type, out var value))
+		{
+			value = CalculateName(type);
+			cache[type] = value;
+		}
+		return value;
+	}
+
+	private static string CalculateName(Type type)
+	{
+		string input = type.ToString();
+		input = genericPrefixRegex.Replace(input, "<");
+		return input.Replace("]", ">");
+	}
+
+	public static void ClearCache()
+	{
+		cache.Clear();
+	}
+}
+
+
+using System;
+using UnityEngine;
+
+public class DoorTextureScroll : FacepunchBehaviour
+{
+	[Serializable]
+	public class RendererMaterialIndex
+	{
+		public Renderer renderer;
+
+		public int materialIndex;
+	}
+
+	public Door doorEntity;
+
+	public Animator animator;
+
+	public Transform followTransform;
+
+	public RendererMaterialIndex[] rendererMaterialIndices;
+
+	public float scrollSpeed = 0.1f;
+
+	public bool scrollX;
+
+	public bool scrollY;
+}
+
+
+using System;
+using UnityEngine;
+
+[Serializable]
+public class RendererMaterialIndex
+{
+	public Renderer renderer;
+
+	public int materialIndex;
+}
+
+
+using System;
+using UnityEngine;
+
+public class HorseIdleMultiConditionCrossfade : StateMachineBehaviour
+{
+	[Serializable]
+	public struct Condition
+	{
+		public enum CondtionOperator
+		{
+			GreaterThan,
+			LessThan
+		}
+
+		public int FloatParameter;
+
+		public CondtionOperator Operator;
+
+		public float Value;
+	}
+
+	public string TargetState = "breathe";
+
+	public float NormalizedTransitionDuration = 0.1f;
+}
+
+
+using System;
+
+[Serializable]
+public struct Condition
+{
+	public enum CondtionOperator
+	{
+		GreaterThan,
+		LessThan
+	}
+
+	public int FloatParameter;
+
+	public CondtionOperator Operator;
+
+	public float Value;
+}
+
+
+public enum CondtionOperator
+{
+	GreaterThan,
+	LessThan
+}
+
+
+using UnityEngine;
+
+public class TriggerResetter : StateMachineBehaviour
+{
+	public string triggerName;
+
+	public override void OnStateEnter(Animator animator, AnimatorStateInfo stateInfo, int layerIndex)
+	{
+		//IL_0010: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0017: Invalid comparison between Unknown and I4
+		AnimatorControllerParameter[] parameters = animator.parameters;
+		foreach (AnimatorControllerParameter val in parameters)
+		{
+			if ((int)val.type == 9 && val.name == triggerName)
+			{
+				animator.ResetTrigger(val.name);
+			}
+		}
+	}
+}
+
+
+using System;
+using UnityEngine;
+
+public class WeightedAnimationRandomiser : StateMachineBehaviour
+{
+	[Serializable]
+	public struct IdleChance
+	{
+		public string StateName;
+
+		[Range(0f, 100f)]
+		public int Chance;
+	}
+
+	public int LoopRangeMin = 3;
+
+	public int LoopRangeMax = 5;
+
+	public float NormalizedTransitionDuration;
+
+	public IdleChance[] IdleTransitions = new IdleChance[0];
+
+	public bool AllowRepeats;
+}
+
+
+using System;
+using UnityEngine;
+
+[Serializable]
+public struct IdleChance
+{
+	public string StateName;
+
+	[Range(0f, 100f)]
+	public int Chance;
+}
+
+
+using System;
+using System.Collections.Generic;
+using UnityEngine;
+
+[CreateAssetMenu(menuName = "Rust/Ambience Definition")]
+public class AmbienceDefinition : ScriptableObject
+{
+	[Serializable]
+	public class ValueRange
+	{
+		public float min;
+
+		public float max;
+
+		public ValueRange(float min, float max)
+		{
+			this.min = min;
+			this.max = max;
+		}
+	}
+
+	[Header("Sound")]
+	public List<SoundDefinition> sounds;
+
+	[Horizontal(2, -1)]
+	public ValueRange stingFrequency = new ValueRange(15f, 30f);
+
+	[Header("Environment")]
+	[InspectorFlags]
+	public Enum biomes = (Enum)(-1);
+
+	[InspectorFlags]
+	public Enum topologies = (Enum)(-1);
+
+	public EnvironmentType environmentType = EnvironmentType.Underground;
+
+	public bool useEnvironmentType;
+
+	public AnimationCurve time = AnimationCurve.Linear(0f, 0f, 24f, 0f);
+
+	[Horizontal(2, -1)]
+	public ValueRange rain = new ValueRange(0f, 1f);
+
+	[Horizontal(2, -1)]
+	public ValueRange wind = new ValueRange(0f, 1f);
+
+	[Horizontal(2, -1)]
+	public ValueRange snow = new ValueRange(0f, 1f);
+
+	[Horizontal(2, -1)]
+	public ValueRange waves = new ValueRange(0f, 10f);
+}
+
+
+using System;
+
+[Serializable]
+public class ValueRange
+{
+	public float min;
+
+	public float max;
+
+	public ValueRange(float min, float max)
+	{
+		this.min = min;
+		this.max = max;
+	}
+}
+
+
+using System.Collections.Generic;
+using UnityEngine;
+
+[CreateAssetMenu(menuName = "Rust/Ambience Definition List")]
+public class AmbienceDefinitionList : ScriptableObject
+{
+	public List<AmbienceDefinition> defs;
+}
+
+
+using System;
+using System.Collections.Generic;
+using UnityEngine;
+
+public class AmbienceEmitter : MonoBehaviour, IClientComponent, IComparable<AmbienceEmitter>
+{
+	public AmbienceDefinitionList baseAmbience;
+
+	public AmbienceDefinitionList stings;
+
+	public bool isStatic = true;
+
+	public bool followCamera;
+
+	public bool isBaseEmitter;
+
+	public bool active;
+
+	public float cameraDistanceSq = float.PositiveInfinity;
+
+	public BoundingSphere boundingSphere;
+
+	public float crossfadeTime = 2f;
+
+	public Dictionary<AmbienceDefinition, float> nextStingTime = new Dictionary<AmbienceDefinition, float>();
+
+	public float deactivateTime = float.PositiveInfinity;
+
+	public bool playUnderwater = true;
+
+	public bool playAbovewater = true;
+
+	public Enum currentTopology { get; private set; }
+
+	public Enum currentBiome { get; private set; }
+
+	public int CompareTo(AmbienceEmitter other)
+	{
+		return cameraDistanceSq.CompareTo(other.cameraDistanceSq);
+	}
+}
+
+
+using UnityEngine;
+
+public class AmbienceLocalStings : MonoBehaviour
+{
+	public float maxDistance = 100f;
+
+	public float stingRadius = 10f;
+
+	public float stingFrequency = 30f;
+
+	public float stingFrequencyVariance = 15f;
+
+	public SoundDefinition[] stingSounds;
+}
+
+
+using System;
+using System.Collections.Generic;
+
+public class AmbienceManager : SingletonComponent<AmbienceManager>, IClientComponent
+{
+	[Serializable]
+	public class EmitterTypeLimit
+	{
+		public List<AmbienceDefinitionList> ambience;
+
+		public int limit = 1;
+
+		public int active;
+	}
+
+	public List<EmitterTypeLimit> localEmitterLimits = new List<EmitterTypeLimit>();
+
+	public EmitterTypeLimit catchallEmitterLimit = new EmitterTypeLimit();
+
+	public int maxActiveLocalEmitters = 5;
+
+	public int activeLocalEmitters;
+
+	public List<AmbienceEmitter> cameraEmitters = new List<AmbienceEmitter>();
+
+	public List<AmbienceEmitter> emittersInRange = new List<AmbienceEmitter>();
+
+	public List<AmbienceEmitter> activeEmitters = new List<AmbienceEmitter>();
+
+	public float localEmitterRange = 30f;
+
+	public List<AmbienceZone> currentAmbienceZones = new List<AmbienceZone>();
+
+	public bool isUnderwater;
+
+	public float ambienceZoneGain { get; private set; } = 1f;
+}
+
+
+using System;
+using System.Collections.Generic;
+
+[Serializable]
+public class EmitterTypeLimit
+{
+	public List<AmbienceDefinitionList> ambience;
+
+	public int limit = 1;
+
+	public int active;
+}
+
+
+using UnityEngine;
+
+public class AmbienceSpawnEmitters : MonoBehaviour, IClientComponent
+{
+	public int baseEmitterCount = 5;
+
+	public int baseEmitterDistance = 10;
+
+	public GameObjectRef emitterPrefab;
+}
+
+
+using UnityEngine;
+
+public class AmbienceWaveSoundZone : TriggerBase, IClientComponentEx
+{
+	public float priority;
+
+	public float gain = 1f;
+
+	public virtual void PreClientComponentCull(IPrefabProcessor p)
+	{
+		p.RemoveComponent((Component)(object)this);
+		p.NominateForDeletion(((Component)this).gameObject);
+	}
+}
+
+
+using System;
+using System.Collections.Generic;
+using UnityEngine;
+
+public class AmbienceWaveSounds : SingletonComponent<AmbienceWaveSounds>, IClientComponent
+{
+	[Serializable]
+	public class WaveLayer
+	{
+		public SoundDefinition soundDefinition;
+
+		public AnimationCurve oceanScaleGainCurve;
+	}
+
+	public int emitterCount = 3;
+
+	public float emitterDistance = 10f;
+
+	public List<WaveLayer> waveLayers = new List<WaveLayer>();
+}
+
+
+using System;
+using UnityEngine;
+
+[Serializable]
+public class WaveLayer
+{
+	public SoundDefinition soundDefinition;
+
+	public AnimationCurve oceanScaleGainCurve;
+}
+
+
+using UnityEngine;
+
+public class AmbienceZone : TriggerBase, IClientComponentEx
+{
+	public AmbienceDefinitionList baseAmbience;
+
+	public AmbienceDefinitionList stings;
+
+	public float priority;
+
+	public bool overrideCrossfadeTime;
+
+	public float crossfadeTime = 1f;
+
+	public float ambienceGain = 1f;
+
+	public virtual void PreClientComponentCull(IPrefabProcessor p)
+	{
+		p.RemoveComponent((Component)(object)this);
+		p.NominateForDeletion(((Component)this).gameObject);
+	}
+}
+
+
+using System;
+using System.Collections.Generic;
+using UnityEngine;
+
+public class RainSurfaceAmbience : SingletonComponent<RainSurfaceAmbience>, IClientComponent
+{
+	[Serializable]
+	public class SurfaceSound
+	{
+		public AmbienceDefinitionList baseAmbience;
+
+		public List<PhysicsMaterial> materials = new List<PhysicsMaterial>();
+	}
+
+	public List<SurfaceSound> surfaces = new List<SurfaceSound>();
+
+	public GameObjectRef emitterPrefab;
+
+	public Dictionary<ParticlePatch, AmbienceEmitter> spawnedEmitters = new Dictionary<ParticlePatch, AmbienceEmitter>();
+}
+
+
+using System;
+using System.Collections.Generic;
+using UnityEngine;
+
+[Serializable]
+public class SurfaceSound
+{
+	public AmbienceDefinitionList baseAmbience;
+
+	public List<PhysicsMaterial> materials = new List<PhysicsMaterial>();
+}
+
+
+using System;
+using UnityEngine;
+
+[CreateAssetMenu(menuName = "Rust/Blended Engine Loop Definition")]
+public class BlendedEngineLoopDefinition : ScriptableObject
+{
+	[Serializable]
+	public class EngineLoopDefinition
+	{
+		public SoundDefinition soundDefinition;
+
+		public float RPM;
+
+		public float startRPM;
+
+		public float startFullRPM;
+
+		public float stopFullRPM;
+
+		public float stopRPM;
+
+		public float GetPitchForRPM(float targetRPM)
+		{
+			return targetRPM / RPM;
+		}
+	}
+
+	public EngineLoopDefinition[] engineLoops;
+
+	public float minRPM;
+
+	public float maxRPM;
+
+	public float RPMChangeRateUp = 0.5f;
+
+	public float RPMChangeRateDown = 0.2f;
+}
+
+
+using System;
+
+[Serializable]
+public class EngineLoopDefinition
+{
+	public SoundDefinition soundDefinition;
+
+	public float RPM;
+
+	public float startRPM;
+
+	public float startFullRPM;
+
+	public float stopFullRPM;
+
+	public float stopRPM;
+
+	public float GetPitchForRPM(float targetRPM)
+	{
+		return targetRPM / RPM;
+	}
+}
+
+
+using UnityEngine;
+
+public class BlendedLoopEngineSound : MonoBehaviour, IClientComponent
+{
+	public class EngineLoop
+	{
+		public BlendedEngineLoopDefinition.EngineLoopDefinition definition;
+
+		public BlendedLoopEngineSound parent;
+
+		public Sound sound;
+
+		public SoundModulation.Modulator gainMod;
+
+		public SoundModulation.Modulator pitchMod;
+	}
+
+	public BlendedEngineLoopDefinition loopDefinition;
+
+	public bool engineOn;
+
+	[Range(0f, 1f)]
+	public float RPMControl;
+
+	public float smoothedRPMControl;
+
+	private EngineLoop[] engineLoops;
+
+	public bool debugPlayImmediately;
+
+	public float maxDistance => loopDefinition.engineLoops[0].soundDefinition.maxDistance;
+
+	public EngineLoop[] GetEngineLoops()
+	{
+		return engineLoops;
+	}
+
+	public float GetLoopGain(int idx)
+	{
+		if (engineLoops != null && engineLoops[idx] != null && engineLoops[idx].gainMod != null)
+		{
+			return engineLoops[idx].gainMod.value;
+		}
+		return 0f;
+	}
+
+	public float GetLoopPitch(int idx)
+	{
+		if (engineLoops != null && engineLoops[idx] != null && engineLoops[idx].pitchMod != null)
+		{
+			return engineLoops[idx].pitchMod.value;
+		}
+		return 0f;
+	}
+}
+
+
+public class EngineLoop
+{
+	public BlendedEngineLoopDefinition.EngineLoopDefinition definition;
+
+	public BlendedLoopEngineSound parent;
+
+	public Sound sound;
+
+	public SoundModulation.Modulator gainMod;
+
+	public SoundModulation.Modulator pitchMod;
+}
+
+
+using UnityEngine;
+
+public class BlendedSoundLoopSpeedControl : MonoBehaviour, IClientComponent
+{
+	public BlendedSoundLoops loops;
+
+	public float speed;
+
+	public float speedMax = 10f;
+}
+
+
+using System;
+using System.Collections.Generic;
+using UnityEngine;
+
+public class BlendedSoundLoops : MonoBehaviour, IClientComponent
+{
+	[Serializable]
+	public class Loop
+	{
+		public SoundDefinition soundDef;
+
+		public AnimationCurve gainCurve;
+
+		public AnimationCurve pitchCurve;
+
+		[HideInInspector]
+		public Sound sound;
+
+		[HideInInspector]
+		public SoundModulation.Modulator gainMod;
+
+		[HideInInspector]
+		public SoundModulation.Modulator pitchMod;
+	}
+
+	[Range(0f, 1f)]
+	public float blend;
+
+	public float blendSmoothing = 1f;
+
+	public float loopFadeOutTime = 0.5f;
+
+	public float loopFadeInTime = 0.5f;
+
+	public float gainModSmoothing = 1f;
+
+	public float pitchModSmoothing = 1f;
+
+	public bool shouldPlay = true;
+
+	public float gain = 1f;
+
+	public List<Loop> loops = new List<Loop>();
+
+	public float maxDistance;
+}
+
+
+using System;
+using UnityEngine;
+
+[Serializable]
+public class Loop
+{
+	public SoundDefinition soundDef;
+
+	public AnimationCurve gainCurve;
+
+	public AnimationCurve pitchCurve;
+
+	[HideInInspector]
+	public Sound sound;
+
+	[HideInInspector]
+	public SoundModulation.Modulator gainMod;
+
+	[HideInInspector]
+	public SoundModulation.Modulator pitchMod;
+}
+
+
+using System;
+using System.Collections.Generic;
+using Facepunch;
+using JSON;
+using UnityEngine;
+
+public class EngineAudioClip : MonoBehaviour, IClientComponent
+{
+	[Serializable]
+	public class EngineCycle
+	{
+		public int RPM;
+
+		public int startSample;
+
+		public int endSample;
+
+		public float period;
+
+		public int id;
+
+		public EngineCycle(int RPM, int startSample, int endSample, float period, int id)
+		{
+			this.RPM = RPM;
+			this.startSample = startSample;
+			this.endSample = endSample;
+			this.period = period;
+			this.id = id;
+		}
+	}
+
+	public class EngineCycleBucket
+	{
+		public int RPM;
+
+		public List<EngineCycle> cycles = new List<EngineCycle>();
+
+		public List<int> remainingCycles = new List<int>();
+
+		public EngineCycleBucket(int RPM)
+		{
+			this.RPM = RPM;
+		}
+
+		public EngineCycle GetCycle(Random random, int lastCycleId)
+		{
+			if (remainingCycles.Count == 0)
+			{
+				ResetRemainingCycles(random);
+			}
+			int index = Extensions.Pop<int>(remainingCycles);
+			if (cycles[index].id == lastCycleId)
+			{
+				if (remainingCycles.Count == 0)
+				{
+					ResetRemainingCycles(random);
+				}
+				index = Extensions.Pop<int>(remainingCycles);
+			}
+			return cycles[index];
+		}
+
+		private void ResetRemainingCycles(Random random)
+		{
+			for (int i = 0; i < cycles.Count; i++)
+			{
+				remainingCycles.Add(i);
+			}
+			ListEx.Shuffle<int>(remainingCycles, (uint)random.Next());
+		}
+
+		public void Add(EngineCycle cycle)
+		{
+			if (!cycles.Contains(cycle))
+			{
+				cycles.Add(cycle);
+			}
+		}
+	}
+
+	public class Grain : IPooled
+	{
+		private float[] sourceData;
+
+		private int startSample;
+
+		private int currentSample;
+
+		private int attackTimeSamples;
+
+		private int sustainTimeSamples;
+
+		private int releaseTimeSamples;
+
+		private float gain;
+
+		private float gainPerSampleAttack;
+
+		private float gainPerSampleRelease;
+
+		private int attackEndSample;
+
+		private int releaseStartSample;
+
+		private int endSample;
+
+		public bool finished => currentSample >= endSample;
+
+		public void Init(float[] source, EngineCycle cycle, int cyclePadding)
+		{
+			sourceData = source;
+			startSample = cycle.startSample - cyclePadding;
+			currentSample = startSample;
+			attackTimeSamples = cyclePadding;
+			sustainTimeSamples = cycle.endSample - cycle.startSample;
+			releaseTimeSamples = cyclePadding;
+			gainPerSampleAttack = 1f / (float)attackTimeSamples;
+			gainPerSampleRelease = -1f / (float)releaseTimeSamples;
+			attackEndSample = startSample + attackTimeSamples;
+			releaseStartSample = attackEndSample + sustainTimeSamples;
+			endSample = releaseStartSample + releaseTimeSamples;
+			gain = 0f;
+		}
+
+		void IPooled.LeavePool()
+		{
+		}
+
+		void IPooled.EnterPool()
+		{
+			sourceData = null;
+			startSample = 0;
+			currentSample = 0;
+			attackTimeSamples = 0;
+			sustainTimeSamples = 0;
+			releaseTimeSamples = 0;
+			gain = 0f;
+			gainPerSampleAttack = 0f;
+			gainPerSampleRelease = 0f;
+			attackEndSample = 0;
+			releaseStartSample = 0;
+			endSample = 0;
+		}
+
+		public float GetSample()
+		{
+			if (currentSample >= sourceData.Length)
+			{
+				return 0f;
+			}
+			float num = sourceData[currentSample];
+			if (currentSample <= attackEndSample)
+			{
+				gain += gainPerSampleAttack;
+				if (gain > 0.8f)
+				{
+					gain = 0.8f;
+				}
+			}
+			else if (currentSample >= releaseStartSample)
+			{
+				gain += gainPerSampleRelease;
+				if (gain < 0f)
+				{
+					gain = 0f;
+				}
+			}
+			currentSample++;
+			return num * gain;
+		}
+	}
+
+	public AudioClip granularClip;
+
+	public AudioClip accelerationClip;
+
+	public TextAsset accelerationCyclesJson;
+
+	public List<EngineCycle> accelerationCycles = new List<EngineCycle>();
+
+	public List<EngineCycleBucket> cycleBuckets = new List<EngineCycleBucket>();
+
+	public Dictionary<int, EngineCycleBucket> accelerationCyclesByRPM = new Dictionary<int, EngineCycleBucket>();
+
+	public Dictionary<int, int> rpmBucketLookup = new Dictionary<int, int>();
+
+	public int sampleRate = 44100;
+
+	public int samplesUntilNextGrain;
+
+	public int lastCycleId;
+
+	public List<Grain> grains = new List<Grain>();
+
+	public int currentRPM;
+
+	public int targetRPM = 1500;
+
+	public int minRPM;
+
+	public int maxRPM;
+
+	public int cyclePadding;
+
+	[Range(0f, 1f)]
+	public float RPMControl;
+
+	public AudioSource source;
+
+	public float rpmLerpSpeed = 0.025f;
+
+	public float rpmLerpSpeedDown = 0.01f;
+
+	private int GetBucketRPM(int RPM)
+	{
+		return Mathf.RoundToInt((float)(RPM / 25)) * 25;
+	}
+}
+
+
+using System;
+
+[Serializable]
+public class EngineCycle
+{
+	public int RPM;
+
+	public int startSample;
+
+	public int endSample;
+
+	public float period;
+
+	public int id;
+
+	public EngineCycle(int RPM, int startSample, int endSample, float period, int id)
+	{
+		this.RPM = RPM;
+		this.startSample = startSample;
+		this.endSample = endSample;
+		this.period = period;
+		this.id = id;
+	}
+}
+
+
+using System;
+using System.Collections.Generic;
+using JSON;
+
+public class EngineCycleBucket
+{
+	public int RPM;
+
+	public List<EngineCycle> cycles = new List<EngineCycle>();
+
+	public List<int> remainingCycles = new List<int>();
+
+	public EngineCycleBucket(int RPM)
+	{
+		this.RPM = RPM;
+	}
+
+	public EngineCycle GetCycle(Random random, int lastCycleId)
+	{
+		if (remainingCycles.Count == 0)
+		{
+			ResetRemainingCycles(random);
+		}
+		int index = Extensions.Pop<int>(remainingCycles);
+		if (cycles[index].id == lastCycleId)
+		{
+			if (remainingCycles.Count == 0)
+			{
+				ResetRemainingCycles(random);
+			}
+			index = Extensions.Pop<int>(remainingCycles);
+		}
+		return cycles[index];
+	}
+
+	private void ResetRemainingCycles(Random random)
+	{
+		for (int i = 0; i < cycles.Count; i++)
+		{
+			remainingCycles.Add(i);
+		}
+		ListEx.Shuffle<int>(remainingCycles, (uint)random.Next());
+	}
+
+	public void Add(EngineCycle cycle)
+	{
+		if (!cycles.Contains(cycle))
+		{
+			cycles.Add(cycle);
+		}
+	}
+}
+
+
+using Facepunch;
+
+public class Grain : IPooled
+{
+	private float[] sourceData;
+
+	private int startSample;
+
+	private int currentSample;
+
+	private int attackTimeSamples;
+
+	private int sustainTimeSamples;
+
+	private int releaseTimeSamples;
+
+	private float gain;
+
+	private float gainPerSampleAttack;
+
+	private float gainPerSampleRelease;
+
+	private int attackEndSample;
+
+	private int releaseStartSample;
+
+	private int endSample;
+
+	public bool finished => currentSample >= endSample;
+
+	public void Init(float[] source, EngineCycle cycle, int cyclePadding)
+	{
+		sourceData = source;
+		startSample = cycle.startSample - cyclePadding;
+		currentSample = startSample;
+		attackTimeSamples = cyclePadding;
+		sustainTimeSamples = cycle.endSample - cycle.startSample;
+		releaseTimeSamples = cyclePadding;
+		gainPerSampleAttack = 1f / (float)attackTimeSamples;
+		gainPerSampleRelease = -1f / (float)releaseTimeSamples;
+		attackEndSample = startSample + attackTimeSamples;
+		releaseStartSample = attackEndSample + sustainTimeSamples;
+		endSample = releaseStartSample + releaseTimeSamples;
+		gain = 0f;
+	}
+
+	void IPooled.LeavePool()
+	{
+	}
+
+	void IPooled.EnterPool()
+	{
+		sourceData = null;
+		startSample = 0;
+		currentSample = 0;
+		attackTimeSamples = 0;
+		sustainTimeSamples = 0;
+		releaseTimeSamples = 0;
+		gain = 0f;
+		gainPerSampleAttack = 0f;
+		gainPerSampleRelease = 0f;
+		attackEndSample = 0;
+		releaseStartSample = 0;
+		endSample = 0;
+	}
+
+	public float GetSample()
+	{
+		if (currentSample >= sourceData.Length)
+		{
+			return 0f;
+		}
+		float num = sourceData[currentSample];
+		if (currentSample <= attackEndSample)
+		{
+			gain += gainPerSampleAttack;
+			if (gain > 0.8f)
+			{
+				gain = 0.8f;
+			}
+		}
+		else if (currentSample >= releaseStartSample)
+		{
+			gain += gainPerSampleRelease;
+			if (gain < 0f)
+			{
+				gain = 0f;
+			}
+		}
+		currentSample++;
+		return num * gain;
+	}
+}
+
+
+using UnityEngine;
+
+public class FlybySound : MonoBehaviour, IClientComponent
+{
+	public SoundDefinition flybySound;
+
+	public float flybySoundDistance = 7f;
+
+	public SoundDefinition closeFlybySound;
+
+	public float closeFlybyDistance = 3f;
+}
+
+
+using UnityEngine;
+
+public class FootstepSound : MonoBehaviour, IClientComponent
+{
+	public enum Hardness
+	{
+		Light = 1,
+		Medium,
+		Hard
+	}
+
+	public SoundDefinition lightSound;
+
+	public SoundDefinition medSound;
+
+	public SoundDefinition hardSound;
+
+	private const float panAmount = 0.05f;
+}
+
+
+public enum Hardness
+{
+	Light = 1,
+	Medium,
+	Hard
+}
+
+
+using System;
 using System.Collections.Generic;
 using Facepunch;
 using UnityEngine;
@@ -8714,25 +9974,25 @@ public class Socket_Free_Snappable : Socket_Free
 	[Range(-1f, 1f)]
 	private float generalPadding;
 
-	[Range(-1f, 1f)]
-	[SerializeField]
 	[Header("Snapping - Walls")]
+	[SerializeField]
+	[Range(-1f, 1f)]
 	private float snappingPadding;
 
-	[Header("Snapping - Corners")]
 	[SerializeField]
+	[Header("Snapping - Corners")]
 	private bool allowSnappingToCorners = true;
 
 	[SerializeField]
 	[Range(-1f, 1f)]
 	private float cornerPadding = -0.01f;
 
-	[Header("Snapping - Same Deployable")]
 	[SerializeField]
+	[Header("Snapping - Same Deployable")]
 	private bool allowSnappingToSameDeployable = true;
 
-	[SerializeField]
 	[Range(-1f, 1f)]
+	[SerializeField]
 	private float sameDeployablePadding;
 
 	private BaseEntity staticEntity;
@@ -10735,8 +11995,8 @@ public class GameObjectToggleState : StateMachineBehaviour
 {
 	public bool UseCurve;
 
-	[Tooltip("The normalised range in the animation in which to apply the TargetState")]
 	[MinMax(0f, 1f)]
+	[Tooltip("The normalised range in the animation in which to apply the TargetState")]
 	public Vector2 ValidNormalisedRange;
 
 	public AnimationCurve CurveRange = AnimationCurve.Linear(0f, 0f, 1f, 0f);
@@ -11328,8 +12588,8 @@ public class OxygenOverlay : MonoBehaviour
 	[SerializeField]
 	private float smoothTime = 1f;
 
-	[SerializeField]
 	[Tooltip("If true, only show this effect when the player is mounted in a submarine.")]
+	[SerializeField]
 	private bool submarinesOnly;
 }
 
@@ -15272,8 +16532,8 @@ public class Projectile : ListComponent<Projectile>
 
 	public float thickness;
 
-	[Tooltip("Tick this box to be able to change the initial orientation of the projectile")]
 	[Header("Orientation")]
+	[Tooltip("Tick this box to be able to change the initial orientation of the projectile")]
 	public bool changeInitialOrientation;
 
 	[Tooltip("This projectile will raycast for this many units, and then become a projectile. This is typically done for bullets.")]
@@ -15562,8 +16822,8 @@ public static class QueryVisJobs
 		[NativeDisableParallelForRestriction]
 		public QueryParameters queryParameters;
 
-		[NativeDisableParallelForRestriction]
 		[WriteOnly]
+		[NativeDisableParallelForRestriction]
 		public NativeArray<RaycastCommand> commands;
 
 		public void Execute(int index, TransformAccess transform)
@@ -15634,8 +16894,8 @@ public struct ConstructCommandsJob : IJobParallelForTransform
 	[NativeDisableParallelForRestriction]
 	public QueryParameters queryParameters;
 
-	[NativeDisableParallelForRestriction]
 	[WriteOnly]
+	[NativeDisableParallelForRestriction]
 	public NativeArray<RaycastCommand> commands;
 
 	public void Execute(int index, TransformAccess transform)
@@ -21032,8 +22292,8 @@ public class DiagnosticsConSys : ConsoleSystem
 		WriteTextToFile(targetFolder + "UnityEngine.Entity.SV.Savelist.Counts.txt", stringBuilder3.ToString());
 	}
 
-	[ClientVar(ClientAdmin = true, Help = "Dumps a diagnostic snapshot of LOD Groups into a diagnostics subfolder")]
 	[ServerVar(Help = "Dumps a diagnostic snapshot of LOD Groups into a diagnostics subfolder")]
+	[ClientVar(ClientAdmin = true, Help = "Dumps a diagnostic snapshot of LOD Groups into a diagnostics subfolder")]
 	public static void dumpLODGroups(Arg args)
 	{
 		string targetFolder = GetTargetFolder();
@@ -21063,8 +22323,8 @@ public class DiagnosticsConSys : ConsoleSystem
 		WriteTextToFile(targetFolder + "LODGroups.Objects.txt", stringBuilder.ToString());
 	}
 
-	[ClientVar(ClientAdmin = true, Help = "Dumps a diagnostic snapshot of network info into a diagnostics subfolder")]
 	[ServerVar(Help = "Dumps a diagnostic snapshot of network info into a diagnostics subfolder")]
+	[ClientVar(ClientAdmin = true, Help = "Dumps a diagnostic snapshot of network info into a diagnostics subfolder")]
 	public static void dumpNetwork(Arg args)
 	{
 		string targetFolder = GetTargetFolder();
@@ -21107,8 +22367,8 @@ public class DiagnosticsConSys : ConsoleSystem
 		WriteTextToFile(targetFolder + "Network.Server.txt", stringBuilder.ToString());
 	}
 
-	[ClientVar(ClientAdmin = true, Help = "Dumps a diagnostic snapshot of objects into a diagnostics subfolder")]
 	[ServerVar(Help = "Dumps a diagnostic snapshot of objects into a diagnostics subfolder")]
+	[ClientVar(ClientAdmin = true, Help = "Dumps a diagnostic snapshot of objects into a diagnostics subfolder")]
 	public static void dumpObjects(Arg args)
 	{
 		string targetFolder = GetTargetFolder();
@@ -21591,8 +22851,8 @@ public class DiagnosticsConSys : ConsoleSystem
 		}
 	}
 
-	[ServerVar(Help = "Dumps a diagnostic snapshot of warmup info into a diagnostics subfolder")]
 	[ClientVar(ClientAdmin = true, Help = "Dumps a diagnostic snapshot of warmup info into a diagnostics subfolder")]
+	[ServerVar(Help = "Dumps a diagnostic snapshot of warmup info into a diagnostics subfolder")]
 	public static void dumpWarmup(Arg args)
 	{
 		string targetFolder = GetTargetFolder();
@@ -22827,8 +24087,8 @@ public class CliffPlacementSandbox : MonoBehaviour
 	[Tooltip("Which canned height patch to seed the terrain with.")]
 	public TerrainPatch CurrentPatch = TerrainPatch.SlopeX;
 
-	[Header("Map file region (real .map crop)")]
 	[Tooltip("Path to a real, shipped .map file. Use the inspector's drag/drop or picker to set it.")]
+	[Header("Map file region (real .map crop)")]
 	public string MapFilePath = string.Empty;
 
 	[Tooltip("World-space X/Z centre of the region to crop out of the map (Y is ignored).")]
@@ -22858,8 +24118,8 @@ public class CliffPlacementSandbox : MonoBehaviour
 	[Tooltip("Procedural-generation scene the one-click 'Bake pre-cliff T0' button drives to capture T0. Must be a full generator scene (engine bootstrap + generating World Setup), e.g. the shipped 'Procedural Map' scene. Only used by the editor bake button.")]
 	public string GenerationScenePath = "Assets/Scenes/Release/Procedural Map.unity";
 
-	[Tooltip("The cliff prefab instance to place. Assign via the inspector dropdown or drag one in.")]
 	[Header("Placement")]
+	[Tooltip("The cliff prefab instance to place. Assign via the inspector dropdown or drag one in.")]
 	public Transform cliffRoot;
 
 	[Tooltip("Anchor solve mode. PlaceCliffs uses MaximizeHeight for the first cliff of a chain.")]
@@ -22917,8 +24177,8 @@ public class CliffPlacementSandbox : MonoBehaviour
 	[Tooltip("Height of the scale-reference capsule in metres (Rust player is about 1.8m).")]
 	public float PlayerReferenceHeight = 1.8f;
 
-	[Tooltip("Hold right-mouse in Game view to fly: WASD move, Q/E down/up, Shift sprint, scroll = speed.")]
 	[Header("Camera (play-mode freecam)")]
+	[Tooltip("Hold right-mouse in Game view to fly: WASD move, Q/E down/up, Shift sprint, scroll = speed.")]
 	public bool EnableFreecam = true;
 
 	[Tooltip("Base freecam move speed in metres/second (adjust live with the scroll wheel while flying).")]
@@ -25630,24 +26890,24 @@ public class TerrainCopyPaste : MonoBehaviour, IEditorComponent
 
 	public bool CopyWaterMap = true;
 
-	[SerializeField]
 	[HideInInspector]
+	[SerializeField]
 	private bool _hasCopied;
 
-	[HideInInspector]
 	[SerializeField]
+	[HideInInspector]
 	private bool _isUndo;
 
 	[HideInInspector]
 	[SerializeField]
 	private Vector3 _copySize;
 
-	[HideInInspector]
 	[SerializeField]
+	[HideInInspector]
 	private RectInt _heightMapRect;
 
-	[HideInInspector]
 	[SerializeField]
+	[HideInInspector]
 	private Color[] _heightMapData;
 
 	[SerializeField]
@@ -25658,36 +26918,36 @@ public class TerrainCopyPaste : MonoBehaviour, IEditorComponent
 	[HideInInspector]
 	private Color[] _splat0Data;
 
-	[HideInInspector]
 	[SerializeField]
+	[HideInInspector]
 	private RectInt _splat1Rect;
 
 	[SerializeField]
 	[HideInInspector]
 	private Color[] _splat1Data;
 
-	[HideInInspector]
 	[SerializeField]
+	[HideInInspector]
 	private RectInt _biomeRect;
 
 	[SerializeField]
 	[HideInInspector]
 	private Color[] _biomeData;
 
-	[HideInInspector]
 	[SerializeField]
+	[HideInInspector]
 	private RectInt _alphaRect;
 
 	[SerializeField]
 	[HideInInspector]
 	private Color[] _alphaData;
 
-	[SerializeField]
 	[HideInInspector]
+	[SerializeField]
 	private RectInt _topologyRect;
 
-	[HideInInspector]
 	[SerializeField]
+	[HideInInspector]
 	private Color[] _topologyData;
 
 	[SerializeField]
@@ -25723,27 +26983,27 @@ public class TransformLoopPreview : MonoBehaviour
 	[SerializeField]
 	private bool previewMotion = true;
 
-	[Min(0.001f)]
 	[SerializeField]
+	[Min(0.001f)]
 	private float movementDistance = 10f;
 
 	[SerializeField]
 	[Min(0f)]
 	private float movementSpeed = 5f;
 
-	[SerializeField]
 	[Tooltip("Uses the object's rotated local axes instead of world axes.")]
+	[SerializeField]
 	private bool useLocalAxis = true;
 
 	[SerializeField]
 	private MovementAxis movementAxis = MovementAxis.PositiveZ;
 
-	[HideInInspector]
 	[SerializeField]
+	[HideInInspector]
 	private Vector3 originPosition;
 
-	[HideInInspector]
 	[SerializeField]
+	[HideInInspector]
 	private bool originCaptured;
 
 	[HideInInspector]
@@ -26096,983 +27356,6 @@ public class CrudeOilPumpEffects : ListComponent<CrudeOilPumpEffects>, IClientCo
 	public GameObject Target;
 
 	public SoundDefinition PumpLeakSound;
-}
-
-
-using System.Collections.Generic;
-using ConVar;
-using Network;
-using Oxide.Core;
-using Rust;
-using UnityEngine;
-
-public class Effect : EffectData
-{
-	public enum Type : uint
-	{
-		Generic = 0u,
-		Projectile = 1u,
-		PaintballSplat = 3u
-	}
-
-	public static class client
-	{
-		public static void Run(Type fxtype, BaseEntity ent, uint boneID = 0u, Vector3 posLocal = default(Vector3), Vector3 normLocal = default(Vector3))
-		{
-		}
-
-		public static void Run(string strName, BaseEntity ent, uint boneID = 0u, Vector3 posLocal = default(Vector3), Vector3 normLocal = default(Vector3), Type effectType = Type.Generic, int number = 0, bool ignoreMaxSpawnDistance = false)
-		{
-			string.IsNullOrEmpty(strName);
-		}
-
-		private static void RescaleEffectIfNeeded(BaseEntity ent, ref uint boneID, ref Vector3 posLocal, ref Vector3 normLocal)
-		{
-			//IL_003c: Unknown result type (might be due to invalid IL or missing references)
-			//IL_0041: Unknown result type (might be due to invalid IL or missing references)
-			//IL_0050: Unknown result type (might be due to invalid IL or missing references)
-			//IL_0055: Unknown result type (might be due to invalid IL or missing references)
-			//IL_005a: Unknown result type (might be due to invalid IL or missing references)
-			//IL_0067: Unknown result type (might be due to invalid IL or missing references)
-			//IL_006c: Unknown result type (might be due to invalid IL or missing references)
-			//IL_0071: Unknown result type (might be due to invalid IL or missing references)
-			//IL_0074: Unknown result type (might be due to invalid IL or missing references)
-			//IL_0079: Unknown result type (might be due to invalid IL or missing references)
-			//IL_0081: Unknown result type (might be due to invalid IL or missing references)
-			//IL_0086: Unknown result type (might be due to invalid IL or missing references)
-			//IL_008b: Unknown result type (might be due to invalid IL or missing references)
-			//IL_0098: Unknown result type (might be due to invalid IL or missing references)
-			//IL_009d: Unknown result type (might be due to invalid IL or missing references)
-			//IL_00a2: Unknown result type (might be due to invalid IL or missing references)
-			if (boneID != 0 && (Object)(object)ent != (Object)null && (Object)(object)ent.model != (Object)null)
-			{
-				Transform val = ent.model.FindBone(boneID);
-				if ((Object)(object)val != (Object)null && val.localScale != Vector3.one)
-				{
-					normLocal = val.TransformDirection(normLocal);
-					Vector3 val2 = ((Component)ent).transform.InverseTransformDirection(normLocal);
-					normLocal = ((Vector3)(ref val2)).normalized;
-					posLocal = val.TransformPoint(posLocal);
-					posLocal = ((Component)ent).transform.InverseTransformPoint(posLocal);
-					boneID = 0u;
-				}
-			}
-		}
-
-		public static void Run(Type fxtype, Vector3 posWorld = default(Vector3), Vector3 normWorld = default(Vector3), Vector3 up = default(Vector3))
-		{
-		}
-
-		public static void Run(string strName, Vector3 posWorld = default(Vector3), Vector3 normWorld = default(Vector3), Vector3 up = default(Vector3), Type overrideType = Type.Generic, int number = 0, bool ignoreMaxSpawnDistance = false)
-		{
-			string.IsNullOrEmpty(strName);
-		}
-
-		public static void Run(string strName, GameObject obj)
-		{
-			string.IsNullOrEmpty(strName);
-		}
-
-		public static void DoAdditiveImpactEffect(HitInfo info, string effectName)
-		{
-			//IL_0046: Unknown result type (might be due to invalid IL or missing references)
-			//IL_004c: Unknown result type (might be due to invalid IL or missing references)
-			//IL_0056: Unknown result type (might be due to invalid IL or missing references)
-			//IL_005b: Unknown result type (might be due to invalid IL or missing references)
-			//IL_0061: Unknown result type (might be due to invalid IL or missing references)
-			//IL_0068: Unknown result type (might be due to invalid IL or missing references)
-			//IL_006e: Unknown result type (might be due to invalid IL or missing references)
-			//IL_001b: Unknown result type (might be due to invalid IL or missing references)
-			//IL_0021: Unknown result type (might be due to invalid IL or missing references)
-			//IL_002b: Unknown result type (might be due to invalid IL or missing references)
-			//IL_0030: Unknown result type (might be due to invalid IL or missing references)
-			//IL_0036: Unknown result type (might be due to invalid IL or missing references)
-			if (info.HitEntity.IsValid())
-			{
-				Run(effectName, info.HitEntity, info.HitBone, info.HitPositionLocal + info.HitNormalLocal * 0.1f, info.HitNormalLocal);
-			}
-			else
-			{
-				Run(effectName, info.HitPositionWorld + info.HitNormalWorld * 0.1f, info.HitNormalWorld);
-			}
-		}
-
-		private static bool CanPlayImpactEffect(HitInfo info)
-		{
-			//IL_0028: Unknown result type (might be due to invalid IL or missing references)
-			if ((Object)(object)TerrainMeta.WaterMap != (Object)null && info.HitMaterial != Projectile.WaterMaterialID() && info.HitMaterial != Projectile.FleshMaterialID() && WaterLevel.Test(info.HitPositionWorld, waves: false, volumes: false))
-			{
-				return false;
-			}
-			return true;
-		}
-
-		private static void HandleAdditiveEffects(HitInfo info)
-		{
-			if (info.damageTypes.Has(DamageType.Explosion))
-			{
-				DoAdditiveImpactEffect(info, "assets/bundled/prefabs/fx/impacts/additive/explosion.prefab");
-			}
-			if (info.damageTypes.Has(DamageType.Heat))
-			{
-				DoAdditiveImpactEffect(info, "assets/bundled/prefabs/fx/impacts/additive/fire.prefab");
-			}
-		}
-
-		public static void ImpactEffect(HitInfo info, string customEffect = null)
-		{
-			//IL_00f9: Unknown result type (might be due to invalid IL or missing references)
-			//IL_00ff: Unknown result type (might be due to invalid IL or missing references)
-			//IL_0106: Unknown result type (might be due to invalid IL or missing references)
-			//IL_010c: Unknown result type (might be due to invalid IL or missing references)
-			//IL_011a: Unknown result type (might be due to invalid IL or missing references)
-			//IL_0120: Unknown result type (might be due to invalid IL or missing references)
-			//IL_0127: Unknown result type (might be due to invalid IL or missing references)
-			//IL_012d: Unknown result type (might be due to invalid IL or missing references)
-			//IL_00b5: Unknown result type (might be due to invalid IL or missing references)
-			//IL_00bb: Unknown result type (might be due to invalid IL or missing references)
-			//IL_00e0: Unknown result type (might be due to invalid IL or missing references)
-			//IL_00e6: Unknown result type (might be due to invalid IL or missing references)
-			//IL_0187: Unknown result type (might be due to invalid IL or missing references)
-			//IL_018d: Unknown result type (might be due to invalid IL or missing references)
-			//IL_0194: Unknown result type (might be due to invalid IL or missing references)
-			//IL_019a: Unknown result type (might be due to invalid IL or missing references)
-			//IL_016f: Unknown result type (might be due to invalid IL or missing references)
-			//IL_0175: Unknown result type (might be due to invalid IL or missing references)
-			if (!info.DoHitEffects || !CanPlayImpactEffect(info))
-			{
-				return;
-			}
-			string materialName = StringPool.Get(info.HitMaterial);
-			int number = 0;
-			Type type = Type.Generic;
-			DamageType damageType;
-			if (info.WeaponPrefab is AttackEntity attackEntity)
-			{
-				damageType = attackEntity.GetDamageTypeForEffect(info);
-				number = attackEntity.GetImpactEffectNumberValue(info);
-				type = attackEntity.GetEffectType(info);
-			}
-			else
-			{
-				damageType = info.damageTypes.GetMajorityDamageType();
-			}
-			string strName = customEffect ?? EffectDictionary.GetParticle(damageType, materialName);
-			string decal = EffectDictionary.GetDecal(damageType, materialName);
-			bool ignoreMaxSpawnDistance = false;
-			if (info.HitEntity.IsValid())
-			{
-				if (customEffect == null)
-				{
-					GameObjectRef impactEffect = info.HitEntity.GetImpactEffect(info);
-					if (impactEffect.isValid)
-					{
-						strName = impactEffect.resourcePath;
-					}
-				}
-				Run(strName, info.HitEntity, info.HitBone, info.HitPositionLocal, info.HitNormalLocal, type, number, ignoreMaxSpawnDistance);
-				if (info.DoDecals)
-				{
-					Run(decal, info.HitEntity, info.HitBone, info.HitPositionLocal, info.HitNormalLocal, type, number, ignoreMaxSpawnDistance);
-				}
-			}
-			else
-			{
-				Run(strName, info.HitPositionWorld, info.HitNormalWorld, default(Vector3), type, number, ignoreMaxSpawnDistance);
-				Run(decal, info.HitPositionWorld, info.HitNormalWorld, default(Vector3), type, number, ignoreMaxSpawnDistance);
-			}
-			if (info.WeaponPrefab is BaseMelee baseMelee)
-			{
-				string strikeEffectPath = baseMelee.GetStrikeEffectPath(materialName);
-				if (info.HitEntity.IsValid())
-				{
-					Run(strikeEffectPath, info.HitEntity, info.HitBone, info.HitPositionLocal, info.HitNormalLocal);
-				}
-				else
-				{
-					Run(strikeEffectPath, info.HitPositionWorld, info.HitNormalWorld);
-				}
-			}
-			HandleAdditiveEffects(info);
-		}
-	}
-
-	public static class server
-	{
-		public static void Run(Type fxtype, BaseEntity ent, uint boneID = 0u, Vector3 posLocal = default(Vector3), Vector3 normLocal = default(Vector3), Connection sourceConnection = null, bool broadcast = false, List<Connection> targets = null, int number = 0)
-		{
-			//IL_0008: Unknown result type (might be due to invalid IL or missing references)
-			//IL_0009: Unknown result type (might be due to invalid IL or missing references)
-			reusableInstance.Init(fxtype, ent, boneID, posLocal, normLocal, sourceConnection);
-			reusableInstance.broadcast = broadcast;
-			reusableInstance.targets = targets;
-			((EffectData)reusableInstance).number = number;
-			EffectNetwork.Send(reusableInstance, (EntityNetworkRange)1);
-		}
-
-		public static void Run(string strName, BaseEntity ent, uint boneID = 0u, Vector3 posLocal = default(Vector3), Vector3 normLocal = default(Vector3), Connection sourceConnection = null, bool broadcast = false, List<Connection> targets = null, int number = 0, Type type = Type.Generic)
-		{
-			//IL_0012: Unknown result type (might be due to invalid IL or missing references)
-			//IL_0013: Unknown result type (might be due to invalid IL or missing references)
-			if (!string.IsNullOrEmpty(strName))
-			{
-				reusableInstance.Init(type, ent, boneID, posLocal, normLocal, sourceConnection);
-				reusableInstance.pooledString = strName;
-				reusableInstance.broadcast = broadcast;
-				reusableInstance.targets = targets;
-				((EffectData)reusableInstance).number = number;
-				EffectNetwork.Send(reusableInstance, (EntityNetworkRange)1);
-			}
-		}
-
-		public static void Run(Type fxtype, Vector3 posWorld = default(Vector3), Vector3 normWorld = default(Vector3), Connection sourceConnection = null, bool broadcast = false, List<Connection> targets = null, int number = 0)
-		{
-			//IL_0006: Unknown result type (might be due to invalid IL or missing references)
-			//IL_0007: Unknown result type (might be due to invalid IL or missing references)
-			reusableInstance.Init(fxtype, posWorld, normWorld, sourceConnection);
-			reusableInstance.broadcast = broadcast;
-			reusableInstance.targets = targets;
-			((EffectData)reusableInstance).number = number;
-			EffectNetwork.Send(reusableInstance, (EntityNetworkRange)1);
-		}
-
-		public static void Run(string strName, Vector3 posWorld = default(Vector3), Vector3 normWorld = default(Vector3), Connection sourceConnection = null, bool broadcast = false, List<Connection> targets = null, int number = 0, Type type = Type.Generic)
-		{
-			//IL_0010: Unknown result type (might be due to invalid IL or missing references)
-			//IL_0011: Unknown result type (might be due to invalid IL or missing references)
-			if (!string.IsNullOrEmpty(strName))
-			{
-				reusableInstance.Init(type, posWorld, normWorld, sourceConnection);
-				reusableInstance.pooledString = strName;
-				reusableInstance.broadcast = broadcast;
-				reusableInstance.targets = targets;
-				((EffectData)reusableInstance).number = number;
-				EffectNetwork.Send(reusableInstance, (EntityNetworkRange)1);
-			}
-		}
-
-		public static void DoAdditiveImpactEffect(HitInfo info, string effectName)
-		{
-			//IL_0038: Unknown result type (might be due to invalid IL or missing references)
-			//IL_003e: Unknown result type (might be due to invalid IL or missing references)
-			//IL_001b: Unknown result type (might be due to invalid IL or missing references)
-			//IL_0021: Unknown result type (might be due to invalid IL or missing references)
-			if (info.HitEntity.IsValid())
-			{
-				Run(effectName, info.HitEntity, info.HitBone, info.HitPositionLocal, info.HitNormalLocal, info.Predicted);
-			}
-			else
-			{
-				Run(effectName, info.HitPositionWorld, info.HitNormalWorld, info.Predicted);
-			}
-		}
-
-		private static bool CanPlayImpactEffect(HitInfo info)
-		{
-			//IL_0028: Unknown result type (might be due to invalid IL or missing references)
-			if ((Object)(object)TerrainMeta.WaterMap != (Object)null && info.HitMaterial != Projectile.WaterMaterialID() && info.HitMaterial != Projectile.FleshMaterialID() && WaterLevel.Test(info.HitPositionWorld, waves: false, volumes: false))
-			{
-				return false;
-			}
-			return true;
-		}
-
-		private static void HandleAdditiveEffects(HitInfo info)
-		{
-			if (info.damageTypes.Has(DamageType.Explosion))
-			{
-				DoAdditiveImpactEffect(info, "assets/bundled/prefabs/fx/impacts/additive/explosion.prefab");
-			}
-			if (info.damageTypes.Has(DamageType.Heat))
-			{
-				DoAdditiveImpactEffect(info, "assets/bundled/prefabs/fx/impacts/additive/fire.prefab");
-			}
-		}
-
-		private static void HandleWeaponEffects(HitInfo info, string materialName)
-		{
-			//IL_0062: Unknown result type (might be due to invalid IL or missing references)
-			//IL_0068: Unknown result type (might be due to invalid IL or missing references)
-			//IL_0045: Unknown result type (might be due to invalid IL or missing references)
-			//IL_004b: Unknown result type (might be due to invalid IL or missing references)
-			if (!Object.op_Implicit((Object)(object)info.WeaponPrefab))
-			{
-				return;
-			}
-			BaseMelee baseMelee = info.WeaponPrefab as BaseMelee;
-			if ((Object)(object)baseMelee != (Object)null)
-			{
-				string strikeEffectPath = baseMelee.GetStrikeEffectPath(materialName);
-				if (info.HitEntity.IsValid())
-				{
-					Run(strikeEffectPath, info.HitEntity, info.HitBone, info.HitPositionLocal, info.HitNormalLocal, info.Predicted);
-				}
-				else
-				{
-					Run(strikeEffectPath, info.HitPositionWorld, info.HitNormalWorld, info.Predicted);
-				}
-			}
-		}
-
-		private static bool IsLegalPlacement(HitInfo info)
-		{
-			//IL_0006: Unknown result type (might be due to invalid IL or missing references)
-			//IL_000b: Unknown result type (might be due to invalid IL or missing references)
-			//IL_001b: Unknown result type (might be due to invalid IL or missing references)
-			//IL_0023: Unknown result type (might be due to invalid IL or missing references)
-			//IL_0028: Unknown result type (might be due to invalid IL or missing references)
-			//IL_0035: Unknown result type (might be due to invalid IL or missing references)
-			//IL_006b: Unknown result type (might be due to invalid IL or missing references)
-			Bounds bounds = info.HitEntity.bounds;
-			float num = info.HitEntity.AntiHackPadding();
-			((Bounds)(ref bounds)).extents = ((Bounds)(ref bounds)).extents + new Vector3(num, num, num);
-			if (!((Bounds)(ref bounds)).Contains(info.HitPositionLocal))
-			{
-				BasePlayer initiatorPlayer = info.InitiatorPlayer;
-				if ((Object)(object)initiatorPlayer != (Object)null && ((object)initiatorPlayer).GetType() == typeof(BasePlayer))
-				{
-					float num2 = Mathf.Sqrt(((Bounds)(ref bounds)).SqrDistance(info.HitPositionLocal));
-					if (num2 > ConVar.AntiHack.impact_effect_distance_forgiveness)
-					{
-						AntiHack.Log(initiatorPlayer, AntiHackType.EffectHack, $"Tried to run an impact effect outside of entity '{info.HitEntity.ShortPrefabName}' bounds by {num2}m");
-					}
-				}
-				return false;
-			}
-			return true;
-		}
-
-		public static void ImpactEffect(HitInfo info, string customEffect = null)
-		{
-			//IL_0139: Unknown result type (might be due to invalid IL or missing references)
-			//IL_013f: Unknown result type (might be due to invalid IL or missing references)
-			//IL_0156: Unknown result type (might be due to invalid IL or missing references)
-			//IL_015c: Unknown result type (might be due to invalid IL or missing references)
-			//IL_00f1: Unknown result type (might be due to invalid IL or missing references)
-			//IL_00f7: Unknown result type (might be due to invalid IL or missing references)
-			//IL_011a: Unknown result type (might be due to invalid IL or missing references)
-			//IL_0120: Unknown result type (might be due to invalid IL or missing references)
-			if (Interface.CallHook("OnImpactEffectCreate", (object)info, (object)customEffect) != null || (Object.op_Implicit((Object)(object)info.InitiatorPlayer) && info.InitiatorPlayer.limitNetworking) || !info.DoHitEffects || !CanPlayImpactEffect(info))
-			{
-				return;
-			}
-			string materialName = StringPool.Get(info.HitMaterial);
-			int number = 0;
-			Type type = Type.Generic;
-			DamageType damageType;
-			if (info.WeaponPrefab is AttackEntity attackEntity)
-			{
-				damageType = attackEntity.GetDamageTypeForEffect(info);
-				number = info.Weapon.GetImpactEffectNumberValue(info);
-				type = info.Weapon.GetEffectType(info);
-			}
-			else
-			{
-				damageType = info.damageTypes.GetMajorityDamageType();
-			}
-			string strName = customEffect ?? EffectDictionary.GetParticle(damageType, materialName);
-			string decal = EffectDictionary.GetDecal(damageType, materialName);
-			if (info.HitEntity.IsValid())
-			{
-				if (customEffect == null)
-				{
-					GameObjectRef impactEffect = info.HitEntity.GetImpactEffect(info);
-					if (impactEffect.isValid)
-					{
-						strName = impactEffect.resourcePath;
-					}
-				}
-				if (!IsLegalPlacement(info))
-				{
-					return;
-				}
-				Run(strName, info.HitEntity, info.HitBone, info.HitPositionLocal, info.HitNormalLocal, info.Predicted, broadcast: false, null, number, type);
-				Run(decal, info.HitEntity, info.HitBone, info.HitPositionLocal, info.HitNormalLocal, info.Predicted, broadcast: false, null, number, type);
-			}
-			else
-			{
-				Run(strName, info.HitPositionWorld, info.HitNormalWorld, info.Predicted, broadcast: false, null, number, type);
-				Run(decal, info.HitPositionWorld, info.HitNormalWorld, info.Predicted, broadcast: false, null, number, type);
-			}
-			HandleWeaponEffects(info, materialName);
-			HandleAdditiveEffects(info);
-		}
-	}
-
-	public Vector3 upDir;
-
-	public Vector3 worldPos;
-
-	public Vector3 worldNrm;
-
-	public bool attached;
-
-	public Transform transform;
-
-	public GameObject gameObject;
-
-	public string pooledString;
-
-	public bool broadcast;
-
-	public List<Connection> targets;
-
-	private static Effect reusableInstance = new Effect();
-
-	public Effect()
-	{
-	}
-
-	public Effect(string effectName, Vector3 posWorld, Vector3 normWorld, Connection sourceConnection = null)
-	{
-		//IL_0008: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0009: Unknown result type (might be due to invalid IL or missing references)
-		Init(Type.Generic, posWorld, normWorld, sourceConnection);
-		pooledString = effectName;
-	}
-
-	public Effect(string effectName, BaseEntity ent, uint boneID, Vector3 posLocal, Vector3 normLocal, Connection sourceConnection = null)
-	{
-		//IL_000a: Unknown result type (might be due to invalid IL or missing references)
-		//IL_000c: Unknown result type (might be due to invalid IL or missing references)
-		Init(Type.Generic, ent, boneID, posLocal, normLocal, sourceConnection);
-		pooledString = effectName;
-	}
-
-	public void Init(Type fxtype, BaseEntity ent, uint boneID, Vector3 posLocal, Vector3 normLocal, Connection sourceConnection = null)
-	{
-		//IL_0015: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0017: Unknown result type (might be due to invalid IL or missing references)
-		//IL_001d: Unknown result type (might be due to invalid IL or missing references)
-		//IL_001f: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0059: Unknown result type (might be due to invalid IL or missing references)
-		//IL_004a: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0050: Unknown result type (might be due to invalid IL or missing references)
-		//IL_005e: Unknown result type (might be due to invalid IL or missing references)
-		Clear();
-		base.type = (uint)fxtype;
-		attached = true;
-		base.origin = posLocal;
-		base.normal = normLocal;
-		if ((Object)(object)ent != (Object)null && !ent.IsValid())
-		{
-			Debug.LogWarning((object)"Effect.Init - invalid entity");
-		}
-		base.entity = (NetworkableId)(ent.IsValid() ? ent.net.ID : default(NetworkableId));
-		base.source = sourceConnection?.userid ?? 0;
-		base.bone = boneID;
-	}
-
-	public void Init(Type fxtype, Vector3 posWorld, Vector3 normWorld, Connection sourceConnection = null)
-	{
-		//IL_0016: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0017: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0018: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0019: Unknown result type (might be due to invalid IL or missing references)
-		//IL_001e: Unknown result type (might be due to invalid IL or missing references)
-		//IL_001f: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0026: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0027: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0028: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0029: Unknown result type (might be due to invalid IL or missing references)
-		//IL_002e: Unknown result type (might be due to invalid IL or missing references)
-		//IL_002f: Unknown result type (might be due to invalid IL or missing references)
-		Clear();
-		base.type = (uint)fxtype;
-		attached = false;
-		base.origin = (worldPos = posWorld);
-		base.normal = (worldNrm = normWorld);
-		base.source = sourceConnection?.userid ?? 0;
-	}
-
-	public void InitWithSourceEntity(Type fxtype, BaseEntity sourceEntity, Vector3 posWorld, Vector3 normWorld, Connection sourceConnection = null)
-	{
-		//IL_0002: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0003: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0026: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0017: Unknown result type (might be due to invalid IL or missing references)
-		//IL_001d: Unknown result type (might be due to invalid IL or missing references)
-		//IL_002b: Unknown result type (might be due to invalid IL or missing references)
-		Init(fxtype, posWorld, normWorld, sourceConnection);
-		base.sourceEntity = (NetworkableId)(sourceEntity.IsValid() ? sourceEntity.net.ID : default(NetworkableId));
-	}
-
-	public void Clear()
-	{
-		//IL_001b: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0027: Unknown result type (might be due to invalid IL or missing references)
-		//IL_003e: Unknown result type (might be due to invalid IL or missing references)
-		//IL_006b: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0072: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0077: Unknown result type (might be due to invalid IL or missing references)
-		//IL_007d: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0082: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0088: Unknown result type (might be due to invalid IL or missing references)
-		//IL_008d: Unknown result type (might be due to invalid IL or missing references)
-		base.type = 0u;
-		base.pooledstringid = 0u;
-		base.number = 0;
-		base.origin = default(Vector3);
-		base.normal = default(Vector3);
-		base.scale = 0f;
-		base.entity = default(NetworkableId);
-		base.bone = 0u;
-		base.source = 0uL;
-		base.distanceOverride = 0f;
-		base.ignoreMaxSpawnDistance = false;
-		base.sourceEntity = default(NetworkableId);
-		upDir = Vector3.zero;
-		worldPos = Vector3.zero;
-		worldNrm = Vector3.zero;
-		attached = false;
-		transform = null;
-		gameObject = null;
-		pooledString = null;
-		broadcast = false;
-		targets = null;
-	}
-}
-
-
-public enum Type : uint
-{
-	Generic = 0u,
-	Projectile = 1u,
-	PaintballSplat = 3u
-}
-
-
-using Rust;
-using UnityEngine;
-
-public static class client
-{
-	public static void Run(Type fxtype, BaseEntity ent, uint boneID = 0u, Vector3 posLocal = default(Vector3), Vector3 normLocal = default(Vector3))
-	{
-	}
-
-	public static void Run(string strName, BaseEntity ent, uint boneID = 0u, Vector3 posLocal = default(Vector3), Vector3 normLocal = default(Vector3), Type effectType = Type.Generic, int number = 0, bool ignoreMaxSpawnDistance = false)
-	{
-		string.IsNullOrEmpty(strName);
-	}
-
-	private static void RescaleEffectIfNeeded(BaseEntity ent, ref uint boneID, ref Vector3 posLocal, ref Vector3 normLocal)
-	{
-		//IL_003c: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0041: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0050: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0055: Unknown result type (might be due to invalid IL or missing references)
-		//IL_005a: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0067: Unknown result type (might be due to invalid IL or missing references)
-		//IL_006c: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0071: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0074: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0079: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0081: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0086: Unknown result type (might be due to invalid IL or missing references)
-		//IL_008b: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0098: Unknown result type (might be due to invalid IL or missing references)
-		//IL_009d: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00a2: Unknown result type (might be due to invalid IL or missing references)
-		if (boneID != 0 && (Object)(object)ent != (Object)null && (Object)(object)ent.model != (Object)null)
-		{
-			Transform val = ent.model.FindBone(boneID);
-			if ((Object)(object)val != (Object)null && val.localScale != Vector3.one)
-			{
-				normLocal = val.TransformDirection(normLocal);
-				Vector3 val2 = ((Component)ent).transform.InverseTransformDirection(normLocal);
-				normLocal = ((Vector3)(ref val2)).normalized;
-				posLocal = val.TransformPoint(posLocal);
-				posLocal = ((Component)ent).transform.InverseTransformPoint(posLocal);
-				boneID = 0u;
-			}
-		}
-	}
-
-	public static void Run(Type fxtype, Vector3 posWorld = default(Vector3), Vector3 normWorld = default(Vector3), Vector3 up = default(Vector3))
-	{
-	}
-
-	public static void Run(string strName, Vector3 posWorld = default(Vector3), Vector3 normWorld = default(Vector3), Vector3 up = default(Vector3), Type overrideType = Type.Generic, int number = 0, bool ignoreMaxSpawnDistance = false)
-	{
-		string.IsNullOrEmpty(strName);
-	}
-
-	public static void Run(string strName, GameObject obj)
-	{
-		string.IsNullOrEmpty(strName);
-	}
-
-	public static void DoAdditiveImpactEffect(HitInfo info, string effectName)
-	{
-		//IL_0046: Unknown result type (might be due to invalid IL or missing references)
-		//IL_004c: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0056: Unknown result type (might be due to invalid IL or missing references)
-		//IL_005b: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0061: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0068: Unknown result type (might be due to invalid IL or missing references)
-		//IL_006e: Unknown result type (might be due to invalid IL or missing references)
-		//IL_001b: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0021: Unknown result type (might be due to invalid IL or missing references)
-		//IL_002b: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0030: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0036: Unknown result type (might be due to invalid IL or missing references)
-		if (info.HitEntity.IsValid())
-		{
-			Run(effectName, info.HitEntity, info.HitBone, info.HitPositionLocal + info.HitNormalLocal * 0.1f, info.HitNormalLocal);
-		}
-		else
-		{
-			Run(effectName, info.HitPositionWorld + info.HitNormalWorld * 0.1f, info.HitNormalWorld);
-		}
-	}
-
-	private static bool CanPlayImpactEffect(HitInfo info)
-	{
-		//IL_0028: Unknown result type (might be due to invalid IL or missing references)
-		if ((Object)(object)TerrainMeta.WaterMap != (Object)null && info.HitMaterial != Projectile.WaterMaterialID() && info.HitMaterial != Projectile.FleshMaterialID() && WaterLevel.Test(info.HitPositionWorld, waves: false, volumes: false))
-		{
-			return false;
-		}
-		return true;
-	}
-
-	private static void HandleAdditiveEffects(HitInfo info)
-	{
-		if (info.damageTypes.Has(DamageType.Explosion))
-		{
-			DoAdditiveImpactEffect(info, "assets/bundled/prefabs/fx/impacts/additive/explosion.prefab");
-		}
-		if (info.damageTypes.Has(DamageType.Heat))
-		{
-			DoAdditiveImpactEffect(info, "assets/bundled/prefabs/fx/impacts/additive/fire.prefab");
-		}
-	}
-
-	public static void ImpactEffect(HitInfo info, string customEffect = null)
-	{
-		//IL_00f9: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00ff: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0106: Unknown result type (might be due to invalid IL or missing references)
-		//IL_010c: Unknown result type (might be due to invalid IL or missing references)
-		//IL_011a: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0120: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0127: Unknown result type (might be due to invalid IL or missing references)
-		//IL_012d: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00b5: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00bb: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00e0: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00e6: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0187: Unknown result type (might be due to invalid IL or missing references)
-		//IL_018d: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0194: Unknown result type (might be due to invalid IL or missing references)
-		//IL_019a: Unknown result type (might be due to invalid IL or missing references)
-		//IL_016f: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0175: Unknown result type (might be due to invalid IL or missing references)
-		if (!info.DoHitEffects || !CanPlayImpactEffect(info))
-		{
-			return;
-		}
-		string materialName = StringPool.Get(info.HitMaterial);
-		int number = 0;
-		Type type = Type.Generic;
-		DamageType damageType;
-		if (info.WeaponPrefab is AttackEntity attackEntity)
-		{
-			damageType = attackEntity.GetDamageTypeForEffect(info);
-			number = attackEntity.GetImpactEffectNumberValue(info);
-			type = attackEntity.GetEffectType(info);
-		}
-		else
-		{
-			damageType = info.damageTypes.GetMajorityDamageType();
-		}
-		string strName = customEffect ?? EffectDictionary.GetParticle(damageType, materialName);
-		string decal = EffectDictionary.GetDecal(damageType, materialName);
-		bool ignoreMaxSpawnDistance = false;
-		if (info.HitEntity.IsValid())
-		{
-			if (customEffect == null)
-			{
-				GameObjectRef impactEffect = info.HitEntity.GetImpactEffect(info);
-				if (impactEffect.isValid)
-				{
-					strName = impactEffect.resourcePath;
-				}
-			}
-			Run(strName, info.HitEntity, info.HitBone, info.HitPositionLocal, info.HitNormalLocal, type, number, ignoreMaxSpawnDistance);
-			if (info.DoDecals)
-			{
-				Run(decal, info.HitEntity, info.HitBone, info.HitPositionLocal, info.HitNormalLocal, type, number, ignoreMaxSpawnDistance);
-			}
-		}
-		else
-		{
-			Run(strName, info.HitPositionWorld, info.HitNormalWorld, default(Vector3), type, number, ignoreMaxSpawnDistance);
-			Run(decal, info.HitPositionWorld, info.HitNormalWorld, default(Vector3), type, number, ignoreMaxSpawnDistance);
-		}
-		if (info.WeaponPrefab is BaseMelee baseMelee)
-		{
-			string strikeEffectPath = baseMelee.GetStrikeEffectPath(materialName);
-			if (info.HitEntity.IsValid())
-			{
-				Run(strikeEffectPath, info.HitEntity, info.HitBone, info.HitPositionLocal, info.HitNormalLocal);
-			}
-			else
-			{
-				Run(strikeEffectPath, info.HitPositionWorld, info.HitNormalWorld);
-			}
-		}
-		HandleAdditiveEffects(info);
-	}
-}
-
-
-using System.Collections.Generic;
-using ConVar;
-using Network;
-using Oxide.Core;
-using Rust;
-using UnityEngine;
-
-public static class server
-{
-	public static void Run(Type fxtype, BaseEntity ent, uint boneID = 0u, Vector3 posLocal = default(Vector3), Vector3 normLocal = default(Vector3), Connection sourceConnection = null, bool broadcast = false, List<Connection> targets = null, int number = 0)
-	{
-		//IL_0008: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0009: Unknown result type (might be due to invalid IL or missing references)
-		reusableInstance.Init(fxtype, ent, boneID, posLocal, normLocal, sourceConnection);
-		reusableInstance.broadcast = broadcast;
-		reusableInstance.targets = targets;
-		((EffectData)reusableInstance).number = number;
-		EffectNetwork.Send(reusableInstance, (EntityNetworkRange)1);
-	}
-
-	public static void Run(string strName, BaseEntity ent, uint boneID = 0u, Vector3 posLocal = default(Vector3), Vector3 normLocal = default(Vector3), Connection sourceConnection = null, bool broadcast = false, List<Connection> targets = null, int number = 0, Type type = Type.Generic)
-	{
-		//IL_0012: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0013: Unknown result type (might be due to invalid IL or missing references)
-		if (!string.IsNullOrEmpty(strName))
-		{
-			reusableInstance.Init(type, ent, boneID, posLocal, normLocal, sourceConnection);
-			reusableInstance.pooledString = strName;
-			reusableInstance.broadcast = broadcast;
-			reusableInstance.targets = targets;
-			((EffectData)reusableInstance).number = number;
-			EffectNetwork.Send(reusableInstance, (EntityNetworkRange)1);
-		}
-	}
-
-	public static void Run(Type fxtype, Vector3 posWorld = default(Vector3), Vector3 normWorld = default(Vector3), Connection sourceConnection = null, bool broadcast = false, List<Connection> targets = null, int number = 0)
-	{
-		//IL_0006: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0007: Unknown result type (might be due to invalid IL or missing references)
-		reusableInstance.Init(fxtype, posWorld, normWorld, sourceConnection);
-		reusableInstance.broadcast = broadcast;
-		reusableInstance.targets = targets;
-		((EffectData)reusableInstance).number = number;
-		EffectNetwork.Send(reusableInstance, (EntityNetworkRange)1);
-	}
-
-	public static void Run(string strName, Vector3 posWorld = default(Vector3), Vector3 normWorld = default(Vector3), Connection sourceConnection = null, bool broadcast = false, List<Connection> targets = null, int number = 0, Type type = Type.Generic)
-	{
-		//IL_0010: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0011: Unknown result type (might be due to invalid IL or missing references)
-		if (!string.IsNullOrEmpty(strName))
-		{
-			reusableInstance.Init(type, posWorld, normWorld, sourceConnection);
-			reusableInstance.pooledString = strName;
-			reusableInstance.broadcast = broadcast;
-			reusableInstance.targets = targets;
-			((EffectData)reusableInstance).number = number;
-			EffectNetwork.Send(reusableInstance, (EntityNetworkRange)1);
-		}
-	}
-
-	public static void DoAdditiveImpactEffect(HitInfo info, string effectName)
-	{
-		//IL_0038: Unknown result type (might be due to invalid IL or missing references)
-		//IL_003e: Unknown result type (might be due to invalid IL or missing references)
-		//IL_001b: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0021: Unknown result type (might be due to invalid IL or missing references)
-		if (info.HitEntity.IsValid())
-		{
-			Run(effectName, info.HitEntity, info.HitBone, info.HitPositionLocal, info.HitNormalLocal, info.Predicted);
-		}
-		else
-		{
-			Run(effectName, info.HitPositionWorld, info.HitNormalWorld, info.Predicted);
-		}
-	}
-
-	private static bool CanPlayImpactEffect(HitInfo info)
-	{
-		//IL_0028: Unknown result type (might be due to invalid IL or missing references)
-		if ((Object)(object)TerrainMeta.WaterMap != (Object)null && info.HitMaterial != Projectile.WaterMaterialID() && info.HitMaterial != Projectile.FleshMaterialID() && WaterLevel.Test(info.HitPositionWorld, waves: false, volumes: false))
-		{
-			return false;
-		}
-		return true;
-	}
-
-	private static void HandleAdditiveEffects(HitInfo info)
-	{
-		if (info.damageTypes.Has(DamageType.Explosion))
-		{
-			DoAdditiveImpactEffect(info, "assets/bundled/prefabs/fx/impacts/additive/explosion.prefab");
-		}
-		if (info.damageTypes.Has(DamageType.Heat))
-		{
-			DoAdditiveImpactEffect(info, "assets/bundled/prefabs/fx/impacts/additive/fire.prefab");
-		}
-	}
-
-	private static void HandleWeaponEffects(HitInfo info, string materialName)
-	{
-		//IL_0062: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0068: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0045: Unknown result type (might be due to invalid IL or missing references)
-		//IL_004b: Unknown result type (might be due to invalid IL or missing references)
-		if (!Object.op_Implicit((Object)(object)info.WeaponPrefab))
-		{
-			return;
-		}
-		BaseMelee baseMelee = info.WeaponPrefab as BaseMelee;
-		if ((Object)(object)baseMelee != (Object)null)
-		{
-			string strikeEffectPath = baseMelee.GetStrikeEffectPath(materialName);
-			if (info.HitEntity.IsValid())
-			{
-				Run(strikeEffectPath, info.HitEntity, info.HitBone, info.HitPositionLocal, info.HitNormalLocal, info.Predicted);
-			}
-			else
-			{
-				Run(strikeEffectPath, info.HitPositionWorld, info.HitNormalWorld, info.Predicted);
-			}
-		}
-	}
-
-	private static bool IsLegalPlacement(HitInfo info)
-	{
-		//IL_0006: Unknown result type (might be due to invalid IL or missing references)
-		//IL_000b: Unknown result type (might be due to invalid IL or missing references)
-		//IL_001b: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0023: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0028: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0035: Unknown result type (might be due to invalid IL or missing references)
-		//IL_006b: Unknown result type (might be due to invalid IL or missing references)
-		Bounds bounds = info.HitEntity.bounds;
-		float num = info.HitEntity.AntiHackPadding();
-		((Bounds)(ref bounds)).extents = ((Bounds)(ref bounds)).extents + new Vector3(num, num, num);
-		if (!((Bounds)(ref bounds)).Contains(info.HitPositionLocal))
-		{
-			BasePlayer initiatorPlayer = info.InitiatorPlayer;
-			if ((Object)(object)initiatorPlayer != (Object)null && ((object)initiatorPlayer).GetType() == typeof(BasePlayer))
-			{
-				float num2 = Mathf.Sqrt(((Bounds)(ref bounds)).SqrDistance(info.HitPositionLocal));
-				if (num2 > ConVar.AntiHack.impact_effect_distance_forgiveness)
-				{
-					AntiHack.Log(initiatorPlayer, AntiHackType.EffectHack, $"Tried to run an impact effect outside of entity '{info.HitEntity.ShortPrefabName}' bounds by {num2}m");
-				}
-			}
-			return false;
-		}
-		return true;
-	}
-
-	public static void ImpactEffect(HitInfo info, string customEffect = null)
-	{
-		//IL_0139: Unknown result type (might be due to invalid IL or missing references)
-		//IL_013f: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0156: Unknown result type (might be due to invalid IL or missing references)
-		//IL_015c: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00f1: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00f7: Unknown result type (might be due to invalid IL or missing references)
-		//IL_011a: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0120: Unknown result type (might be due to invalid IL or missing references)
-		if (Interface.CallHook("OnImpactEffectCreate", (object)info, (object)customEffect) != null || (Object.op_Implicit((Object)(object)info.InitiatorPlayer) && info.InitiatorPlayer.limitNetworking) || !info.DoHitEffects || !CanPlayImpactEffect(info))
-		{
-			return;
-		}
-		string materialName = StringPool.Get(info.HitMaterial);
-		int number = 0;
-		Type type = Type.Generic;
-		DamageType damageType;
-		if (info.WeaponPrefab is AttackEntity attackEntity)
-		{
-			damageType = attackEntity.GetDamageTypeForEffect(info);
-			number = info.Weapon.GetImpactEffectNumberValue(info);
-			type = info.Weapon.GetEffectType(info);
-		}
-		else
-		{
-			damageType = info.damageTypes.GetMajorityDamageType();
-		}
-		string strName = customEffect ?? EffectDictionary.GetParticle(damageType, materialName);
-		string decal = EffectDictionary.GetDecal(damageType, materialName);
-		if (info.HitEntity.IsValid())
-		{
-			if (customEffect == null)
-			{
-				GameObjectRef impactEffect = info.HitEntity.GetImpactEffect(info);
-				if (impactEffect.isValid)
-				{
-					strName = impactEffect.resourcePath;
-				}
-			}
-			if (!IsLegalPlacement(info))
-			{
-				return;
-			}
-			Run(strName, info.HitEntity, info.HitBone, info.HitPositionLocal, info.HitNormalLocal, info.Predicted, broadcast: false, null, number, type);
-			Run(decal, info.HitEntity, info.HitBone, info.HitPositionLocal, info.HitNormalLocal, info.Predicted, broadcast: false, null, number, type);
-		}
-		else
-		{
-			Run(strName, info.HitPositionWorld, info.HitNormalWorld, info.Predicted, broadcast: false, null, number, type);
-			Run(decal, info.HitPositionWorld, info.HitNormalWorld, info.Predicted, broadcast: false, null, number, type);
-		}
-		HandleWeaponEffects(info, materialName);
-		HandleAdditiveEffects(info);
-	}
-}
-
-
-using UnityEngine;
-
-public class EffectAudioPerspectiveSwitcher : MonoBehaviour, IEffect
-{
-	[HideInInspector]
-	public EffectParentToWeaponBone parentToWeaponComponent;
-}
-
-
-using UnityEngine;
-
-public class EffectFaceDirection : MonoBehaviour, IEffect
-{
-}
-
-
-public interface IEffectRecycle
-{
-}
-
-
-public interface IEffect
-{
-}
-
-
-public static class EffectLibrary
-{
-}
-
-
-using UnityEngine;
-
-public class EffectMuzzleFlash : MonoBehaviour, IEffect
-{
 }
 
 
