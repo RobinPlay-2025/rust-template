@@ -97,5 +97,16 @@ foreach ($file in $allFiles) {
     }
 }
 
+
+# CHANGE: авто-перезапуск — если update.ps1 сам был обновлён с GitHub,
+# запускаем новую версию скрипта чтобы она подхватила расширенный $SystemPaths
+if ($allFiles -contains "update.ps1") {
+    Write-Host ""
+    Write-Host "--- update.ps1 was updated. Restarting with new version... ---" -ForegroundColor Yellow
+    Start-Sleep -Milliseconds 400
+    & powershell -NoProfile -ExecutionPolicy Bypass -File $MyInvocation.MyCommand.Path -Framework $Framework
+    exit 0
+}
+
 Write-Header "DONE! UPDATE COMPLETE (100%)"
 Write-Host "Total $totalFiles files processed. Your plugins folder is safe." -ForegroundColor Green
