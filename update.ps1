@@ -41,16 +41,20 @@ Write-Header "STARTING SYSTEM UPDATE (Framework: $Framework)"
 # 1. Fetching updates from GitHub
 Write-Host "--- Step 1: Downloading objects from GitHub ---" -ForegroundColor Cyan
 
-# CHANGE: убиваем фоновые git-процессы, которые держат .idx pack-файлы открытыми
-# (виновник — VS Code git extension / background git.exe)
-Get-Process -Name "git" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-if ($?) { Start-Sleep -Milliseconds 500 }
+# CHANGE: Безопасная очистка зависших lock-файлов без убийства сторонних процессов git
+$indexLock = Join-Path $PSScriptRoot ".git/index.lock"
+if (Test-Path $indexLock) {
+    try {
+        Remove-Item -Path $indexLock -Force -ErrorAction SilentlyContinue
+    } catch {
+        Write-Warning "Could not remove .git/index.lock: $_"
+    }
+}
 
-# CHANGE: пайпим многократный ответ "n" в stdin — если Windows всё равно не может удалить
-# заблокированный .idx, git получит "n", пропустит удаление и продолжит без зависания.
-# gc.auto=0 — дополнительно отключаем автоматический repack после fetch.
+# CHANGE: пайпим ответ "n" в stdin и отключаем авто-repack + опциональные блокировки
+# gc.auto=0 — предотвращает блокировку .idx при фоновом repack
 $nAnswers = ("n`n" * 10)
-$nAnswers | git -c gc.auto=0 fetch --progress origin main
+$nAnswers | git -c core.askPass= -c gc.auto=0 --no-optional-locks fetch --progress origin main
 
 if ($LASTEXITCODE -ne 0) {
     Write-Host "!!! ERROR: Could not connect to GitHub !!!" -ForegroundColor Red
