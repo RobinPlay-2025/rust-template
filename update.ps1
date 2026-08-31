@@ -62,6 +62,7 @@ $SystemPaths = @(
     "Managed",
     ".github",
     ".rust-analyzer",
+    ".knowlenge",          # CHANGE: база знаний агентов (CUI.md, CuiBuilder.cs и др.)
     "rust-template.sln",
     "rust.template.csproj",
     "update.bat",
