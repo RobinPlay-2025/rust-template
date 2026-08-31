@@ -648,6 +648,118 @@ static void CreateOutlineLabel(
 
 ---
 
+---
+
+## Радиальное меню Pie [Июль 2026]
+
+Нативное радиальное круговое меню выбора Facepunch Rust. Не требует создания сложных CUI-панелей с тригонометрией — меню рендерится клиентом игры.
+
+```csharp
+using ProtoBuf;
+using Facepunch;
+
+// Создание и отправка радиального меню
+CustomPie pie = Pool.Get<CustomPie>();
+try
+{
+    pie.menus = Pool.Get<List<CustomPieMenu>>();
+    
+    // Пункт 1: Вызов команды
+    CustomPieMenu item1 = Pool.Get<CustomPieMenu>();
+    item1.name = "Ночной режим";
+    item1.description = "Включить ночное освещение";
+    item1.command = "env.time 0";
+    item1.sprite = "assets/icons/device_add.png";
+    item1.disabled = false;
+    item1.selected = false;
+    pie.menus.Add(item1);
+
+    // Пункт 2: Вложенное меню (пейджинг)
+    CustomPieMenu item2 = Pool.Get<CustomPieMenu>();
+    item2.name = "Дальше";
+    item2.description = "Следующая страница";
+    item2.command = "custom_pie_next";
+    item2.sprite = "assets/icons/facepunch.png";
+    item2.nextCommand = "custom_pie_next";
+    item2.prevCommand = "custom_pie_prev";
+    pie.menus.Add(item2);
+
+    // Отправка через CommunityEntity RPC
+    CommunityEntity.ServerInstance.SendPie(player, pie);
+}
+finally
+{
+    ((IDisposable)pie)?.Dispose();
+}
+```
+
+> Также доступно через `CuiBuilder.SendPieMenu(player, pie)` и `CuiBuilder.AddPieItem(...)`.
+
+---
+
+## Кастомные индикаторы состояния Custom Vitals [Октябрь 2025]
+
+Отображение нативных полос статуса в HUD игрока (рядом с показателями здоровья, голода, радиации и баффов).
+
+```csharp
+using ProtoBuf;
+using Facepunch;
+using UnityEngine;
+
+CustomVitals vitals = new CustomVitals
+{
+    vitals = new List<CustomVitalInfo>()
+};
+
+vitals.vitals.Add(new CustomVitalInfo
+{
+    active = true,
+    backgroundColor = new Color(0.8f, 0.2f, 0.2f, 0.8f),
+    iconColor = Color.white,
+    leftTextColor = Color.white,
+    rightTextColor = Color.yellow,
+    leftText = "ЩИТ ОТ РАДИАЦИИ",
+    rightText = "{timeleft:mm\\:ss}", // Динамический обратный отсчет клиентом
+    timeLeft = 120,                  // Время в секундах
+    icon = "assets/icons/radiation.png"
+});
+
+CommunityEntity.ServerInstance.SendCustomVitals(player, vitals);
+```
+
+> **Форматирование времени:** Поддерживает плейсхолдер `{timeleft:FORMAT}` (например `{timeleft:ss}`, `{timeleft:mm\\:ss}`, `{timeleft:hh\\:mm\\:ss}`).
+
+---
+
+## Класс-помощник CuiBuilder.cs
+
+Для быстрой и типобезопасной сборки интерфейсов в проекте доступен монолитный класс `CuiBuilder` (`.knowlenge/WikiFacepunch/CuiBuilder.cs` и `.knowlenge/Docs/CuiBuilder.cs`):
+
+```csharp
+var container = new CuiElementContainer();
+
+// 1. Создание панели с 9-slice
+string panel = CuiBuilder.PanelSliced(ref container, "Overlay", "MyUI.Main", 
+    "assets/content/ui/ui.background.tile.psd", "0.1 0.1 0.1 0.95", "4 4 4 4", true, 1f,
+    "0.5 0.5", "0.5 0.5", $"-{cfg.Width/2} -{cfg.Height/2}", $"{cfg.Width/2} {cfg.Height/2}",
+    cursor: true);
+
+// 2. Горизонтальная Layout-группа кнопок
+string row = CuiBuilder.HorizontalLayout(ref container, panel, "MyUI.Row", cfg.Spacing, 
+    TextAnchor.MiddleCenter, padding: $"{cfg.Pad} {cfg.Pad} {cfg.Pad} {cfg.Pad}",
+    aMin: "0 0", aMax: "1 0.3");
+
+// 3. Кнопка с подсказкой Tooltip
+string btn = CuiBuilder.Button(ref container, row, "0.2 0.6 0.2 1", "Купить", 14, "1 1 1 1",
+    "0 0", "0.5 1", command: "shop.buy 1");
+CuiBuilder.AddTooltip(ref container, btn, "Нажмите для мгновенной покупки :coin:", 
+    CommunityEntity.TooltipType.AlwaysOnTopEmoji);
+
+CuiHelper.AddUi(player, container);
+```
+
+---
+
 ## Лучшие практики 2026
 
 ### 1. Именование элементов — только константами
@@ -703,17 +815,21 @@ OffsetMax = $"{cfg.Width / 2f} {cfg.Height / 2f}"
 
 ---
 
-## История изменений API
+## История изменений API Facepunch CUI
 
 | Период | Что добавлено |
 |--------|---------------|
 | ~2019  | Базовый API: `CuiPanel`, `CuiButton`, `CuiLabel`, `CuiImageComponent`, `CuiRawImageComponent`, `CuiOutlineComponent`, `CuiInputFieldComponent` |
 | ~2021  | `CuiCountdownComponent`, `NeedsKeyboard` в InputField |
 | ~2022  | `CuiScrollViewComponent`, `CuiCanvasGroupComponent`, `CuiMaskComponent` |
-| ~2023  | Layout Groups (H/V/Grid), `ContentSizeFitter`, `LayoutElement` |
-| ~2024  | `CuiTooltipComponent`, `CuiDraggableComponent`, `CuiSlotComponent` |
+| ~2023  | Layout Groups (Horizontal, Vertical, Grid), `ContentSizeFitter`, `LayoutElement` |
 | ~2024  | `CuiElement.Update`, `CuiElement.DestroyUi`, `CuiElement.ActiveSelf` |
 | ~2024  | `CuiImageComponent.ItemId/SkinId`, `CuiRawImageComponent.SteamId/Url` |
-| ~2025  | `CuiRectTransform.Rotation/Pivot/SetParent`, `CuiButtonComponent` — 5 цветовых состояний |
+| 2025   | `CuiRectTransform.Rotation/Pivot/SetParent/SetTransformIndex`, `CuiButtonComponent` — 5 цветовых состояний (`NormalColor`, `HighlightedColor`, `PressedColor`, `SelectedColor`, `DisabledColor`, `FadeDuration`) |
+| 2025   | `CuiDraggableComponent`, `CuiSlotComponent` (нативный drag & drop CUI) |
+| Окт 2025 | Кастомные индикаторы состояния `CustomVitals` / `CustomVitalInfo` (RPC `RPC_UpdateVitals`) |
 | 2026   | `ThreadLocal<JsonWriterResources>` + `JsonArrayPool` в `CuiHelper` (zero-alloc сериализация) |
+| Июл 2026 | Радиальное круговое меню `CustomPie` / `CustomPieMenu` (RPC `OpenPie`) |
+| Июл 2026 | Всплывающие подсказки `CuiTooltipComponent` (поддержка эмодзи, позиционирования и типов `AlwaysOnTopEmoji`) |
+
 
