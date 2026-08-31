@@ -733,7 +733,7 @@ CommunityEntity.ServerInstance.SendCustomVitals(player, vitals);
 
 ## Класс-помощник CuiBuilder.cs
 
-Для быстрой и типобезопасной сборки интерфейсов в проекте доступен монолитный класс `CuiBuilder` (`.knowlenge/WikiFacepunch/CuiBuilder.cs` и `.knowlenge/Docs/CuiBuilder.cs`):
+Для быстрой и типобезопасной сборки интерфейсов в проекте доступен монолитный класс `CuiBuilder` (`.knowlenge/Docs/CuiBuilder.cs`):
 
 ```csharp
 var container = new CuiElementContainer();
