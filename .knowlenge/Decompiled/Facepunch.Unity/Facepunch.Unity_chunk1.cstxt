@@ -1160,13 +1160,16 @@ public static class Application
 		}
 	}
 
+	public static bool IntegrationInitialized { get; private set; }
+
 	public static BaseIntegration Integration { get; set; }
 
 	public static void Initialize(BaseIntegration integration)
 	{
 		Mono.FixHttpsValidation();
 		Integration = integration;
-		ExceptionReporter.InstallHooks();
+		IntegrationInitialized = true;
+		ExceptionReporter.InstallHook();
 		Facepunch.Manifest.Download();
 	}
 }
@@ -1786,10 +1789,14 @@ public class Report
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Net.Http;
+using System.Net.Http.Headers;
 using System.Text;
+using System.Threading;
+using System.Threading.Tasks;
 using Facepunch;
 using Facepunch.Extend;
-using Facepunch.Math;
+using Facepunch.Models;
 using Newtonsoft.Json;
 using Rust;
 using UnityEngine;
@@ -1797,63 +1804,75 @@ using UnityEngine.SceneManagement;
 
 public class ExceptionReporter : MonoBehaviour
 {
-	private static readonly Stopwatch LastReportTime = Stopwatch.StartNew();
+	private static bool _hookInstalled;
 
-	private static int _reportsSentCounter;
+	private const int MAX_REPORTS_PER_ERROR = 5;
+
+	private const int WINDOW_SECONDS = 60;
+
+	private static readonly Stopwatch WindowTimer = Stopwatch.StartNew();
+
+	private static readonly Dictionary<int, int> ReportedThisWindow = new Dictionary<int, int>();
+
+	public static Action<Dictionary<string, string>> TagProvider;
 
 	public static bool Disabled { get; set; }
 
-	public static string PublicKey { get; private set; }
-
-	public static string SecretKey { get; private set; }
-
-	public static string Host { get; private set; }
-
-	public static string ProjectId { get; private set; }
-
-	public static int ReportMessageMaxLength { get; set; }
-
-	private static Dictionary<string, string> Headers
+	private static int MaxReportsPerError
 	{
 		get
 		{
-			string text = Epoch.Current.ToString();
-			Dictionary<string, string> dictionary = new Dictionary<string, string>();
-			dictionary.Add("X-Sentry-Auth", "Sentry sentry_version=5, sentry_client=FacepunchER/1.0, sentry_timestamp=" + text + ", sentry_key=" + PublicKey + ", sentry_secret=" + SecretKey);
-			return dictionary;
+			Facepunch.Models.Manifest manifest = Application.Manifest;
+			if (manifest == null || manifest.ExceptionReportsPerWindow <= 0)
+			{
+				return 5;
+			}
+			return manifest.ExceptionReportsPerWindow;
 		}
 	}
 
-	internal static void InstallHooks()
+	private static int WindowSeconds
 	{
-		//IL_0007: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0011: Expected O, but got Unknown
-		Application.logMessageReceived += new LogCallback(OnLogMessage);
+		get
+		{
+			Facepunch.Models.Manifest manifest = Application.Manifest;
+			if (manifest == null || manifest.ExceptionReportWindowSeconds <= 0)
+			{
+				return 60;
+			}
+			return manifest.ExceptionReportWindowSeconds;
+		}
+	}
+
+	public static string IngestUrl { get; private set; }
+
+	public static string SentryProject { get; private set; }
+
+	public static int ReportMessageMaxLength { get; set; }
+
+	public static bool Initialized { get; private set; }
+
+	public static void InstallHook()
+	{
+		//IL_000f: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0019: Expected O, but got Unknown
+		if (!_hookInstalled)
+		{
+			Application.logMessageReceived += new LogCallback(OnLogMessage);
+			_hookInstalled = true;
+		}
 	}
 
 	private static void OnLogMessage(string message, string stackTrace, LogType type)
 	{
-		//IL_000f: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0078: Unknown result type (might be due to invalid IL or missing references)
-		//IL_007a: Invalid comparison between Unknown and I4
-		//IL_00f3: Unknown result type (might be due to invalid IL or missing references)
-		if (Disabled || !Application.Integration.ShouldReportException(message, stackTrace, type))
+		//IL_001f: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0028: Unknown result type (might be due to invalid IL or missing references)
+		//IL_002a: Invalid comparison between Unknown and I4
+		//IL_0101: Unknown result type (might be due to invalid IL or missing references)
+		if (Disabled || !Initialized || !Application.IntegrationInitialized || !Application.Integration.ShouldReportException(message, stackTrace, type))
 		{
 			return;
 		}
-		if (LastReportTime.Elapsed.TotalSeconds > 60.0)
-		{
-			LastReportTime.Reset();
-			LastReportTime.Start();
-			_reportsSentCounter = 0;
-		}
-		if (_reportsSentCounter >= 5)
-		{
-			return;
-		}
-		LastReportTime.Reset();
-		LastReportTime.Start();
-		_reportsSentCounter++;
 		if ((int)type == 4)
 		{
 			if (message.Contains("NullReferenceException"))
@@ -1872,26 +1891,47 @@ public class ExceptionReporter : MonoBehaviour
 				message = message + ": " + array3[0];
 			}
 		}
-		SendReport(message, stackTrace, type);
+		if (WindowTimer.Elapsed.TotalSeconds > (double)WindowSeconds)
+		{
+			WindowTimer.Restart();
+			ReportedThisWindow.Clear();
+		}
+		int key = GenerateErrorHash(message, stackTrace);
+		ReportedThisWindow.TryGetValue(key, out var value);
+		if (value >= MaxReportsPerError)
+		{
+			return;
+		}
+		ReportedThisWindow[key] = value + 1;
+		try
+		{
+			SendReport(message, stackTrace, type);
+		}
+		catch
+		{
+		}
 	}
 
-	public static void InitializeFromUrl(string url)
+	private static int GenerateErrorHash(string message, string stackTrace)
 	{
-		string[] array = url.Replace("https://", "").Split('/', ':', '@');
-		PublicKey = array[0];
-		SecretKey = array[1];
-		Host = array[2];
-		ProjectId = array[3];
+		int num = stackTrace?.IndexOf('\n') ?? (-1);
+		return HashCode.Combine(message, (num >= 0) ? stackTrace.Substring(0, num) : stackTrace);
+	}
+
+	public static void Initialize(string ingestUrl, string sentryProject)
+	{
+		IngestUrl = ingestUrl;
+		SentryProject = sentryProject;
+		Initialized = true;
 	}
 
 	public static void SendReport(string exception, string stacktrace, LogType logType)
 	{
-		//IL_0125: Unknown result type (might be due to invalid IL or missing references)
-		//IL_012a: Unknown result type (might be due to invalid IL or missing references)
-		//IL_01e0: Unknown result type (might be due to invalid IL or missing references)
-		//IL_01e5: Unknown result type (might be due to invalid IL or missing references)
-		//IL_02ad: Unknown result type (might be due to invalid IL or missing references)
-		if (!string.IsNullOrEmpty(Host) && !string.IsNullOrEmpty(ProjectId) && !string.IsNullOrEmpty(PublicKey) && !string.IsNullOrEmpty(SecretKey))
+		//IL_00ea: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00ef: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0167: Unknown result type (might be due to invalid IL or missing references)
+		//IL_016c: Unknown result type (might be due to invalid IL or missing references)
+		if (!string.IsNullOrEmpty(IngestUrl))
 		{
 			Report report = new Report();
 			report.release = BuildInfo.Current.Scm.Branch.Replace("/", "-") + "#" + BuildInfo.Current.Scm.ChangeId;
@@ -1900,29 +1940,75 @@ public class ExceptionReporter : MonoBehaviour
 			report.event_id = Guid.NewGuid().ToString("N");
 			report.stacktrace = new Report.StackTrace(stacktrace);
 			report.user = new Report.User();
-			report.tags = new Dictionary<string, string>();
-			report.tags.Add("memory", Mathf.RoundToInt((float)(SystemInfo.systemMemorySize / 1024)) + "gb");
-			report.tags.Add("operatingSystem", SystemInfo.operatingSystem);
-			Dictionary<string, string> tags = report.tags;
+			Dictionary<string, string> obj = new Dictionary<string, string>
+			{
+				{
+					"memory",
+					Mathf.RoundToInt((float)(SystemInfo.systemMemorySize / 1024)) + "gb"
+				},
+				{
+					"operatingSystem",
+					SystemInfo.operatingSystem
+				}
+			};
 			BatteryStatus batteryStatus = SystemInfo.batteryStatus;
-			tags.Add("batteryStatus", ((object)(BatteryStatus)(ref batteryStatus)/*cast due to .constrained prefix*/).ToString());
-			report.tags.Add("deviceModel", SystemInfo.deviceModel);
-			report.tags.Add("processorType", SystemInfo.processorType);
-			report.tags.Add("graphicsDeviceName", SystemInfo.graphicsDeviceName);
-			report.tags.Add("graphicsMemorySize", Mathf.RoundToInt((float)(SystemInfo.graphicsMemorySize / 1024)) + "gb");
-			report.tags.Add("architecture", (IntPtr.Size == 4) ? "x86" : "x64");
-			Dictionary<string, string> tags2 = report.tags;
-			Scene sceneAt = SceneManager.GetSceneAt(0);
-			tags2.Add("scene", ((Scene)(ref sceneAt)).name);
-			report.tags.Add("qualitylevel", QualitySettings.GetQualityLevel().ToString());
-			report.tags.Add("level", ((object)(LogType)(ref logType)/*cast due to .constrained prefix*/).ToString().ToLower());
+			obj.Add("batteryStatus", ((object)(BatteryStatus)(ref batteryStatus)/*cast due to .constrained prefix*/).ToString());
+			obj.Add("deviceModel", SystemInfo.deviceModel);
+			obj.Add("processorType", SystemInfo.processorType);
+			obj.Add("graphicsDeviceName", SystemInfo.graphicsDeviceName);
+			obj.Add("graphicsMemorySize", Mathf.RoundToInt((float)(SystemInfo.graphicsMemorySize / 1024)) + "gb");
+			Scene activeScene = SceneManager.GetActiveScene();
+			obj.Add("scene", ((Scene)(ref activeScene)).name);
+			obj.Add("qualitylevel", QualitySettings.GetQualityLevel().ToString());
+			obj.Add("level", ((object)(LogType)(ref logType)/*cast due to .constrained prefix*/).ToString().ToLower());
+			obj.Add("session_length_seconds", ((int)Time.realtimeSinceStartup).ToString());
+			report.tags = obj;
 			if (Application.isQuitting)
 			{
 				report.tags.Add("quitting", "true");
 			}
 			report.tags.Add("realm", "SERVER");
+			TagProvider?.Invoke(report.tags);
 			string s = JsonConvert.SerializeObject((object)report);
-			new WWW("https://" + Host + "/api/" + ProjectId + "/store/", Encoding.ASCII.GetBytes(s), Headers);
+			Post(Encoding.ASCII.GetBytes(s));
+		}
+	}
+
+	private static void Post(byte[] payload)
+	{
+		//IL_0011: Unknown result type (might be due to invalid IL or missing references)
+		//IL_001b: Expected O, but got Unknown
+		//IL_0022: Unknown result type (might be due to invalid IL or missing references)
+		//IL_002c: Expected O, but got Unknown
+		try
+		{
+			HttpRequestMessage request = new HttpRequestMessage(HttpMethod.Post, IngestUrl);
+			request.Content = (HttpContent)new ByteArrayContent(payload);
+			((HttpHeaders)request.Content.Headers).TryAddWithoutValidation("Content-Type", "application/json");
+			((HttpHeaders)request.Headers).TryAddWithoutValidation("X-Facetry-Project", SentryProject);
+			CancellationTokenSource timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10.0));
+			((HttpMessageInvoker)WebUtil.HttpClient).SendAsync(request, timeout.Token).ContinueWith(delegate(Task<HttpResponseMessage> completed)
+			{
+				try
+				{
+					if (completed.Status == TaskStatus.RanToCompletion)
+					{
+						completed.Result.Dispose();
+					}
+					else
+					{
+						_ = completed.Exception;
+					}
+					request.Dispose();
+					timeout.Dispose();
+				}
+				catch
+				{
+				}
+			}, TaskContinuationOptions.ExecuteSynchronously);
+		}
+		catch
+		{
 		}
 	}
 }
@@ -5036,7 +5122,9 @@ public class Manifest
 
 	public FeaturesInfo Features = new FeaturesInfo();
 
-	public string ExceptionReportingUrl;
+	public int ExceptionReportsPerWindow;
+
+	public int ExceptionReportWindowSeconds;
 
 	public string BenchmarkUrl;
 

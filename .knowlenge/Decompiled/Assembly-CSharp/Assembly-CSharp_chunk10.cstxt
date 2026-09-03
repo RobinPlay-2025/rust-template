@@ -1,4 +1,543 @@
 using System;
+using Facepunch.Rust;
+using Rust;
+using UnityEngine;
+
+public class Parachute : BaseVehicle, SamSite.ISamSiteTarget
+{
+	public Collider ParachuteCollider;
+
+	public ItemDefinition PackedParachute;
+
+	public GameObjectRef DetachedParachute;
+
+	public Transform DetachedSpawnPoint;
+
+	public float ConditionLossPerUse = 0.2f;
+
+	public float HurtDeployTime = 1f;
+
+	public float HurtAmount = 80f;
+
+	public Animator ColliderAnimator;
+
+	public Animator ColliderWorldAnimator;
+
+	public float UprightLerpForce = 5f;
+
+	public float ConstantForwardForce = 2f;
+
+	public ForceMode ForwardForceMode = (ForceMode)5;
+
+	public float TurnForce = 2f;
+
+	public ForceMode TurnForceMode = (ForceMode)5;
+
+	public float ForwardTiltAcceleration = 2f;
+
+	public float BackInputForceMultiplier = 0.2f;
+
+	public float DeployAnimationLength = 3f;
+
+	public float TargetDrag = 1f;
+
+	public float TargetAngularDrag = 1f;
+
+	public AnimationCurve DragCurve = new AnimationCurve();
+
+	public AnimationCurve DragDamageCurve = AnimationCurve.Linear(0f, 1f, 1f, 1f);
+
+	public AnimationCurve MassDamageCurve = AnimationCurve.Linear(0f, 30f, 1f, 1f);
+
+	public AnimationCurve DamageHorizontalVelocityCurve = AnimationCurve.Linear(0f, 5f, 1f, 20f);
+
+	[Range(0f, 1f)]
+	public float DamageTester = 1f;
+
+	public float AnimationInputSmoothness = 1f;
+
+	public Vector2 AnimationInputScale = new Vector2(0.5f, 0.5f);
+
+	public ParachuteWearable FirstPersonCanopy;
+
+	public GameObjectRef ParachuteLandScreenBounce;
+
+	private static readonly int AnimatorInputXParameter = Animator.StringToHash("InputX");
+
+	private static readonly int AnimatorInputYParameter = Animator.StringToHash("InputY");
+
+	private TimeSince mountTime;
+
+	public const Flags Flag_InputForward = Flags.Reserved1;
+
+	public const Flags Flag_InputBack = Flags.Reserved2;
+
+	public const Flags Flag_InputLeft = Flags.Reserved3;
+
+	public const Flags Flag_InputRight = Flags.Reserved4;
+
+	public SoundDefinition deploySoundDef;
+
+	public SoundDefinition releaseSoundDef;
+
+	public SoundDefinition flightLoopSoundDef;
+
+	public SoundDefinition steerSoundDef;
+
+	public AnimationCurve flightLoopPitchCurve;
+
+	public AnimationCurve flightLoopGainCurve;
+
+	[ServerVar(Saved = true)]
+	public static bool BypassRepack = false;
+
+	[ServerVar(Saved = true)]
+	public static bool LandingAnimations = false;
+
+	public bool collisionDeath;
+
+	public Vector3 collisionImpulse = Vector3.zero;
+
+	private float startHeight;
+
+	private float distanceTravelled;
+
+	private Vector3 lastPosition = Vector3.zero;
+
+	private Vector2 lerpedInput = Vector2.zero;
+
+	public Vector3 collisionLocalPos;
+
+	public Vector3 collisionWorldNormal;
+
+	protected override bool BypassClothingMountBlocks => true;
+
+	public SamSite.SamTargetType SAMTargetType => SamSite.targetTypeVehicle;
+
+	public override void PlayerMounted(BasePlayer player, BaseMountable seat)
+	{
+		//IL_000f: Unknown result type (might be due to invalid IL or missing references)
+		//IL_001f: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0024: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0030: Unknown result type (might be due to invalid IL or missing references)
+		base.PlayerMounted(player, seat);
+		rigidBody.linearVelocity = player.estimatedVelocity;
+		mountTime = TimeSince.op_Implicit(0f);
+		startHeight = ((Component)this).transform.position.y;
+		distanceTravelled = 0f;
+		canTriggerParent = false;
+	}
+
+	public override bool GetDismountPosition(BasePlayer player, out Vector3 res, bool silent = false)
+	{
+		ParachuteCollider.enabled = false;
+		bool dismountPosition = base.GetDismountPosition(player, out res, silent);
+		ParachuteCollider.enabled = true;
+		return dismountPosition;
+	}
+
+	public override void PlayerServerInput(InputState inputState, BasePlayer player)
+	{
+		//IL_0015: Unknown result type (might be due to invalid IL or missing references)
+		//IL_001a: Unknown result type (might be due to invalid IL or missing references)
+		//IL_001c: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0021: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0037: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0038: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0043: Unknown result type (might be due to invalid IL or missing references)
+		//IL_005a: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0070: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0075: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0078: Unknown result type (might be due to invalid IL or missing references)
+		//IL_007d: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0089: Unknown result type (might be due to invalid IL or missing references)
+		//IL_008e: Unknown result type (might be due to invalid IL or missing references)
+		base.PlayerServerInput(inputState, player);
+		player.PlayHeavyLandingAnimation = true;
+		Vector3 position = ((Component)this).transform.position;
+		float num = Vector3.Distance(lastPosition, position);
+		distanceTravelled += num;
+		lastPosition = position;
+		if (WaterLevel.Test(((Component)this).transform.position, waves: true, volumes: true, this))
+		{
+			DismountAllPlayers();
+		}
+		else if (!(TimeSince.op_Implicit(mountTime) < DeployAnimationLength))
+		{
+			Vector2 val = ProcessInputVector(inputState, player);
+			lerpedInput = Vector2.Lerp(lerpedInput, val, Time.deltaTime * 5f);
+			ColliderAnimator.SetFloat(AnimatorInputXParameter, lerpedInput.x);
+			ColliderAnimator.SetFloat(AnimatorInputYParameter, lerpedInput.y);
+			using FlagsUpdateScope flagsUpdateScope = StartSetFlags(FlagsUpdateMode.SendNetworkUpdate);
+			flagsUpdateScope.Set(Flags.Reserved1, inputState.IsDown(BUTTON.FORWARD));
+			flagsUpdateScope.Set(Flags.Reserved2, inputState.IsDown(BUTTON.BACKWARD));
+			flagsUpdateScope.Set(Flags.Reserved3, inputState.IsDown(BUTTON.LEFT));
+			flagsUpdateScope.Set(Flags.Reserved4, inputState.IsDown(BUTTON.RIGHT));
+		}
+	}
+
+	public override void VehicleFixedUpdate()
+	{
+		//IL_002e: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00a6: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00c3: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00c8: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00ca: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00d2: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00d7: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00fa: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00ff: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0109: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0110: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0115: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0120: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0129: Unknown result type (might be due to invalid IL or missing references)
+		//IL_012e: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0168: Unknown result type (might be due to invalid IL or missing references)
+		//IL_016b: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0170: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0178: Unknown result type (might be due to invalid IL or missing references)
+		//IL_017b: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0142: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0161: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0166: Unknown result type (might be due to invalid IL or missing references)
+		//IL_01a0: Unknown result type (might be due to invalid IL or missing references)
+		//IL_01a5: Unknown result type (might be due to invalid IL or missing references)
+		//IL_01a9: Unknown result type (might be due to invalid IL or missing references)
+		//IL_01d2: Unknown result type (might be due to invalid IL or missing references)
+		//IL_01d7: Unknown result type (might be due to invalid IL or missing references)
+		//IL_01dc: Unknown result type (might be due to invalid IL or missing references)
+		//IL_01ea: Unknown result type (might be due to invalid IL or missing references)
+		//IL_01ef: Unknown result type (might be due to invalid IL or missing references)
+		//IL_01fc: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0212: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0231: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0236: Unknown result type (might be due to invalid IL or missing references)
+		//IL_023c: Unknown result type (might be due to invalid IL or missing references)
+		//IL_02ca: Unknown result type (might be due to invalid IL or missing references)
+		//IL_02cf: Unknown result type (might be due to invalid IL or missing references)
+		//IL_02d3: Unknown result type (might be due to invalid IL or missing references)
+		//IL_02dd: Unknown result type (might be due to invalid IL or missing references)
+		//IL_02e7: Unknown result type (might be due to invalid IL or missing references)
+		//IL_02ec: Unknown result type (might be due to invalid IL or missing references)
+		//IL_02f1: Unknown result type (might be due to invalid IL or missing references)
+		//IL_02ff: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0304: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0312: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0330: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0335: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0339: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0351: Unknown result type (might be due to invalid IL or missing references)
+		//IL_036d: Unknown result type (might be due to invalid IL or missing references)
+		//IL_025e: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0263: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0267: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0290: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0295: Unknown result type (might be due to invalid IL or missing references)
+		//IL_029a: Unknown result type (might be due to invalid IL or missing references)
+		//IL_02a8: Unknown result type (might be due to invalid IL or missing references)
+		//IL_02ad: Unknown result type (might be due to invalid IL or missing references)
+		//IL_02ba: Unknown result type (might be due to invalid IL or missing references)
+		TimeWarning val = TimeWarning.New("Parachute.VehicleFixedUpdate", 0);
+		try
+		{
+			base.VehicleFixedUpdate();
+			TriggerParachuteForceVolume triggerParachuteForceVolume = FindTrigger<TriggerParachuteForceVolume>();
+			float num = base.healthFraction * DamageTester;
+			float num2 = DragCurve.Evaluate(TimeSince.op_Implicit(mountTime));
+			float num3 = DragDamageCurve.Evaluate(num);
+			float mass = MassDamageCurve.Evaluate(num);
+			rigidBody.mass = mass;
+			rigidBody.linearDamping = Mathf.Lerp(0f, TargetDrag * num3, num2);
+			rigidBody.angularDamping = Mathf.Lerp(0f, TargetAngularDrag * num3, num2);
+			float num4 = Mathf.Clamp01(TimeSince.op_Implicit(mountTime) / 1f);
+			Vector3 forward = ((Component)this).transform.forward;
+			Vector3 val2 = (forward * ConstantForwardForce + forward * (ForwardTiltAcceleration * Mathf.Clamp(lerpedInput.y, 0f, 1f))) * Time.fixedDeltaTime * num4;
+			if ((Object)(object)triggerParachuteForceVolume != (Object)null)
+			{
+				val2 *= triggerParachuteForceVolume.GetSpeedMultiplierForParachute(this);
+			}
+			if (lerpedInput.y < -0.1f)
+			{
+				val2 *= 1f - BackInputForceMultiplier * Mathf.Abs(lerpedInput.y);
+			}
+			val2 *= num;
+			rigidBody.AddForce(val2, ForwardForceMode);
+			Quaternion rotation;
+			if (lerpedInput.x != 0f)
+			{
+				rotation = rigidBody.rotation;
+				Quaternion val3 = Quaternion.Euler(Vector3Ex.WithZ(((Quaternion)(ref rotation)).eulerAngles, Mathx.RemapValClamped(lerpedInput.x, -1f, 1f, 40f, -40f)));
+				rigidBody.MoveRotation(Quaternion.Lerp(rigidBody.rotation, val3, Time.fixedDeltaTime * 30f));
+				rigidBody.AddTorque(((Component)this).transform.TransformDirection(Vector3.up * (TurnForce * num * 0.2f * lerpedInput.x)), TurnForceMode);
+			}
+			if (lerpedInput.y > 0f)
+			{
+				rotation = rigidBody.rotation;
+				Quaternion val4 = Quaternion.Euler(Vector3Ex.WithX(((Quaternion)(ref rotation)).eulerAngles, Mathx.RemapValClamped(lerpedInput.y, -1f, 1f, -50f, 60f)));
+				rigidBody.MoveRotation(Quaternion.Lerp(rigidBody.rotation, val4, Time.fixedDeltaTime * 60f));
+			}
+			rotation = rigidBody.rotation;
+			Quaternion val5 = Quaternion.Euler(Vector3Ex.WithZ(Vector3Ex.WithX(((Quaternion)(ref rotation)).eulerAngles, 0f), 0f));
+			rigidBody.rotation = Quaternion.Lerp(rigidBody.rotation, val5, Time.fixedDeltaTime * UprightLerpForce);
+			float num5 = DamageHorizontalVelocityCurve.Evaluate(num);
+			Vector3 linearVelocity = rigidBody.linearVelocity;
+			linearVelocity.x = Mathf.Clamp(linearVelocity.x, 0f - num5, num5);
+			linearVelocity.z = Mathf.Clamp(linearVelocity.z, 0f - num5, num5);
+			rigidBody.linearVelocity = linearVelocity;
+		}
+		finally
+		{
+			((IDisposable)val)?.Dispose();
+		}
+	}
+
+	public override void PlayerDismounted(BasePlayer player, BaseMountable seat)
+	{
+		//IL_0011: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00da: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0029: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0105: Unknown result type (might be due to invalid IL or missing references)
+		//IL_010a: Unknown result type (might be due to invalid IL or missing references)
+		base.PlayerDismounted(player, seat);
+		if (collisionDeath)
+		{
+			if (TimeSince.op_Implicit(mountTime) < HurtDeployTime)
+			{
+				float num = 1f - Mathf.Clamp01(TimeSince.op_Implicit(mountTime) / HurtDeployTime);
+				player.Hurt(HurtAmount * num, DamageType.Fall);
+			}
+			else
+			{
+				float magnitude = ((Vector3)(ref collisionImpulse)).magnitude;
+				if (magnitude > 50f)
+				{
+					float amount = Mathx.RemapValClamped(magnitude, 50f, 400f, 5f, 50f);
+					player.Hurt(amount, DamageType.Fall);
+				}
+			}
+		}
+		if (BypassRepack)
+		{
+			Item item = ItemManager.Create(PackedParachute, 1, skinID, isServerSide: true, 0uL);
+			item.RepairCondition(item.maxCondition);
+			player.inventory.containerWear.GiveItem(item);
+		}
+		Analytics.Azure.OnParachuteUsed(player, distanceTravelled, startHeight, TimeSince.op_Implicit(mountTime));
+		if (collisionDeath && LandingAnimations)
+		{
+			Effect.server.Run(ParachuteLandScreenBounce.resourcePath, player, 0u, Vector3.zero, Vector3.zero);
+			if (collisionLocalPos.y < 0.15f)
+			{
+				player.Server_StartGesture(GestureCollection.HeavyLandingId);
+				player.PlayHeavyLandingAnimation = false;
+			}
+		}
+		ProcessDeath();
+		collisionDeath = false;
+	}
+
+	public void ProcessDeath()
+	{
+		//IL_003b: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0046: Unknown result type (might be due to invalid IL or missing references)
+		//IL_009a: Unknown result type (might be due to invalid IL or missing references)
+		float num = base.healthFraction;
+		num -= ConditionLossPerUse;
+		bool num2 = num > 0f;
+		if (num2 && !BypassRepack)
+		{
+			ParachuteUnpacked parachuteUnpacked = GameManager.server.CreateEntity(DetachedParachute.resourcePath, DetachedSpawnPoint.position, DetachedSpawnPoint.rotation) as ParachuteUnpacked;
+			if ((Object)(object)parachuteUnpacked != (Object)null)
+			{
+				parachuteUnpacked.skinID = skinID;
+				parachuteUnpacked.Spawn();
+				parachuteUnpacked.Hurt(parachuteUnpacked.MaxHealth() * (1f - num), DamageType.Generic, null, useProtection: false);
+				Rigidbody val = default(Rigidbody);
+				if (((Component)parachuteUnpacked).TryGetComponent<Rigidbody>(ref val))
+				{
+					val.linearVelocity = rigidBody.linearVelocity;
+				}
+			}
+		}
+		DestroyMode mode = DestroyMode.None;
+		if (!num2)
+		{
+			mode = DestroyMode.Gib;
+		}
+		Kill(mode);
+	}
+
+	public override void OnCollision(Collision collision, BaseEntity hitEntity)
+	{
+		//IL_0055: Unknown result type (might be due to invalid IL or missing references)
+		//IL_005a: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0068: Unknown result type (might be due to invalid IL or missing references)
+		//IL_006d: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0070: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0075: Unknown result type (might be due to invalid IL or missing references)
+		//IL_007a: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0082: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0087: Unknown result type (might be due to invalid IL or missing references)
+		//IL_008a: Unknown result type (might be due to invalid IL or missing references)
+		//IL_008f: Unknown result type (might be due to invalid IL or missing references)
+		if ((Object)(object)hitEntity == (Object)null)
+		{
+			hitEntity = collision.collider.ToBaseEntity();
+		}
+		if (!((Object)(object)hitEntity == (Object)(object)this) && (!((Object)(object)hitEntity != (Object)null) || hitEntity.isServer == base.isServer) && base.isServer && !(hitEntity is TimedExplosive) && !collisionDeath)
+		{
+			collisionImpulse = collision.impulse;
+			Transform transform = ((Component)this).transform;
+			ContactPoint contact = collision.GetContact(0);
+			collisionLocalPos = transform.InverseTransformPoint(((ContactPoint)(ref contact)).point);
+			contact = collision.GetContact(0);
+			collisionWorldNormal = ((ContactPoint)(ref contact)).normal;
+			collisionDeath = true;
+			((FacepunchBehaviour)this).Invoke((Action)DelayedDismount, 0f);
+		}
+	}
+
+	public void DelayedDismount()
+	{
+		//IL_0059: Unknown result type (might be due to invalid IL or missing references)
+		//IL_005f: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0069: Unknown result type (might be due to invalid IL or missing references)
+		//IL_006e: Unknown result type (might be due to invalid IL or missing references)
+		if (collisionDeath && distanceTravelled > 0f && (!((Object)(object)mountPoints[0].mountable != (Object)null) || !GetDismountPosition(mountPoints[0].mountable.GetMounted(), out var _)))
+		{
+			Transform transform = ((Component)this).transform;
+			transform.position += collisionWorldNormal * 0.35f;
+		}
+		DismountAllPlayers();
+	}
+
+	public override float AntiHackVelocity()
+	{
+		return 13.5f;
+	}
+
+	public override bool AllowPlayerInstigatedDismount(BasePlayer player)
+	{
+		//IL_0001: Unknown result type (might be due to invalid IL or missing references)
+		if (TimeSince.op_Implicit(mountTime) < 1.5f)
+		{
+			return false;
+		}
+		return base.AllowPlayerInstigatedDismount(player);
+	}
+
+	public bool IsValidSAMTarget(bool staticRespawn)
+	{
+		//IL_0001: Unknown result type (might be due to invalid IL or missing references)
+		if (TimeSince.op_Implicit(mountTime) > 1f)
+		{
+			return !InSafeZone();
+		}
+		return false;
+	}
+
+	private Vector2 ProcessInputVector(InputState inputState, BasePlayer player)
+	{
+		//IL_0037: Unknown result type (might be due to invalid IL or missing references)
+		//IL_000e: Unknown result type (might be due to invalid IL or missing references)
+		if ((Object)(object)player.GetHeldEntity() != (Object)null)
+		{
+			return Vector2.zero;
+		}
+		bool leftDown = inputState.IsDown(BUTTON.LEFT);
+		bool rightDown = inputState.IsDown(BUTTON.RIGHT);
+		bool forwardDown = inputState.IsDown(BUTTON.FORWARD);
+		bool backDown = inputState.IsDown(BUTTON.BACKWARD);
+		return ProcessInputVector(leftDown, rightDown, forwardDown, backDown);
+	}
+
+	private Vector2 ProcessInputVectorFromFlags(BasePlayer player)
+	{
+		//IL_0046: Unknown result type (might be due to invalid IL or missing references)
+		//IL_000e: Unknown result type (might be due to invalid IL or missing references)
+		if ((Object)(object)player.GetHeldEntity() != (Object)null)
+		{
+			return Vector2.zero;
+		}
+		bool leftDown = HasFlag(Flags.Reserved3);
+		bool rightDown = HasFlag(Flags.Reserved4);
+		bool forwardDown = HasFlag(Flags.Reserved1);
+		bool backDown = HasFlag(Flags.Reserved2);
+		return ProcessInputVector(leftDown, rightDown, forwardDown, backDown);
+	}
+
+	private static Vector2 ProcessInputVector(bool leftDown, bool rightDown, bool forwardDown, bool backDown)
+	{
+		//IL_0000: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0005: Unknown result type (might be due to invalid IL or missing references)
+		//IL_005c: Unknown result type (might be due to invalid IL or missing references)
+		Vector2 zero = Vector2.zero;
+		if (leftDown && rightDown)
+		{
+			leftDown = (rightDown = false);
+		}
+		if (forwardDown && backDown)
+		{
+			forwardDown = (backDown = false);
+		}
+		if (forwardDown)
+		{
+			zero.y = 1f;
+		}
+		else if (backDown)
+		{
+			zero.y = -1f;
+		}
+		if (rightDown)
+		{
+			zero.x = 1f;
+		}
+		else if (leftDown)
+		{
+			zero.x = -1f;
+		}
+		return zero;
+	}
+}
+
+
+public class ParachuteSeat : SledSeat
+{
+	protected override bool BypassClothingMountBlocks => true;
+}
+
+
+using UnityEngine;
+
+public class ParachuteUnpacked : DecayEntity
+{
+	public Rigidbody targetRigidbody;
+
+	public Transform centreOfMassRoot;
+
+	public override void ServerInit()
+	{
+		//IL_0012: Unknown result type (might be due to invalid IL or missing references)
+		base.ServerInit();
+		targetRigidbody.centerOfMass = centreOfMassRoot.localPosition;
+	}
+}
+
+
+using UnityEngine;
+
+public class ParachuteWearable : MonoBehaviour
+{
+	public Animator TargetAnimator;
+
+	public Transform LeftHandTarget;
+
+	public Transform RightHandTarget;
+}
+
+
+using System;
 using UnityEngine;
 
 public class Pinata : BaseCombatEntity
@@ -1491,7 +2030,7 @@ public class ChristmasTree : StorageContainer
 {
 	public GameObject[] decorations;
 
-	public override bool ItemFilter(Item item, int targetSlot)
+	public override bool ItemFilter(BasePlayer player, Item item, int targetSlot)
 	{
 		if ((Object)(object)((Component)item.info).GetComponent<ItemModXMasTreeDecoration>() == (Object)null)
 		{
@@ -1504,7 +2043,7 @@ public class ChristmasTree : StorageContainer
 				return false;
 			}
 		}
-		return base.ItemFilter(item, targetSlot);
+		return base.ItemFilter(player, item, targetSlot);
 	}
 
 	public override void OnItemAddedOrRemoved(Item item, bool added)
@@ -3001,8 +3540,8 @@ public class ProceduralDynamicDungeon : BaseEntity
 		}
 	}
 
-	[ExecuteInEditMode]
 	[ContextMenu("Test Grid")]
+	[ExecuteInEditMode]
 	public void GenerateGrid()
 	{
 		//IL_0006: Unknown result type (might be due to invalid IL or missing references)
@@ -6652,9 +7191,13 @@ public class NPCPlayerCorpse : PlayerCorpse
 		return Server.npccorpsedespawn;
 	}
 
-	public override bool CanLoot()
+	public override bool CanLoot(BasePlayer player)
 	{
-		return lootEnabled;
+		if (lootEnabled)
+		{
+			return base.CanLoot(player);
+		}
+		return false;
 	}
 
 	public void SetLootableIn(float when)
@@ -8095,6 +8638,7 @@ public interface IMetalDetectable
 
 
 using System;
+using Oxide.Core;
 using UnityEngine;
 
 public class MetalDetectorFlag : BaseDiggableEntity
@@ -8127,23 +8671,26 @@ public class MetalDetectorFlag : BaseDiggableEntity
 
 	public override void OnFullyDug(BasePlayer player)
 	{
-		//IL_0046: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0037: Unknown result type (might be due to invalid IL or missing references)
-		//IL_003d: Unknown result type (might be due to invalid IL or missing references)
-		//IL_004b: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0071: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0076: Unknown result type (might be due to invalid IL or missing references)
-		if ((Object)(object)Collision != (Object)null)
+		//IL_0056: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0047: Unknown result type (might be due to invalid IL or missing references)
+		//IL_004d: Unknown result type (might be due to invalid IL or missing references)
+		//IL_005b: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0081: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0086: Unknown result type (might be due to invalid IL or missing references)
+		if (Interface.CallHook("OnPlayerDigComplete", (object)player, (object)this) == null)
 		{
-			Collision.enabled = false;
+			if ((Object)(object)Collision != (Object)null)
+			{
+				Collision.enabled = false;
+			}
+			BaseEntity baseEntity = SpawnLootListItem(player);
+			BaseMission.MissionEventPayload missionEventPayload = default(BaseMission.MissionEventPayload);
+			missionEventPayload.NetworkIdentifier = (NetworkableId)(((Object)(object)baseEntity == (Object)null) ? baseEntity.net.ID : default(NetworkableId));
+			missionEventPayload.UintIdentifier = (((Object)(object)baseEntity == (Object)null) ? baseEntity.prefabID : 0u);
+			missionEventPayload.WorldPosition = ((Component)this).transform.position;
+			BaseMission.MissionEventPayload payload = missionEventPayload;
+			player.ProcessMissionEvent(BaseMission.MissionEventType.METAL_DETECTOR_FIND, payload, 1f);
 		}
-		BaseEntity baseEntity = SpawnLootListItem(player);
-		BaseMission.MissionEventPayload missionEventPayload = default(BaseMission.MissionEventPayload);
-		missionEventPayload.NetworkIdentifier = (NetworkableId)(((Object)(object)baseEntity == (Object)null) ? baseEntity.net.ID : default(NetworkableId));
-		missionEventPayload.UintIdentifier = (((Object)(object)baseEntity == (Object)null) ? baseEntity.prefabID : 0u);
-		missionEventPayload.WorldPosition = ((Component)this).transform.position;
-		BaseMission.MissionEventPayload payload = missionEventPayload;
-		player.ProcessMissionEvent(BaseMission.MissionEventType.METAL_DETECTOR_FIND, payload, 1f);
 	}
 
 	public override void OnSingleDig(BasePlayer player)
@@ -9316,8 +9863,8 @@ public class EffectParent : EntityComponent<BaseEntity>, IClientComponent
 	[Tooltip("If true the effect isn't our direct child and is in another hierarchy - USE WITH CAUTION")]
 	public bool separatedEffect;
 
-	[Header("USING COLLIDERS? - COLLIDER SAFETY")]
 	[Tooltip("If true the effect will be forced to the safe layer that doesn't interact with player colliders")]
+	[Header("USING COLLIDERS? - COLLIDER SAFETY")]
 	public bool forceSafePlayerCollisionLayer;
 }
 
@@ -11000,21 +11547,22 @@ public class AIInformationGrid : MonoBehaviour
 		//IL_0053: Unknown result type (might be due to invalid IL or missing references)
 		//IL_0062: Unknown result type (might be due to invalid IL or missing references)
 		//IL_0067: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0077: Unknown result type (might be due to invalid IL or missing references)
-		//IL_008e: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00e7: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00ec: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00ee: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00ef: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00fc: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0093: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00b1: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00c8: Unknown result type (might be due to invalid IL or missing references)
 		//IL_0121: Unknown result type (might be due to invalid IL or missing references)
-		//IL_014b: Unknown result type (might be due to invalid IL or missing references)
-		//IL_014c: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0150: Unknown result type (might be due to invalid IL or missing references)
-		//IL_015f: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0176: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0190: Unknown result type (might be due to invalid IL or missing references)
-		//IL_01cc: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0126: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0128: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0129: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0136: Unknown result type (might be due to invalid IL or missing references)
+		//IL_015b: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0185: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0186: Unknown result type (might be due to invalid IL or missing references)
+		//IL_018a: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0199: Unknown result type (might be due to invalid IL or missing references)
+		//IL_01b0: Unknown result type (might be due to invalid IL or missing references)
+		//IL_01ca: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0206: Unknown result type (might be due to invalid IL or missing references)
 		AIInformationZone component = ((Component)this).GetComponent<AIInformationZone>();
 		if ((Object)(object)component == (Object)null)
 		{
@@ -11023,6 +11571,11 @@ public class AIInformationGrid : MonoBehaviour
 		}
 		BoundingBox = component.bounds;
 		((Bounds)(ref BoundingBox)).center = ((Component)this).transform.position + ((Bounds)(ref component.bounds)).center + new Vector3(0f, ((Bounds)(ref BoundingBox)).extents.y, 0f);
+		AIPoint[] componentsInChildren = ((Component)this).GetComponentsInChildren<AIPoint>(true);
+		foreach (AIPoint aIPoint in componentsInChildren)
+		{
+			((Bounds)(ref BoundingBox)).Encapsulate(((Component)aIPoint).transform.position);
+		}
 		float num = ((Bounds)(ref BoundingBox)).extents.x * 2f;
 		float num2 = ((Bounds)(ref BoundingBox)).extents.z * 2f;
 		xCellCount = (int)Mathf.Ceil(num / (float)CellSize);
@@ -11032,13 +11585,13 @@ public class AIInformationGrid : MonoBehaviour
 		val.x = ((Bounds)(ref BoundingBox)).min.x + (float)CellSize / 2f;
 		val.z = ((Bounds)(ref BoundingBox)).min.z + (float)CellSize / 2f;
 		Bounds bounds = default(Bounds);
-		for (int i = 0; i < zCellCount; i++)
+		for (int j = 0; j < zCellCount; j++)
 		{
-			for (int j = 0; j < xCellCount; j++)
+			for (int k = 0; k < xCellCount; k++)
 			{
 				Vector3 val2 = val;
 				((Bounds)(ref bounds))..ctor(val2, new Vector3((float)CellSize, ((Bounds)(ref BoundingBox)).extents.y * 2f, (float)CellSize));
-				Cells[GetIndex(j, i)] = new AIInformationCell(bounds, ((Component)this).gameObject, j, i);
+				Cells[GetIndex(k, j)] = new AIInformationCell(bounds, ((Component)this).gameObject, k, j);
 				val.x += CellSize;
 			}
 			val.x = ((Bounds)(ref BoundingBox)).min.x + (float)CellSize / 2f;
@@ -11107,9 +11660,15 @@ public class AIInformationGrid : MonoBehaviour
 	public AIInformationCell[] GetCellsInRange(Vector3 position, float maxRange, out int cellCount)
 	{
 		//IL_000f: Unknown result type (might be due to invalid IL or missing references)
+		//IL_001b: Unknown result type (might be due to invalid IL or missing references)
+		//IL_001c: Unknown result type (might be due to invalid IL or missing references)
 		cellCount = 0;
 		int num = (int)(maxRange / (float)CellSize);
 		AIInformationCell cell = GetCell(position);
+		if (cell == null)
+		{
+			cell = GetCell(ClampToGrid(position));
+		}
 		if (cell == null)
 		{
 			return resultCells;
@@ -11131,6 +11690,16 @@ public class AIInformationGrid : MonoBehaviour
 			}
 		}
 		return resultCells;
+	}
+
+	private Vector3 ClampToGrid(Vector3 position)
+	{
+		//IL_0002: Unknown result type (might be due to invalid IL or missing references)
+		//IL_003f: Unknown result type (might be due to invalid IL or missing references)
+		//IL_007a: Unknown result type (might be due to invalid IL or missing references)
+		position.x = Mathf.Clamp(position.x, origin.x, origin.x + (float)(xCellCount * CellSize) - 0.01f);
+		position.z = Mathf.Clamp(position.z, origin.z, origin.z + (float)(zCellCount * CellSize) - 0.01f);
+		return position;
 	}
 
 	public AIInformationCell GetCell(Vector3 position)
@@ -11551,16 +12120,16 @@ public class AIInformationZone : BaseMonoBehaviour, IServerComponent
 		//IL_0190: Unknown result type (might be due to invalid IL or missing references)
 		//IL_01a7: Unknown result type (might be due to invalid IL or missing references)
 		//IL_01ad: Invalid comparison between Unknown and I4
-		//IL_0236: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0242: Unknown result type (might be due to invalid IL or missing references)
-		//IL_01d8: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0240: Unknown result type (might be due to invalid IL or missing references)
+		//IL_024c: Unknown result type (might be due to invalid IL or missing references)
 		//IL_01dd: Unknown result type (might be due to invalid IL or missing references)
-		//IL_01f7: Unknown result type (might be due to invalid IL or missing references)
-		//IL_01fc: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0200: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0202: Unknown result type (might be due to invalid IL or missing references)
+		//IL_01e2: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0201: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0206: Unknown result type (might be due to invalid IL or missing references)
+		//IL_020a: Unknown result type (might be due to invalid IL or missing references)
 		//IL_020c: Unknown result type (might be due to invalid IL or missing references)
-		//IL_020e: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0216: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0218: Unknown result type (might be due to invalid IL or missing references)
 		if (!UseCalculatedCoverDistances)
 		{
 			return true;
@@ -11610,13 +12179,13 @@ public class AIInformationZone : BaseMonoBehaviour, IServerComponent
 					int count = pathCache.corners.Count;
 					if (count > 1)
 					{
-						Vector3 val = pathCache.corners[0];
+						Vector3 val = pathCache.corners[0].Value;
 						float num5 = 0f;
 						for (int i = 0; i < count; i++)
 						{
-							Vector3 val2 = pathCache.corners[i];
-							num5 += Vector3.Distance(val, val2);
-							val = val2;
+							Vector3 value = pathCache.corners[i].Value;
+							num5 += Vector3.Distance(val, value);
+							val = value;
 						}
 						num4 = num5;
 						pathSuccesses++;
@@ -16076,16 +16645,16 @@ public class AIThinkManager : BaseMonoBehaviour, IServerComponent
 
 	public static ListHashSet<IThinker> _petRemovalQueue = new ListHashSet<IThinker>();
 
-	[ServerVar]
 	[Help("How many miliseconds to budget for processing AI entities per server frame")]
+	[ServerVar]
 	public static float framebudgetms = 2f;
 
-	[ServerVar]
 	[Help("How many miliseconds to budget for processing animal AI entities per server frame")]
+	[ServerVar]
 	public static float animalframebudgetms = 2f;
 
-	[ServerVar]
 	[Help("How many miliseconds to budget for processing pet AI entities per server frame")]
+	[ServerVar]
 	public static float petframebudgetms = 1f;
 
 	private static int lastIndex = 0;
@@ -16183,7 +16752,7 @@ public class AIThinkManager : BaseMonoBehaviour, IServerComponent
 
 	public static void Remove(IThinker toRemove)
 	{
-		_removalQueue.Add(toRemove);
+		_removalQueue.TryAdd(toRemove);
 	}
 
 	public static void AddAnimal(IThinker toAdd)
@@ -16193,7 +16762,7 @@ public class AIThinkManager : BaseMonoBehaviour, IServerComponent
 
 	public static void RemoveAnimal(IThinker toRemove)
 	{
-		_animalremovalQueue.Add(toRemove);
+		_animalremovalQueue.TryAdd(toRemove);
 	}
 
 	public static void AddPet(IThinker toAdd)
@@ -16203,7 +16772,7 @@ public class AIThinkManager : BaseMonoBehaviour, IServerComponent
 
 	public static void RemovePet(IThinker toRemove)
 	{
-		_petRemovalQueue.Add(toRemove);
+		_petRemovalQueue.TryAdd(toRemove);
 	}
 }
 
@@ -19048,11 +19617,11 @@ public class NPCPlayer : BasePlayer
 	public virtual void MovementUpdate(float delta)
 	{
 		//IL_0052: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0063: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0068: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0077: Unknown result type (might be due to invalid IL or missing references)
-		//IL_007c: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0090: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0064: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0069: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0078: Unknown result type (might be due to invalid IL or missing references)
+		//IL_007d: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0091: Unknown result type (might be due to invalid IL or missing references)
 		if (!LegacyNavigation || base.isClient || !IsAlive() || IsWounded() || (!base.isMounted && !IsNavRunning()))
 		{
 			return;
@@ -19061,14 +19630,14 @@ public class NPCPlayer : BasePlayer
 		{
 			if (IsNavRunning())
 			{
-				NavAgent.destination = ServerPosition;
+				NavAgent.SetDestination(ServerPosition);
 			}
 			return;
 		}
 		Vector3 moveToPosition = ((Component)this).transform.position;
 		if (HasPath)
 		{
-			moveToPosition = NavAgent.nextPosition;
+			moveToPosition = NavAgent.nextPositionWS;
 		}
 		if (ValidateNextPosition(ref moveToPosition))
 		{
@@ -20815,6 +21384,8 @@ public class BaseNavigator : BaseMonoBehaviour
 
 	protected bool paused;
 
+	private const float DestinationSampleHeight = 2f;
+
 	private int frameCount;
 
 	private float accumDelta;
@@ -21058,9 +21629,9 @@ public class BaseNavigator : BaseMonoBehaviour
 		//IL_002d: Unknown result type (might be due to invalid IL or missing references)
 		position = ((Component)this).transform.position;
 		bool result = true;
-		if (Agent.SamplePosition(target, out var hitNS, maxRange))
+		if (Agent.SamplePosition(target, out var hitWS, maxRange))
 		{
-			position = ((NavMeshHit)(ref hitNS)).position;
+			position = ((NavMeshHit)(ref hitWS)).position;
 		}
 		else
 		{
@@ -21167,31 +21738,31 @@ public class BaseNavigator : BaseMonoBehaviour
 
 	public bool SetDestination(Vector3 pos, float speedFraction = 1f, float updateInterval = 0f, float navmeshSampleDistance = 0f)
 	{
-		//IL_0055: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0080: Unknown result type (might be due to invalid IL or missing references)
-		//IL_008e: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00b1: Unknown result type (might be due to invalid IL or missing references)
-		//IL_01c1: Unknown result type (might be due to invalid IL or missing references)
-		//IL_015e: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0163: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0176: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0180: Unknown result type (might be due to invalid IL or missing references)
-		//IL_010d: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0114: Unknown result type (might be due to invalid IL or missing references)
-		//IL_011f: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0124: Unknown result type (might be due to invalid IL or missing references)
-		//IL_01e8: Unknown result type (might be due to invalid IL or missing references)
-		//IL_01fe: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0228: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0266: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0239: Unknown result type (might be due to invalid IL or missing references)
-		//IL_023e: Unknown result type (might be due to invalid IL or missing references)
-		//IL_02de: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0279: Unknown result type (might be due to invalid IL or missing references)
-		//IL_027f: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0285: Unknown result type (might be due to invalid IL or missing references)
-		//IL_029f: Unknown result type (might be due to invalid IL or missing references)
-		//IL_02ca: Unknown result type (might be due to invalid IL or missing references)
+		//IL_005d: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0088: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0096: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00b9: Unknown result type (might be due to invalid IL or missing references)
+		//IL_01c9: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0166: Unknown result type (might be due to invalid IL or missing references)
+		//IL_016b: Unknown result type (might be due to invalid IL or missing references)
+		//IL_017e: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0188: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0115: Unknown result type (might be due to invalid IL or missing references)
+		//IL_011c: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0127: Unknown result type (might be due to invalid IL or missing references)
+		//IL_012c: Unknown result type (might be due to invalid IL or missing references)
+		//IL_01f0: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0206: Unknown result type (might be due to invalid IL or missing references)
+		//IL_022b: Unknown result type (might be due to invalid IL or missing references)
+		//IL_026d: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0243: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0245: Unknown result type (might be due to invalid IL or missing references)
+		//IL_02e5: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0280: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0286: Unknown result type (might be due to invalid IL or missing references)
+		//IL_028c: Unknown result type (might be due to invalid IL or missing references)
+		//IL_02a6: Unknown result type (might be due to invalid IL or missing references)
+		//IL_02d1: Unknown result type (might be due to invalid IL or missing references)
 		if (!AI.move)
 		{
 			return false;
@@ -21200,7 +21771,7 @@ public class BaseNavigator : BaseMonoBehaviour
 		{
 			return false;
 		}
-		if (!AI.useUnityNavmesh && !Agent.isOnNavMesh)
+		if (!AI.useUnityNavmesh && CanUseNavMesh && !Agent.isOnNavMesh)
 		{
 			return false;
 		}
@@ -21279,11 +21850,11 @@ public class BaseNavigator : BaseMonoBehaviour
 			}
 			if (navmeshSampleDistance > 0f && AI.setdestinationsamplenavmesh)
 			{
-				if (!Agent.SamplePosition(pos, out var hitNS, navmeshSampleDistance))
+				if (!SampleDestination(pos, Mathf.Min(navmeshSampleDistance, 1f), out var sampledPos))
 				{
 					return false;
 				}
-				pos = ((NavMeshHit)(ref hitNS)).position;
+				pos = sampledPos;
 			}
 			SetCurrentNavigationType(NavigationType.NavMesh);
 			if (!Agent.isOnNavMesh)
@@ -21323,6 +21894,36 @@ public class BaseNavigator : BaseMonoBehaviour
 			return flag;
 		}
 		}
+	}
+
+	private bool SampleDestination(Vector3 pos, float snapRange, out Vector3 sampledPos)
+	{
+		//IL_0006: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0022: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0023: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0015: Unknown result type (might be due to invalid IL or missing references)
+		//IL_001a: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0038: Unknown result type (might be due to invalid IL or missing references)
+		//IL_004a: Unknown result type (might be due to invalid IL or missing references)
+		//IL_004f: Unknown result type (might be due to invalid IL or missing references)
+		//IL_005d: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0062: Unknown result type (might be due to invalid IL or missing references)
+		if (Agent.SamplePosition(pos, out var hitWS, snapRange))
+		{
+			sampledPos = ((NavMeshHit)(ref hitWS)).position;
+			return true;
+		}
+		sampledPos = pos;
+		if (snapRange >= 2f)
+		{
+			return false;
+		}
+		if (!Agent.SamplePosition(pos, out hitWS, 2f) || Vector3Ex.Distance2D(((NavMeshHit)(ref hitWS)).position, pos) > snapRange)
+		{
+			return false;
+		}
+		sampledPos = ((NavMeshHit)(ref hitWS)).position;
+		return true;
 	}
 
 	private NavigationType DetermineNavigationType(Vector3 location, out Vector3 navMeshPos)
@@ -21554,7 +22155,7 @@ public class BaseNavigator : BaseMonoBehaviour
 			}
 			return iAIPathNode.Position;
 		}
-		return Agent.nextPosition;
+		return Agent.nextPositionWS;
 	}
 
 	private bool ValidateNextPosition(ref Vector3 moveToPosition)
@@ -21656,7 +22257,7 @@ public class BaseNavigator : BaseMonoBehaviour
 		}
 		if (CurrentNavigationType == NavigationType.NavMesh)
 		{
-			if (ReachedPosition(Agent.destination))
+			if (ReachedPosition(Agent.destinationWS))
 			{
 				Stop();
 			}
@@ -21795,9 +22396,9 @@ public class BaseNavigator : BaseMonoBehaviour
 		Vector3 val = ((OffMeshLinkData)(ref currentOffMeshLinkData)).endPos - ((OffMeshLinkData)(ref currentOffMeshLinkData)).startPos;
 		Vector3 normalized = ((Vector3)(ref val)).normalized;
 		normalized.y = 0f;
-		Vector3 desiredVelocity = Agent.desiredVelocity;
-		desiredVelocity.y = 0f;
-		if (Vector3.Dot(desiredVelocity, normalized) < 0.1f)
+		Vector3 desiredVelocityWS = Agent.desiredVelocityWS;
+		desiredVelocityWS.y = 0f;
+		if (Vector3.Dot(desiredVelocityWS, normalized) < 0.1f)
 		{
 			CompleteNavMeshLink();
 			return false;
@@ -23719,7 +24320,7 @@ public class NPCNavigator : BaseNavigator
 		}
 		if (traversingNavMeshLink)
 		{
-			Vector3 val = base.Agent.destination - base.BaseEntity.ServerPosition;
+			Vector3 val = base.Agent.destinationWS - base.BaseEntity.ServerPosition;
 			if (((Vector3)(ref val)).sqrMagnitude > 1f)
 			{
 				val = currentNavMeshLinkEndPos - base.BaseEntity.ServerPosition;
@@ -23728,10 +24329,10 @@ public class NPCNavigator : BaseNavigator
 			_ = 0.001f;
 			return;
 		}
-		Vector3 val2 = base.Agent.destination - base.BaseEntity.ServerPosition;
+		Vector3 val2 = base.Agent.destinationWS - base.BaseEntity.ServerPosition;
 		if (((Vector3)(ref val2)).sqrMagnitude > 1f)
 		{
-			val2 = base.Agent.desiredVelocity;
+			val2 = base.Agent.desiredVelocityWS;
 			Vector3 normalized = ((Vector3)(ref val2)).normalized;
 			if (((Vector3)(ref normalized)).sqrMagnitude > 0.001f)
 			{
@@ -23904,8 +24505,8 @@ public class NPCPlayerNavigator : BaseNavigator
 			if (base.CurrentNavigationType == NavigationType.NavMesh)
 			{
 				NPCPlayer nPCPlayerEntity = NPCPlayerEntity;
-				Vector3 desiredVelocity = base.Agent.desiredVelocity;
-				nPCPlayerEntity.SetAimDirection(((Vector3)(ref desiredVelocity)).normalized);
+				Vector3 desiredVelocityWS = base.Agent.desiredVelocityWS;
+				nPCPlayerEntity.SetAimDirection(((Vector3)(ref desiredVelocityWS)).normalized);
 			}
 			else if (base.CurrentNavigationType == NavigationType.AStar || base.CurrentNavigationType == NavigationType.Base)
 			{
@@ -24082,9 +24683,9 @@ public class DungeonNavmesh : FacepunchBehaviour, IServerComponent
 			}
 			if ((Object)(object)independantNavmesh != (Object)null)
 			{
-				return independantNavmesh.IsBuilt();
+				return !independantNavmesh.IsBuilt();
 			}
-			return false;
+			return true;
 		}
 	}
 
@@ -24530,18 +25131,20 @@ public class DynamicNavMesh : SingletonComponent<DynamicNavMesh>, IServerCompone
 
 using System;
 using System.Collections.Generic;
+using Rust.Ai.Gen2;
+using Rust.Ai.Gen2.Nav;
 using UnityEngine;
 
 public static class Eqs
 {
-	public sealed class PooledScoreList : BasePooledList<(Vector3 pos, float score), PooledScoreList>
+	public sealed class PooledScoreList : BasePooledList<(NavVector3 pos, float score), PooledScoreList>
 	{
 		public void SortByScoreDesc(BaseEntity baseEntity = null, string debugCategory = "navigation")
 		{
 			TimeWarning val = TimeWarning.New("SortByScoreDesc", 0);
 			try
 			{
-				((List<(Vector3, float)>)(object)this).Sort((Comparison<(Vector3, float)>)(((Vector3 pos, float score) a, (Vector3 pos, float score) b) => b.score.CompareTo(a.score)));
+				((List<(NavVector3, float)>)(object)this).Sort((Comparison<(NavVector3, float)>)(((NavVector3 pos, float score) a, (NavVector3 pos, float score) b) => b.score.CompareTo(a.score)));
 			}
 			finally
 			{
@@ -24549,15 +25152,14 @@ public static class Eqs
 			}
 		}
 
-		public void Reorder(List<Vector3> positions)
+		public void Reorder(List<NavVector3> positions)
 		{
-			//IL_0019: Unknown result type (might be due to invalid IL or missing references)
 			TimeWarning val = TimeWarning.New("Reorder", 0);
 			try
 			{
 				for (int i = 0; i < positions.Count; i++)
 				{
-					positions[i] = ((List<(Vector3, float)>)(object)this)[i].Item1;
+					positions[i] = ((List<(NavVector3, float)>)(object)this)[i].Item1;
 				}
 			}
 			finally
@@ -24567,25 +25169,25 @@ public static class Eqs
 		}
 	}
 
-	public static void SamplePositionsInDonutShape(Vector3 center, List<Vector3> sampledPositions, float radius = 10f, int itemsPerRing = 8)
+	public static bool SampleNavigablePositions(RustNavMeshAgent agent, NavVector3 center, List<NavVector3> sampledPositions, float outerRadius, float innerRadius, int numPoints, bool preValidate = true)
 	{
-		//IL_002e: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0040: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0046: Unknown result type (might be due to invalid IL or missing references)
-		//IL_004b: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0050: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0053: Unknown result type (might be due to invalid IL or missing references)
-		TimeWarning val = TimeWarning.New("SamplePositionsInDonutShape", 0);
+		TimeWarning val = TimeWarning.New("SampleNavigablePositions", 0);
 		try
 		{
-			float num = Random.Range(0f, MathF.PI * 2f);
-			for (int i = 0; i < itemsPerRing; i++)
+			if (preValidate && agent.SampleConnectedPositions(center, outerRadius, innerRadius, numPoints, sampledPositions))
 			{
-				float num2 = MathF.PI * 2f * (float)i / (float)itemsPerRing + num;
-				Vector3 item = center + new Vector3(Mathf.Cos(num2), 0f, Mathf.Sin(num2)) * radius;
-				sampledPositions.Add(item);
+				return true;
 			}
-			ListEx.Shuffle<Vector3>(sampledPositions, (uint)Environment.TickCount);
+			sampledPositions.Clear();
+			if (innerRadius <= 0f || Mathf.Approximately(innerRadius, outerRadius))
+			{
+				SamplePositionsInDonutShape(center, sampledPositions, outerRadius, numPoints);
+			}
+			else
+			{
+				SamplePositionsInMultiDonutShape(center, sampledPositions, outerRadius, innerRadius, 2, Mathf.Max(1, numPoints / 2));
+			}
+			return false;
 		}
 		finally
 		{
@@ -24593,14 +25195,36 @@ public static class Eqs
 		}
 	}
 
-	public static void SamplePositionsInMultiDonutShape(Vector3 center, List<Vector3> sampledPositions, float outerRadius = 10f, float innerRadius = 10f, int numRings = 1, int itemsPerRing = 8)
+	public static void SamplePositionsInDonutShape(NavVector3 center, List<NavVector3> sampledPositions, float radius = 10f, int itemsPerRing = 8)
 	{
-		//IL_0060: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0074: Unknown result type (might be due to invalid IL or missing references)
-		//IL_007a: Unknown result type (might be due to invalid IL or missing references)
-		//IL_007f: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0031: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0047: Unknown result type (might be due to invalid IL or missing references)
+		//IL_004d: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0052: Unknown result type (might be due to invalid IL or missing references)
+		TimeWarning val = TimeWarning.New("SamplePositionsInDonutShape", 0);
+		try
+		{
+			float num = Random.Range(0f, MathF.PI * 2f);
+			for (int i = 0; i < itemsPerRing; i++)
+			{
+				float num2 = MathF.PI * 2f * (float)i / (float)itemsPerRing + num;
+				NavVector3 item = new NavVector3(center.Value + new Vector3(Mathf.Cos(num2), 0f, Mathf.Sin(num2)) * radius);
+				sampledPositions.Add(item);
+			}
+			ListEx.Shuffle<NavVector3>(sampledPositions, (uint)Environment.TickCount);
+		}
+		finally
+		{
+			((IDisposable)val)?.Dispose();
+		}
+	}
+
+	public static void SamplePositionsInMultiDonutShape(NavVector3 center, List<NavVector3> sampledPositions, float outerRadius = 10f, float innerRadius = 10f, int numRings = 1, int itemsPerRing = 8)
+	{
+		//IL_0066: Unknown result type (might be due to invalid IL or missing references)
+		//IL_007e: Unknown result type (might be due to invalid IL or missing references)
 		//IL_0084: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0087: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0089: Unknown result type (might be due to invalid IL or missing references)
 		TimeWarning val = TimeWarning.New("SamplePositionsInMultiDonutShape", 0);
 		try
 		{
@@ -24612,11 +25236,11 @@ public static class Eqs
 				{
 					float num3 = num + (float)i * MathF.PI / (float)numRings;
 					float num4 = MathF.PI * 2f * (float)j / (float)itemsPerRing + num3;
-					Vector3 item = center + new Vector3(Mathf.Cos(num4), 0f, Mathf.Sin(num4)) * num2;
+					NavVector3 item = new NavVector3(center.Value + new Vector3(Mathf.Cos(num4), 0f, Mathf.Sin(num4)) * num2);
 					sampledPositions.Add(item);
 				}
 			}
-			ListEx.Shuffle<Vector3>(sampledPositions, (uint)Environment.TickCount);
+			ListEx.Shuffle<NavVector3>(sampledPositions, (uint)Environment.TickCount);
 		}
 		finally
 		{
@@ -24628,16 +25252,16 @@ public static class Eqs
 
 using System;
 using System.Collections.Generic;
-using UnityEngine;
+using Rust.Ai.Gen2.Nav;
 
-public sealed class PooledScoreList : BasePooledList<(Vector3 pos, float score), PooledScoreList>
+public sealed class PooledScoreList : BasePooledList<(NavVector3 pos, float score), PooledScoreList>
 {
 	public void SortByScoreDesc(BaseEntity baseEntity = null, string debugCategory = "navigation")
 	{
 		TimeWarning val = TimeWarning.New("SortByScoreDesc", 0);
 		try
 		{
-			((List<(Vector3, float)>)(object)this).Sort((Comparison<(Vector3, float)>)(((Vector3 pos, float score) a, (Vector3 pos, float score) b) => b.score.CompareTo(a.score)));
+			((List<(NavVector3, float)>)(object)this).Sort((Comparison<(NavVector3, float)>)(((NavVector3 pos, float score) a, (NavVector3 pos, float score) b) => b.score.CompareTo(a.score)));
 		}
 		finally
 		{
@@ -24645,15 +25269,14 @@ public sealed class PooledScoreList : BasePooledList<(Vector3 pos, float score),
 		}
 	}
 
-	public void Reorder(List<Vector3> positions)
+	public void Reorder(List<NavVector3> positions)
 	{
-		//IL_0019: Unknown result type (might be due to invalid IL or missing references)
 		TimeWarning val = TimeWarning.New("Reorder", 0);
 		try
 		{
 			for (int i = 0; i < positions.Count; i++)
 			{
-				positions[i] = ((List<(Vector3, float)>)(object)this)[i].Item1;
+				positions[i] = ((List<(NavVector3, float)>)(object)this)[i].Item1;
 			}
 		}
 		finally
@@ -25081,14 +25704,20 @@ public class NPCDoorTriggerBox : MonoBehaviour
 		}
 	}
 
-	public void TryOpenDoorFor(BaseEntity entity)
+	public bool TryOpenDoorFor(BaseEntity entity)
 	{
-		//IL_0049: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0054: Unknown result type (might be due to invalid IL or missing references)
-		if (!((Object)(object)door == (Object)null) && !door.isClient && !door.IsLocked() && !door.IsOpen() && !door.isSecurityDoor && !(Vector3.Distance(((Component)entity).transform.position, ((Component)this).transform.position) > AI.npc_door_trigger_size * 2f))
+		//IL_004a: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0055: Unknown result type (might be due to invalid IL or missing references)
+		if ((Object)(object)door == (Object)null || door.isClient || door.IsLocked() || door.IsOpen() || door.isSecurityDoor)
 		{
-			door.SetOpen(open: true);
+			return false;
 		}
+		if (Vector3.Distance(((Component)entity).transform.position, ((Component)this).transform.position) > AI.npc_door_trigger_size * 2f)
+		{
+			return false;
+		}
+		door.SetOpen(open: true);
+		return true;
 	}
 }
 
@@ -27148,8 +27777,8 @@ public class BoatAI : BaseEntity
 
 	private const int CONTEXT_RESOLUTION = 8;
 
-	[Header("Boat AI - Scientists")]
 	[SerializeField]
+	[Header("Boat AI - Scientists")]
 	private bool _autoFillWithScientists;
 
 	[SerializeField]
@@ -27185,12 +27814,12 @@ public class BoatAI : BaseEntity
 
 	public const string DeepSeaPTBoatPath = "assets/content/vehicles/boats/ptboat/ptboat.deepsea.prefab";
 
-	[Header("Boat AI")]
 	[SerializeField]
+	[Header("Boat AI")]
 	private BaseBoat _boat;
 
-	[Header("Boat AI - General")]
 	[SerializeField]
+	[Header("Boat AI - General")]
 	private bool _autoInit;
 
 	[SerializeField]
@@ -27209,8 +27838,8 @@ public class BoatAI : BaseEntity
 	[SerializeField]
 	private float _awarenessDistance;
 
-	[Header("Boat AI - Debug")]
 	[SerializeField]
+	[Header("Boat AI - Debug")]
 	private Transform _debugMoveTo;
 
 	[ServerVar(Help = "(Generated) When enabled, draws DDraw visualisations of boat AI steering, avoidance, and pathfinding state")]
@@ -29421,951 +30050,6 @@ public class SeekState : BoatState
 	{
 		return "Seek";
 	}
-}
-
-
-using UnityEngine;
-
-public class DriveByState : BoatState
-{
-	private bool _beenClose;
-
-	private const float PASS_DISTANCE = 25f;
-
-	private const float AIM_AHEAD = 15f;
-
-	public override void Enter(BoatAI boatAI)
-	{
-		_beenClose = false;
-	}
-
-	public override void Update(Context ctx, BoatAI boatAI, float delta)
-	{
-		//IL_0048: Unknown result type (might be due to invalid IL or missing references)
-		//IL_004d: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0059: Unknown result type (might be due to invalid IL or missing references)
-		//IL_005e: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0063: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0066: Unknown result type (might be due to invalid IL or missing references)
-		//IL_006b: Unknown result type (might be due to invalid IL or missing references)
-		//IL_006c: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0072: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0077: Unknown result type (might be due to invalid IL or missing references)
-		//IL_007c: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0081: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0082: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0087: Unknown result type (might be due to invalid IL or missing references)
-		//IL_008b: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0090: Unknown result type (might be due to invalid IL or missing references)
-		//IL_009c: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00a1: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00b6: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00ae: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00af: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00bc: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00c1: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00c3: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00c5: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00ca: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00cc: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00d9: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00de: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00e3: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00e7: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00ec: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00fc: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0114: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0119: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0135: Unknown result type (might be due to invalid IL or missing references)
-		//IL_013c: Unknown result type (might be due to invalid IL or missing references)
-		if ((Object)(object)boatAI._boat == (Object)null)
-		{
-			return;
-		}
-		if (!(boatAI.ActiveTarget is PlayerTarget { Position: var position } playerTarget))
-		{
-			boatAI.SwitchState(boatAI._wanderState);
-		}
-		else
-		{
-			if (!position.HasValue)
-			{
-				return;
-			}
-			Vector3 position2 = ((Component)playerTarget.Player).transform.position;
-			Vector3 val = position2 - ((Component)boatAI._boat).transform.position;
-			Vector3 normalized = ((Vector3)(ref val)).normalized;
-			Vector3 val2 = position2 + normalized * 15f;
-			Vector3 val3 = Vector3.Cross(Vector3.up, normalized);
-			Vector3 normalized2 = ((Vector3)(ref val3)).normalized;
-			Vector3 val4 = ((Vector3.Dot(((Component)boatAI._boat).transform.forward, normalized2) > 0f) ? normalized2 : (-normalized2)) * 25f;
-			Vector3 val5 = val2 + val4;
-			Vector3 val6 = val5 - ((Component)boatAI._boat).transform.position;
-			Vector3 normalized3 = ((Vector3)(ref val6)).normalized;
-			normalized3.y = 0f;
-			boatAI.AddContextInterest(ctx, normalized3, 1f, 2);
-			float num = Vector3Ex.Distance2D(((Component)boatAI._boat).transform.position, val5);
-			if (_beenClose)
-			{
-				if (Vector3.Dot(((Component)boatAI._boat).transform.forward, ((Vector3)(ref val)).normalized) < 0f)
-				{
-					boatAI.SwitchState(boatAI._seekState);
-				}
-				else if (num > 20f)
-				{
-					boatAI.SwitchState(boatAI._seekState);
-				}
-			}
-			else if (num < 10f)
-			{
-				_beenClose = true;
-			}
-		}
-	}
-
-	public override void Exit(BoatAI boatAI)
-	{
-	}
-
-	public override string GetStateName()
-	{
-		return "DriveBy";
-	}
-}
-
-
-using UnityEngine;
-
-public class RamState : BoatState
-{
-	private TimeSince _timeSinceStartedRam;
-
-	private const float RAM_DURATION = 20f;
-
-	public override void Enter(BoatAI boatAI)
-	{
-	}
-
-	public override void Update(Context ctx, BoatAI boatAI, float delta)
-	{
-		//IL_0042: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0057: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00b4: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00c4: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00c9: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00ce: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00d1: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00d6: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00e5: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00fc: Unknown result type (might be due to invalid IL or missing references)
-		//IL_010b: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0127: Unknown result type (might be due to invalid IL or missing references)
-		//IL_012c: Unknown result type (might be due to invalid IL or missing references)
-		if ((Object)(object)boatAI._boat == (Object)null)
-		{
-			return;
-		}
-		PlayerTarget playerTarget = boatAI.ActiveTarget as PlayerTarget;
-		bool flag = playerTarget != null && playerTarget.IsValid(boatAI) && playerTarget.Position.HasValue && Mathf.Abs(playerTarget.Position.Value.y - ((Component)boatAI._boat).transform.position.y) > 15f;
-		if (playerTarget == null || flag)
-		{
-			if (PRINT_DEBUGS)
-			{
-				Debug.Log((object)"Leaving ram state");
-			}
-			boatAI.SwitchState(boatAI._seekState);
-		}
-		else if (playerTarget.Position.HasValue)
-		{
-			Vector3 val = playerTarget.Position.Value - ((Component)boatAI._boat).transform.position;
-			Vector3 normalized = ((Vector3)(ref val)).normalized;
-			normalized.y = 0f;
-			boatAI.AddContextInterest(ctx, normalized, 1f, 0);
-			if (Vector3Ex.Distance2D(((Component)boatAI._boat).transform.position, playerTarget.Position.Value) < 2f && Vector3.Dot(((Component)boatAI._boat).transform.forward, val) < 0f)
-			{
-				boatAI.SwitchState(boatAI._seekState);
-			}
-		}
-	}
-
-	public override void Exit(BoatAI boatAI)
-	{
-	}
-
-	public override string GetStateName()
-	{
-		return "Ram";
-	}
-}
-
-
-using System;
-using UnityEngine;
-
-public class OrbitState : BoatState
-{
-	private const float TAU = MathF.PI * 2f;
-
-	private const float CIRCLE_RESOLUTION = 45f;
-
-	private const float ORBIT_RADIUS = 30f;
-
-	private const float ORBIT_STEP = 1f / 45f;
-
-	private float orbitPercent;
-
-	private Vector3 currentOrbitTargetPoint;
-
-	public override void Enter(BoatAI boatAI)
-	{
-		//IL_000e: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0018: Unknown result type (might be due to invalid IL or missing references)
-		//IL_001d: Unknown result type (might be due to invalid IL or missing references)
-		orbitPercent = 0f;
-		currentOrbitTargetPoint = GetRandomPointOnCircle(boatAI.ProtectionCenter, 80f);
-	}
-
-	public override void Update(Context ctx, BoatAI boatAI, float delta)
-	{
-		//IL_0029: Unknown result type (might be due to invalid IL or missing references)
-		//IL_002f: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0097: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00a2: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00a7: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00ac: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00af: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00b4: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00b7: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0081: Unknown result type (might be due to invalid IL or missing references)
-		//IL_008c: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0091: Unknown result type (might be due to invalid IL or missing references)
-		if ((Object)(object)boatAI._boat == (Object)null)
-		{
-			return;
-		}
-		if (!boatAI.HasProtectionArea)
-		{
-			boatAI.SwitchState(boatAI._wanderState);
-		}
-		if (Vector3.Distance(((Component)boatAI).transform.position, currentOrbitTargetPoint) < 60f)
-		{
-			orbitPercent += 1f / 45f;
-			if (orbitPercent > 1f)
-			{
-				orbitPercent -= 1f;
-			}
-			float radAngle = orbitPercent * (MathF.PI * 2f);
-			currentOrbitTargetPoint = GetPointOnCircle(boatAI.ProtectionCenter, 80f, radAngle);
-		}
-		Vector3 val = currentOrbitTargetPoint - ((Component)boatAI).transform.position;
-		Vector3 normalized = ((Vector3)(ref val)).normalized;
-		boatAI.AddContextInterest(ctx, normalized, 0.5f, 2);
-	}
-
-	private Vector3 GetRandomPointOnCircle(Vector3 centre, float radius)
-	{
-		//IL_0011: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0014: Unknown result type (might be due to invalid IL or missing references)
-		float radAngle = Random.Range(0f, MathF.PI * 2f);
-		return GetPointOnCircle(centre, radius, radAngle);
-	}
-
-	private Vector3 GetPointOnCircle(Vector3 centre, float radius, float radAngle)
-	{
-		//IL_0012: Unknown result type (might be due to invalid IL or missing references)
-		//IL_001a: Unknown result type (might be due to invalid IL or missing references)
-		//IL_001f: Unknown result type (might be due to invalid IL or missing references)
-		float num = Mathf.Cos(radAngle) * radius;
-		float num2 = Mathf.Sin(radAngle) * radius;
-		return centre + new Vector3(num, 0f, num2);
-	}
-
-	public override void Exit(BoatAI boatAI)
-	{
-	}
-
-	public override string GetStateName()
-	{
-		return "Orbit";
-	}
-}
-
-
-public enum AILoadMode
-{
-	LoadAi,
-	KillAi,
-	KillBoat
-}
-
-
-private class InputProvider : IAiInputProvider
-{
-	private BoatAI _boatAI;
-
-	public InputProvider(BoatAI boatAI)
-	{
-		_boatAI = boatAI;
-	}
-
-	public void OnAdd(BaseVehicle vehicle)
-	{
-		_boatAI.OnAdd(vehicle);
-		vehicle.BeenAttacked += _boatAI.BoatAttacked;
-		vehicle.Died += _boatAI.BoatDied;
-		vehicle.OnDismountAll += _boatAI.KillAllRemainingScientists;
-		_boatAI.OnAttached();
-	}
-
-	public void OnTick(BaseVehicle vehicle, float delta, ref float steering, ref float gasPedal)
-	{
-		((ObjectWorkQueue<BoatAIInstruction>)BoatWorkQueue).Add(new BoatAIInstruction
-		{
-			AI = _boatAI,
-			Delta = delta
-		});
-	}
-
-	public void OnRemove(BaseVehicle vehicle)
-	{
-		_boatAI.OnRemove(vehicle);
-		vehicle.BeenAttacked -= _boatAI.BoatAttacked;
-		vehicle.Died -= _boatAI.BoatDied;
-		vehicle.OnDismountAll -= _boatAI.KillAllRemainingScientists;
-	}
-
-	public void OnTick(BaseVehicle vehicle, float delta)
-	{
-	}
-}
-
-
-using System;
-using UnityEngine;
-
-public struct BoatAIInstruction : IEquatable<BoatAIInstruction>
-{
-	public BoatAI AI;
-
-	public float Delta;
-
-	public bool Equals(BoatAIInstruction other)
-	{
-		return AI == other.AI;
-	}
-
-	public override bool Equals(object obj)
-	{
-		if (obj is BoatAIInstruction other)
-		{
-			return Equals(other);
-		}
-		return false;
-	}
-
-	public override int GetHashCode()
-	{
-		if (!((Object)(object)AI != (Object)null))
-		{
-			return 0;
-		}
-		return ((object)AI).GetHashCode();
-	}
-}
-
-
-public class BoatAIWorkQueue : ObjectWorkQueue<BoatAIInstruction>
-{
-	protected override void RunJob(BoatAIInstruction instruction)
-	{
-		if (((ObjectWorkQueue<BoatAIInstruction>)this).ShouldAdd(instruction))
-		{
-			instruction.AI.OnTick(instruction.AI.Boat, instruction.Delta, ref instruction.AI._boat.steering, ref instruction.AI._boat.gasPedal);
-		}
-	}
-
-	protected override bool ShouldAdd(BoatAIInstruction instruction)
-	{
-		if (base.ShouldAdd(instruction))
-		{
-			return instruction.AI.IsValid();
-		}
-		return false;
-	}
-
-	protected override bool IsValidToRun(BoatAIInstruction entity)
-	{
-		return true;
-	}
-}
-
-
-using System;
-using System.Collections.Generic;
-using Facepunch;
-using UnityEngine;
-
-public static class BoatAICoordination
-{
-	private static readonly HashSet<BoatAI> ActiveBoats = new HashSet<BoatAI>();
-
-	private static readonly Dictionary<BaseEntity, BoatAI> TargetClaims = new Dictionary<BaseEntity, BoatAI>();
-
-	private static readonly Dictionary<int, ListHashSet<BoatAI>> Groups = new Dictionary<int, ListHashSet<BoatAI>>();
-
-	private static int _nextGroupId = 1;
-
-	public static int GetNextGroupId()
-	{
-		return _nextGroupId++;
-	}
-
-	public static void Register(BoatAI boat)
-	{
-		ActiveBoats.Add(boat);
-	}
-
-	public static void Unregister(BoatAI boat)
-	{
-		ActiveBoats.Remove(boat);
-		PooledList<BaseEntity> val = Pool.Get<PooledList<BaseEntity>>();
-		try
-		{
-			foreach (KeyValuePair<BaseEntity, BoatAI> targetClaim in TargetClaims)
-			{
-				if ((Object)(object)targetClaim.Value == (Object)(object)boat)
-				{
-					((List<BaseEntity>)(object)val).Add(targetClaim.Key);
-				}
-			}
-			foreach (BaseEntity item in (List<BaseEntity>)(object)val)
-			{
-				TargetClaims.Remove(item);
-			}
-		}
-		finally
-		{
-			((IDisposable)val)?.Dispose();
-		}
-	}
-
-	public static bool TryClaimTarget(BoatAI boat, BasePlayer ply)
-	{
-		if (BoatAI.PRINT_DEBUGS)
-		{
-			Debug.Log((object)("BoatAI " + ((Object)boat).name + " is trying to claim target " + ply.displayName));
-		}
-		BaseEntity claimEntity = GetClaimEntity(ply);
-		if ((Object)(object)claimEntity == (Object)null)
-		{
-			return false;
-		}
-		if (!TargetClaims.ContainsKey(claimEntity))
-		{
-			if (BoatAI.PRINT_DEBUGS)
-			{
-				Debug.Log((object)(((Object)boat).name + " claimed entity " + ((Object)claimEntity).name));
-			}
-			TargetClaims[claimEntity] = boat;
-			return true;
-		}
-		return false;
-	}
-
-	public static void ReleaseClaim(BoatAI boat, BasePlayer ply)
-	{
-		BaseEntity claimEntity = GetClaimEntity(ply);
-		if (!((Object)(object)claimEntity == (Object)null) && TargetClaims.TryGetValue(claimEntity, out var value) && !((Object)(object)value != (Object)(object)boat))
-		{
-			TargetClaims.Remove(claimEntity);
-			if (BoatAI.PRINT_DEBUGS)
-			{
-				Debug.Log((object)(((Object)boat).name + " released entity " + ((Object)claimEntity).name));
-			}
-			BoatAI boatAI = FindFreeBoatWithSameTarget(boat, ply);
-			if (Object.op_Implicit((Object)(object)boatAI))
-			{
-				boatAI.OnTargetClaimAvailable(ply);
-			}
-		}
-	}
-
-	private static BaseEntity GetClaimEntity(BasePlayer ply)
-	{
-		if ((Object)(object)ply == (Object)null)
-		{
-			return null;
-		}
-		if (ply.isMounted)
-		{
-			BaseMountable mounted = ply.GetMounted();
-			if ((Object)(object)mounted != (Object)null)
-			{
-				return mounted;
-			}
-		}
-		return ply;
-	}
-
-	public static bool IsTargetClaimed(BasePlayer ply)
-	{
-		BaseEntity claimEntity = GetClaimEntity(ply);
-		if ((Object)(object)claimEntity == (Object)null)
-		{
-			return false;
-		}
-		return TargetClaims.ContainsKey(claimEntity);
-	}
-
-	public static bool IsTargetClaimedByAnotherGroup(BoatAI currentBoat, BasePlayer ply)
-	{
-		BaseEntity claimEntity = GetClaimEntity(ply);
-		if ((Object)(object)claimEntity == (Object)null)
-		{
-			return false;
-		}
-		if (!TargetClaims.TryGetValue(claimEntity, out var value))
-		{
-			return false;
-		}
-		if (currentBoat.GroupId != value.GroupId)
-		{
-			return true;
-		}
-		return false;
-	}
-
-	private static BoatAI FindFreeBoatWithSameTarget(BoatAI currentBoat, BasePlayer ply)
-	{
-		foreach (BoatAI activeBoat in ActiveBoats)
-		{
-			if (!((Object)(object)currentBoat == (Object)(object)activeBoat) && (!TargetClaims.TryGetValue(GetClaimEntity(ply), out var value) || !((Object)(object)value == (Object)(object)activeBoat)) && activeBoat.ActiveTarget is PlayerTarget playerTarget && playerTarget.Player.userID.Get() == ply.userID.Get())
-			{
-				return activeBoat;
-			}
-		}
-		return null;
-	}
-
-	public static void AddToGroup(BoatAI boat, int groupId)
-	{
-		if (!Groups.TryGetValue(groupId, out var value))
-		{
-			value = new ListHashSet<BoatAI>();
-			Groups[groupId] = value;
-		}
-		value.Add(boat);
-		boat.OnGroupChanged(groupId);
-	}
-
-	public static void RemoveFromGroup(BoatAI boat, int groupId)
-	{
-		if (Groups.TryGetValue(groupId, out var value) && value != null && value.Contains(boat))
-		{
-			value.Remove(boat);
-			boat.OnGroupChanged(-1);
-		}
-	}
-
-	public static ListHashSet<BoatAI> GetGroupMembers(int groupId)
-	{
-		if (Groups.TryGetValue(groupId, out var value))
-		{
-			return value;
-		}
-		return null;
-	}
-
-	public static void WipeCoordination()
-	{
-		ActiveBoats.Clear();
-		TargetClaims.Clear();
-		Groups.Clear();
-		_nextGroupId = 1;
-	}
-}
-
-
-using UnityEngine;
-
-public sealed class PointTarget : IAITarget
-{
-	private readonly float _radius;
-
-	public Vector3? Position { get; }
-
-	public PointTarget(Vector3 pos, float radius = 3f)
-	{
-		//IL_0007: Unknown result type (might be due to invalid IL or missing references)
-		Position = pos;
-		_radius = Mathf.Max(0.1f, radius);
-	}
-
-	public bool IsValid(BoatAI boat)
-	{
-		return Position.HasValue;
-	}
-
-	public bool IsReached(BoatAI boat)
-	{
-		//IL_0016: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0024: Unknown result type (might be due to invalid IL or missing references)
-		if (Position.HasValue)
-		{
-			return Vector3.Distance(((Component)boat).transform.position, Position.Value) <= _radius;
-		}
-		return false;
-	}
-}
-
-
-using UnityEngine;
-
-public sealed class TransformTarget : IAITarget
-{
-	private readonly Transform _t;
-
-	private readonly float _radius;
-
-	public Transform Transform => _t;
-
-	public Vector3? Position
-	{
-		get
-		{
-			//IL_001d: Unknown result type (might be due to invalid IL or missing references)
-			if (!Object.op_Implicit((Object)(object)_t))
-			{
-				return null;
-			}
-			return _t.position;
-		}
-	}
-
-	public TransformTarget(Transform t, float radius = 0.5f)
-	{
-		_t = t;
-		_radius = Mathf.Max(0.1f, radius);
-	}
-
-	public bool IsValid(BoatAI self)
-	{
-		if ((Object)(object)_t != (Object)null)
-		{
-			return Position.HasValue;
-		}
-		return false;
-	}
-
-	public bool IsReached(BoatAI self)
-	{
-		//IL_0014: Unknown result type (might be due to invalid IL or missing references)
-		//IL_001f: Unknown result type (might be due to invalid IL or missing references)
-		if ((Object)(object)_t != (Object)null)
-		{
-			return Vector3Ex.Distance2D(((Component)self).transform.position, _t.position) <= _radius;
-		}
-		return false;
-	}
-}
-
-
-using UnityEngine;
-
-public sealed class PlayerTarget : IAITarget
-{
-	public bool StayClose;
-
-	private readonly BasePlayer _player;
-
-	private readonly float _acquiredAt;
-
-	private readonly Transform _boat;
-
-	private const float CLOSE_DIST = 15f;
-
-	private const float FAR_DIST = 55f;
-
-	private const float LOS_DROP_TIME = 10f;
-
-	private float _lastLosSeen;
-
-	public BasePlayer Player => _player;
-
-	public Vector3? Position
-	{
-		get
-		{
-			//IL_0048: Unknown result type (might be due to invalid IL or missing references)
-			//IL_004d: Unknown result type (might be due to invalid IL or missing references)
-			//IL_0035: Unknown result type (might be due to invalid IL or missing references)
-			//IL_003a: Unknown result type (might be due to invalid IL or missing references)
-			//IL_0054: Unknown result type (might be due to invalid IL or missing references)
-			//IL_0059: Unknown result type (might be due to invalid IL or missing references)
-			//IL_005a: Unknown result type (might be due to invalid IL or missing references)
-			//IL_005f: Unknown result type (might be due to invalid IL or missing references)
-			//IL_0062: Unknown result type (might be due to invalid IL or missing references)
-			//IL_0067: Unknown result type (might be due to invalid IL or missing references)
-			//IL_0084: Unknown result type (might be due to invalid IL or missing references)
-			//IL_0085: Unknown result type (might be due to invalid IL or missing references)
-			//IL_008b: Unknown result type (might be due to invalid IL or missing references)
-			//IL_0090: Unknown result type (might be due to invalid IL or missing references)
-			//IL_0095: Unknown result type (might be due to invalid IL or missing references)
-			//IL_0070: Unknown result type (might be due to invalid IL or missing references)
-			//IL_0071: Unknown result type (might be due to invalid IL or missing references)
-			//IL_0077: Unknown result type (might be due to invalid IL or missing references)
-			//IL_007c: Unknown result type (might be due to invalid IL or missing references)
-			//IL_0081: Unknown result type (might be due to invalid IL or missing references)
-			//IL_0096: Unknown result type (might be due to invalid IL or missing references)
-			if ((Object)(object)_player == (Object)null)
-			{
-				return null;
-			}
-			Vector3 val = ((!_player.HasParent()) ? ((Component)_player).transform.position : ((Component)_player.GetParentEntity()).transform.position);
-			Vector3 val2 = _boat.position - val;
-			Vector3 normalized = ((Vector3)(ref val2)).normalized;
-			return (!StayClose) ? (val + normalized * 55f) : (val + normalized * 15f);
-		}
-	}
-
-	public PlayerTarget(BasePlayer player, float acquiredAt, Transform boat)
-	{
-		_player = player;
-		_acquiredAt = acquiredAt;
-		_boat = boat;
-		_lastLosSeen = Time.time;
-	}
-
-	public bool IsValid(BoatAI self)
-	{
-		//IL_0063: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0073: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0092: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00ab: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00b6: Unknown result type (might be due to invalid IL or missing references)
-		if (!Position.HasValue)
-		{
-			return false;
-		}
-		BasePlayer player = _player;
-		if (!self.IsPlayerTargetValid(player))
-		{
-			if (BoatAI.PRINT_DEBUGS)
-			{
-				Debug.Log((object)"Leaving seek state - not a valid target anymore.");
-			}
-			return false;
-		}
-		if (!self.IsPlayerInRange(player, self.SearchRange * 1.5f))
-		{
-			if (BoatAI.PRINT_DEBUGS)
-			{
-				Debug.Log((object)"Leaving seek state - not in range anymore.");
-			}
-			return false;
-		}
-		if (Mathf.Abs(((Component)player).transform.position.y - ((Component)self).transform.position.y) > 30f)
-		{
-			return false;
-		}
-		if (((Component)player).transform.position.y < 12f)
-		{
-			return false;
-		}
-		if (Vector3Ex.Distance2D(((Component)player).transform.position, ((Component)self).transform.position) >= self.SearchRange)
-		{
-			return false;
-		}
-		if (self.HasLineOfSightToPlayer(_player))
-		{
-			_lastLosSeen = Time.time;
-		}
-		else if (Time.time - _lastLosSeen > 10f)
-		{
-			if (BoatAI.PRINT_DEBUGS)
-			{
-				Debug.Log((object)$"Leaving seek state - lost line of sight for {10f}s.");
-			}
-			return false;
-		}
-		return true;
-	}
-
-	public bool IsReached(BoatAI self)
-	{
-		return false;
-	}
-}
-
-
-using UnityEngine;
-
-public interface IAITarget
-{
-	Vector3? Position { get; }
-
-	bool IsValid(BoatAI self);
-
-	bool IsReached(BoatAI self);
-}
-
-
-public interface IAiInputProvider
-{
-	void OnAdd(BaseVehicle vehicle);
-
-	void OnTick(BaseVehicle vehicle, float delta);
-
-	void OnTick(BaseVehicle vehicle, float delta, ref float steering, ref float gasPedal);
-
-	void OnRemove(BaseVehicle vehicle);
-}
-
-
-using UnityEngine;
-
-public static class VehicleAI
-{
-	public const string BOAT_AI_PATH = "assets/prefabs/npc/travelling vendor/travellingvendor.prefab";
-
-	public static void AttachBoatAI(BaseBoat boat)
-	{
-		if (PrefabAttribute.server.Find<AIDriverData>(boat.prefabID) == null)
-		{
-			Debug.LogError((object)$"No AIDriverData found for {((Object)boat).name} with prefabID {boat.prefabID}. Can't attach AI.");
-		}
-		GameManager.server.CreatePrefab("assets/prefabs/npc/travelling vendor/travellingvendor.prefab", ((Component)boat).transform);
-	}
-}
-
-
-using UnityEngine;
-
-public class AccessbilityMaterialPropertyBlock : AccessibilityComponent
-{
-	public Renderer TargetRenderer;
-
-	public string TagName;
-
-	public AccessibilityColourCollection ForData;
-}
-
-
-public abstract class AccessibilityComponent : ListComponent<AccessibilityComponent>, IClientComponent
-{
-}
-
-
-using UnityEngine;
-
-public class AccessibilityDecalMaterial : AccessibilityComponent
-{
-	public DeferredDecal DecalRenderer;
-
-	public AccessibilityMaterialCollection TargetData;
-
-	public Material NightVisionTeaMaterial;
-}
-
-
-using UnityEngine.UI;
-
-public class AccessibilityMaterialSprite : AccessibilityComponent
-{
-	public Image TargetImage;
-
-	public AccessibilityMaterialCollection TargetData;
-}
-
-
-using UnityEngine;
-
-public class AccessibilityMaterialSwap : AccessibilityComponent
-{
-	public AccessibilityMaterialCollection ForData;
-
-	public Renderer ForRenderer;
-}
-
-
-public class AccessibilityMaterialSwap_NVG : AccessibilityMaterialSwap
-{
-}
-
-
-using UnityEngine.UI;
-
-public class AccessibilitySpriteColour : AccessibilityComponent
-{
-	public AccessibilityColourCollection TargetData;
-
-	public Image SpriteA;
-
-	public Image SpriteB;
-}
-
-
-public class AccessibilityCollection<T> : BaseScriptableObject
-{
-	public string convarName;
-
-	public T[] AllOptions;
-}
-
-
-using System;
-using UnityEngine;
-
-[CreateAssetMenu(menuName = "Rust/Accessibility/Colour Collection")]
-public class AccessibilityColourCollection : AccessibilityCollection<AccessibilityColourCollection.ColourPair>
-{
-	[Serializable]
-	public struct ColourPair
-	{
-		public Color A;
-
-		public Color B;
-	}
-}
-
-
-using System;
-using UnityEngine;
-
-[Serializable]
-public struct ColourPair
-{
-	public Color A;
-
-	public Color B;
-}
-
-
-using System;
-using UnityEngine;
-
-[CreateAssetMenu(menuName = "Rust/Accessibility/Material Collection")]
-public class AccessibilityMaterialCollection : AccessibilityCollection<AccessibilityMaterialCollection.MaterialOption>
-{
-	[Serializable]
-	public struct MaterialOption
-	{
-		public Material TargetMaterial;
-
-		public Color HudColour;
-	}
-}
-
-
-using System;
-using UnityEngine;
-
-[Serializable]
-public struct MaterialOption
-{
-	public Material TargetMaterial;
-
-	public Color HudColour;
 }
 
 

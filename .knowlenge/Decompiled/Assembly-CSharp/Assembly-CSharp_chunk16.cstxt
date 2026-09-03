@@ -1,4 +1,1212 @@
 using System;
+using ConVar;
+using UnityEngine;
+
+[CreateAssetMenu(menuName = "Rust/Missions/OBJECTIVES/SpeakWith")]
+public class MissionObjective_SpeakWith : MissionObjective
+{
+	public ItemAmount[] requiredReturnItems = Array.Empty<ItemAmount>();
+
+	public bool destroyReturnItems;
+
+	public bool showPing;
+
+	public override void ServerObjectiveStarted(BasePlayer playerFor, int index, BaseMission.MissionInstance instance)
+	{
+		//IL_0018: Unknown result type (might be due to invalid IL or missing references)
+		base.ServerObjectiveStarted(playerFor, index, instance);
+		IMissionProvider missionProvider = instance.GetMissionProvider();
+		if (missionProvider != null)
+		{
+			SetObjectiveWorldLocation(index, instance, missionProvider.ProviderPosition());
+			if (showPing && playerFor.IsInTutorial)
+			{
+				playerFor.RegisterPingedEntity(missionProvider.GetEntity(), BasePlayer.PingType.GoTo);
+			}
+			playerFor.MissionsDirty();
+		}
+	}
+
+	public override void ProcessMissionEvent(BasePlayer playerFor, BaseMission.MissionInstance instance, int index, BaseMission.MissionEventType type, BaseMission.MissionEventPayload payload, float amount)
+	{
+		//IL_0159: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0160: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0143: Unknown result type (might be due to invalid IL or missing references)
+		//IL_031b: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0322: Unknown result type (might be due to invalid IL or missing references)
+		//IL_034f: Unknown result type (might be due to invalid IL or missing references)
+		//IL_035d: Unknown result type (might be due to invalid IL or missing references)
+		//IL_036b: Unknown result type (might be due to invalid IL or missing references)
+		base.ProcessMissionEvent(playerFor, instance, index, type, payload, amount);
+		if (type != BaseMission.MissionEventType.CONVERSATION)
+		{
+			return;
+		}
+		BaseMission mission = instance.GetMission();
+		if (mission == null)
+		{
+			Debug.LogError((object)$"Failed to retrieve mission from mission instance ID {instance.missionID}");
+			return;
+		}
+		if (Debugging.printMissionSpeakInfo)
+		{
+			Debug.Log((object)$"[MissionSpeakInfo] objective {((Object)this).name} on {((Object)mission).name} instance IsCompleted:{IsCompleted(index, instance)} CanProgress:{CanProgress(index, instance)}, amount: {amount}");
+		}
+		if (IsCompleted(index, instance) || !CanProgress(index, instance))
+		{
+			return;
+		}
+		IMissionProvider missionProvider = instance.GetMissionProvider();
+		if (missionProvider == null)
+		{
+			if (Debugging.printMissionSpeakInfo)
+			{
+				Debug.Log((object)("[MissionSpeakInfo] objective " + ((Object)this).name + " on " + ((Object)mission).name + " failed to find a provider entity attached to this mission instance"));
+			}
+			return;
+		}
+		if (Debugging.printMissionSpeakInfo)
+		{
+			Debug.Log((object)$"[MissionSpeakInfo] objective {((Object)this).name} on {((Object)mission).name} looking for provider: {instance.providerID.Value}/{((Object)missionProvider.GetEntity()).name} Supplied NPC:{payload.NetworkIdentifier}");
+		}
+		if (missionProvider.ProviderID() == payload.NetworkIdentifier && Mathf.Approximately(amount, 1f))
+		{
+			bool flag = true;
+			ItemAmount[] array = requiredReturnItems;
+			foreach (ItemAmount itemAmount in array)
+			{
+				if ((float)playerFor.inventory.GetAmount(itemAmount.itemDef.itemid) < itemAmount.amount)
+				{
+					flag = false;
+					break;
+				}
+			}
+			if (mission.HasRewards())
+			{
+				if (Debugging.printMissionSpeakInfo)
+				{
+					Debug.Log((object)$"[MissionSpeakInfo] objective {((Object)this).name} on {((Object)mission).name} CheckRewardsSpace: {playerFor.HasSpaceForMissionRewards(instance)}");
+				}
+				if (flag && destroyReturnItems)
+				{
+					if (!playerFor.HasSpaceForMissionRewards(instance, showToastOnFailure: true))
+					{
+						return;
+					}
+					array = requiredReturnItems;
+					foreach (ItemAmount itemAmount2 in array)
+					{
+						playerFor.inventory.Take(null, itemAmount2.itemDef.itemid, (int)itemAmount2.amount);
+					}
+				}
+				if (Debugging.printMissionSpeakInfo)
+				{
+					Debug.Log((object)$"[MissionSpeakInfo] objective {((Object)this).name} on {((Object)mission).name} CheckRewardsSpace: {playerFor.HasSpaceForMissionRewards(instance)}");
+				}
+				if (!playerFor.HasSpaceForMissionRewards(instance, showToastOnFailure: true))
+				{
+					return;
+				}
+			}
+			if (Debugging.printMissionSpeakInfo)
+			{
+				Debug.Log((object)$"[MissionSpeakInfo] objective {((Object)this).name} on {((Object)mission).name} requiredReturnItems == null: {requiredReturnItems == null}, requiredReturnItems.Length: {requiredReturnItems.Length}, hasAllReturnItems: {flag}");
+			}
+			if (requiredReturnItems == null || requiredReturnItems.Length == 0 || flag)
+			{
+				CompleteObjective(index, instance, playerFor);
+			}
+		}
+		else if (Debugging.printMissionSpeakInfo)
+		{
+			if (missionProvider.ProviderID() != payload.NetworkIdentifier)
+			{
+				Debug.Log((object)$"[MissionSpeakInfo] objective {((Object)this).name} on {((Object)mission).name} failed to match supplied network ID {payload.NetworkIdentifier} with instance missionProvider.ProviderID(): {missionProvider.ProviderID()}. ProviderID() should match instance.providerID: {instance.providerID}");
+			}
+			if (!Mathf.Approximately(amount, 1f))
+			{
+				Debug.Log((object)$"[MissionSpeakInfo] objective {((Object)this).name} on {((Object)mission).name} supplied amount {amount} is not approximately 1f");
+			}
+		}
+	}
+
+	public override void ObjectiveCompleted(BasePlayer playerFor, int index, BaseMission.MissionInstance instance)
+	{
+		base.ObjectiveCompleted(playerFor, index, instance);
+		if (showPing)
+		{
+			DeregisterPing(playerFor, instance);
+		}
+	}
+
+	private static void DeregisterPing(BasePlayer playerFor, BaseMission.MissionInstance instance)
+	{
+		//IL_000c: Unknown result type (might be due to invalid IL or missing references)
+		IMissionProvider missionProvider = instance.GetMissionProvider();
+		if (missionProvider != null)
+		{
+			playerFor.DeregisterPingedEntity(missionProvider.ProviderID(), BasePlayer.PingType.GoTo);
+		}
+	}
+
+	public override void ObjectiveFailed(BasePlayer playerFor, int index, BaseMission.MissionInstance instance)
+	{
+		base.ObjectiveFailed(playerFor, index, instance);
+		if (showPing)
+		{
+			DeregisterPing(playerFor, instance);
+		}
+	}
+}
+
+
+using System;
+using ConVar;
+using UnityEngine;
+
+public class MissionObjective_SpeakWithTargetNPC : MissionObjective
+{
+	public BaseEntityRef TargetNPC;
+
+	public LayerMask targetLayerMask = LayerMask.op_Implicit(-1);
+
+	public ItemAmount[] requiredReturnItems = Array.Empty<ItemAmount>();
+
+	[BaseMission.PositionGenerator.PositionPoint]
+	[Tooltip("The target NPC must be nearby this mission point for the objective to complete.")]
+	public string RequireProximityToPosition;
+
+	[Min(0f)]
+	[Tooltip("This defines the minimum proximity between the target NPC and the mission point.")]
+	public float MinimumDistanceToMissionPoint;
+
+	public bool destroyReturnItems;
+
+	public bool showPing;
+
+	public override void ServerObjectiveStarted(BasePlayer playerFor, int index, BaseMission.MissionInstance instance)
+	{
+		//IL_0065: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0067: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0088: Unknown result type (might be due to invalid IL or missing references)
+		base.ServerObjectiveStarted(playerFor, index, instance);
+		Vector3 value;
+		NPCPlayer entity;
+		if (string.IsNullOrWhiteSpace(RequireProximityToPosition))
+		{
+			Debug.LogError((object)("RequireProximityToPosition is not set on objective " + ((Object)this).name), (Object)(object)this);
+		}
+		else if (!instance.missionPoints.TryGetValue(RequireProximityToPosition, out value))
+		{
+			Debug.LogError((object)("No mission point found for " + RequireProximityToPosition + " on objective " + ((Object)this).name), (Object)(object)this);
+		}
+		else if (TryFindNearby<NPCPlayer>(value, LayerMask.op_Implicit(targetLayerMask), out entity, 100f))
+		{
+			SetObjectiveWorldLocation(index, instance, ((Component)entity).transform.position);
+			if (showPing && playerFor.IsInTutorial)
+			{
+				playerFor.RegisterPingedEntity(entity, PingType);
+			}
+		}
+		else
+		{
+			Debug.LogError((object)("Failed to find an entity for " + TargetNPC.resourcePath + " on objective " + ((Object)this).name), (Object)(object)this);
+		}
+	}
+
+	public override bool IsEntityValidForObjective<T>(T entity)
+	{
+		if (!TargetNPC.isValid)
+		{
+			return false;
+		}
+		BaseEntity baseEntity = TargetNPC.Get();
+		if ((Object)(object)baseEntity == (Object)null)
+		{
+			return false;
+		}
+		return baseEntity.prefabID == entity.prefabID;
+	}
+
+	public override void ProcessMissionEvent(BasePlayer playerFor, BaseMission.MissionInstance instance, int index, BaseMission.MissionEventType type, BaseMission.MissionEventPayload payload, float amount)
+	{
+		//IL_00b5: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00dd: Unknown result type (might be due to invalid IL or missing references)
+		//IL_013b: Unknown result type (might be due to invalid IL or missing references)
+		//IL_01e8: Unknown result type (might be due to invalid IL or missing references)
+		//IL_01ef: Unknown result type (might be due to invalid IL or missing references)
+		//IL_01f4: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0244: Unknown result type (might be due to invalid IL or missing references)
+		//IL_025a: Unknown result type (might be due to invalid IL or missing references)
+		base.ProcessMissionEvent(playerFor, instance, index, type, payload, amount);
+		if (type != BaseMission.MissionEventType.CONVERSATION)
+		{
+			return;
+		}
+		BaseMission mission = instance.GetMission();
+		if (mission == null)
+		{
+			Debug.LogError((object)$"Failed to retrieve mission from mission instance ID {instance.missionID}");
+			return;
+		}
+		if (Debugging.printMissionSpeakInfo)
+		{
+			Debug.Log((object)$"[MissionSpeakInfo] objective {((Object)this).name} on {((Object)mission).name} instance IsCompleted:{IsCompleted(index, instance)} CanProgress:{CanProgress(index, instance)}, amount: {amount}");
+		}
+		if (IsCompleted(index, instance) || !CanProgress(index, instance))
+		{
+			return;
+		}
+		if (!BaseNetworkable.serverEntities.TryGetEntity(payload.NetworkIdentifier, out var entity))
+		{
+			if (Debugging.printMissionSpeakInfo)
+			{
+				Debug.Log((object)$"[MissionSpeakInfo] objective {((Object)this).name} on {((Object)mission).name} failed to find a entity from payload NetworkIdentifier: {payload.NetworkIdentifier}");
+			}
+			return;
+		}
+		if (entity.prefabID != TargetNPC.Get().prefabID)
+		{
+			if (Debugging.printMissionSpeakInfo)
+			{
+				Debug.Log((object)$"[MissionSpeakInfo] objective {((Object)this).name} on {((Object)mission).name} entity {((Object)entity).name} provided from payload NetworkIdentifier: {payload.NetworkIdentifier} has prefabID: {entity.prefabID} which does not match target prefabID: {TargetNPC.Get().prefabID}", (Object)(object)entity);
+			}
+			return;
+		}
+		if (!string.IsNullOrWhiteSpace(RequireProximityToPosition))
+		{
+			if (!instance.missionPoints.TryGetValue(RequireProximityToPosition, out var value))
+			{
+				if (Debugging.printMissionSpeakInfo)
+				{
+					Debug.Log((object)("[MissionSpeakInfo] objective " + ((Object)this).name + " on " + ((Object)mission).name + " failed to find mission point for " + RequireProximityToPosition));
+				}
+				return;
+			}
+			float num = Vector3.SqrMagnitude(value - ((Component)entity).transform.position);
+			float num2 = MinimumDistanceToMissionPoint * MinimumDistanceToMissionPoint;
+			if (num > num2)
+			{
+				if (Debugging.printMissionSpeakInfo)
+				{
+					Debug.Log((object)$"[MissionSpeakInfo] objective {((Object)this).name} on {((Object)mission).name} entity {((Object)entity).name} provided from payload NetworkIdentifier: {payload.NetworkIdentifier} is {num} square distance away from point {value}, minimum square distance is {num2}", (Object)(object)entity);
+				}
+				return;
+			}
+		}
+		if (Mathf.Approximately(amount, 1f))
+		{
+			bool flag = true;
+			ItemAmount[] array = requiredReturnItems;
+			foreach (ItemAmount itemAmount in array)
+			{
+				if ((float)playerFor.inventory.GetAmount(itemAmount.itemDef.itemid) < itemAmount.amount)
+				{
+					flag = false;
+					break;
+				}
+			}
+			if (mission.HasRewards())
+			{
+				if (Debugging.printMissionSpeakInfo)
+				{
+					Debug.Log((object)$"[MissionSpeakInfo] objective {((Object)this).name} on {((Object)mission).name} CheckRewardsSpace: {playerFor.HasSpaceForMissionRewards(instance)}");
+				}
+				if (flag && destroyReturnItems)
+				{
+					if (!playerFor.HasSpaceForMissionRewards(instance, showToastOnFailure: true))
+					{
+						return;
+					}
+					array = requiredReturnItems;
+					foreach (ItemAmount itemAmount2 in array)
+					{
+						playerFor.inventory.Take(null, itemAmount2.itemDef.itemid, (int)itemAmount2.amount);
+					}
+				}
+				if (Debugging.printMissionSpeakInfo)
+				{
+					Debug.Log((object)$"[MissionSpeakInfo] objective {((Object)this).name} on {((Object)mission).name} CheckRewardsSpace: {playerFor.HasSpaceForMissionRewards(instance)}");
+				}
+				if (!playerFor.HasSpaceForMissionRewards(instance, showToastOnFailure: true))
+				{
+					return;
+				}
+			}
+			if (Debugging.printMissionSpeakInfo)
+			{
+				Debug.Log((object)$"[MissionSpeakInfo] objective {((Object)this).name} on {((Object)mission).name} requiredReturnItems == null: {requiredReturnItems == null}, requiredReturnItems.Length: {requiredReturnItems.Length}, hasAllReturnItems: {flag}");
+			}
+			if (requiredReturnItems == null || requiredReturnItems.Length == 0 || flag)
+			{
+				CompleteObjective(index, instance, playerFor);
+			}
+		}
+		else if (Debugging.printMissionSpeakInfo)
+		{
+			Debug.Log((object)$"[MissionSpeakInfo] objective {((Object)this).name} on {((Object)mission).name} supplied amount {amount} is not approximately 1f");
+		}
+	}
+
+	public override void ObjectiveCompleted(BasePlayer playerFor, int index, BaseMission.MissionInstance instance)
+	{
+		base.ObjectiveCompleted(playerFor, index, instance);
+		if (showPing)
+		{
+			DeregisterPing(playerFor, instance);
+		}
+	}
+
+	private static void DeregisterPing(BasePlayer playerFor, BaseMission.MissionInstance instance)
+	{
+		//IL_000c: Unknown result type (might be due to invalid IL or missing references)
+		IMissionProvider missionProvider = instance.GetMissionProvider();
+		if (missionProvider != null)
+		{
+			playerFor.DeregisterPingedEntity(missionProvider.ProviderID(), BasePlayer.PingType.GoTo);
+		}
+	}
+
+	public override void ObjectiveFailed(BasePlayer playerFor, int index, BaseMission.MissionInstance instance)
+	{
+		base.ObjectiveFailed(playerFor, index, instance);
+		if (showPing)
+		{
+			DeregisterPing(playerFor, instance);
+		}
+	}
+}
+
+
+using UnityEngine;
+
+public class MissionObjective_UnderwaterLabsBoomboxBonus : MissionObjective
+{
+	public string targetRadioIp;
+
+	[Tooltip("The boombox must be nearby this mission point for the objective to complete.")]
+	[BaseMission.PositionGenerator.PositionPoint]
+	public string requireProximityToPosition;
+
+	[Tooltip("If RequireProximityToPosition is set, this defines the minimum proximity between the boombox and the mission point.")]
+	[Min(0f)]
+	public float minimumDistanceToMissionPoint;
+
+	public bool shouldHideCompassMarkerWhenClose;
+
+	[Tooltip("If \"Should Hide Compass Marker When Close\" is enabled and player is within this distance of the mission point then hide the compass marker, else the compass marker is visible.")]
+	[Min(0f)]
+	public float hideCompassMarkerDistance = 50f;
+
+	private float sqrDistanceToHideCompassMarker;
+
+	public float sqrMinimumDistanceToMissionPoint { get; private set; }
+
+	private void OnEnable()
+	{
+		CacheSqrDistanceForCompletion();
+	}
+
+	private void CacheSqrDistanceForCompletion()
+	{
+		sqrMinimumDistanceToMissionPoint = minimumDistanceToMissionPoint * minimumDistanceToMissionPoint;
+		sqrDistanceToHideCompassMarker = hideCompassMarkerDistance * hideCompassMarkerDistance;
+	}
+
+	public override void ServerObjectiveStarted(BasePlayer playerFor, int index, BaseMission.MissionInstance instance)
+	{
+		//IL_001c: Unknown result type (might be due to invalid IL or missing references)
+		base.ServerObjectiveStarted(playerFor, index, instance);
+		instance.TryGetMissionPoint(requireProximityToPosition, out var point);
+		SetObjectiveWorldLocation(index, instance, point);
+	}
+
+	public override void MissionStarted(int index, BaseMission.MissionInstance instance, BasePlayer forPlayer)
+	{
+		//IL_0047: Unknown result type (might be due to invalid IL or missing references)
+		base.MissionStarted(index, instance, forPlayer);
+		int num = 0;
+		for (int i = 0; i < DeployableBoomBox.ServerStaticInstances.Count; i++)
+		{
+			DeployableBoomBox deployableBoomBox = DeployableBoomBox.ServerStaticInstances[i];
+			if ((Object)(object)deployableBoomBox == (Object)null)
+			{
+				Debug.LogWarning((object)string.Format("Null boombox at index {0} in {1}", i, "ServerStaticInstances"));
+			}
+			else if (IsBoomboxPositionValid(((Component)deployableBoomBox).transform.position, forPlayer, instance))
+			{
+				num++;
+			}
+		}
+		int num2 = num - 1;
+		if (num2 <= 0)
+		{
+			CompleteObjective(index, instance, forPlayer);
+			return;
+		}
+		instance.objectiveStatuses[index].progressTarget = 0f;
+		instance.objectiveStatuses[index].progressTarget = num2;
+	}
+
+	public override void ProcessMissionEvent(BasePlayer playerFor, BaseMission.MissionInstance instance, int index, BaseMission.MissionEventType type, BaseMission.MissionEventPayload payload, float amount)
+	{
+		//IL_0061: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0077: Unknown result type (might be due to invalid IL or missing references)
+		base.ProcessMissionEvent(playerFor, instance, index, type, payload, amount);
+		if (type != BaseMission.MissionEventType.PLAY_BOOMBOX || !Mathf.Approximately(amount, 1f) || IsCompleted(index, instance) || !CanProgress(index, instance) || string.IsNullOrWhiteSpace(payload.StringIdentifier) || payload.StringIdentifier != targetRadioIp || !IsBoomboxPositionValid(payload.WorldPosition, playerFor, instance))
+		{
+			return;
+		}
+		if (!BaseNetworkable.serverEntities.TryGetEntity(payload.NetworkIdentifier, out var entity))
+		{
+			Debug.LogError((object)("Failed to find a server entity with network ID " + ((object)(NetworkableId)(ref payload.NetworkIdentifier)/*cast due to .constrained prefix*/).ToString()));
+			return;
+		}
+		for (int i = 0; i < instance.persistentMissionEntities.Count; i++)
+		{
+			if ((Object)(object)instance.persistentMissionEntities[i] == (Object)(object)entity)
+			{
+				return;
+			}
+		}
+		instance.persistentMissionEntities.Add(entity);
+		BaseMission.MissionInstance.ObjectiveStatus objectiveStatus = instance.objectiveStatuses[index];
+		objectiveStatus.progressCurrent += 1f;
+		if (objectiveStatus.progressCurrent >= objectiveStatus.progressTarget)
+		{
+			CompleteObjective(index, instance, playerFor);
+		}
+		playerFor.MissionsDirty(saveImmediately: true);
+	}
+
+	private bool IsBoomboxPositionValid(Vector3 boomboxWorldPosition, BasePlayer playerFor, BaseMission.MissionInstance instance)
+	{
+		//IL_0034: Unknown result type (might be due to invalid IL or missing references)
+		//IL_001e: Unknown result type (might be due to invalid IL or missing references)
+		//IL_001f: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0020: Unknown result type (might be due to invalid IL or missing references)
+		if (!string.IsNullOrWhiteSpace(requireProximityToPosition) && (!instance.TryGetMissionPoint(requireProximityToPosition, out var point) || Vector3.SqrMagnitude(point - boomboxWorldPosition) > sqrMinimumDistanceToMissionPoint))
+		{
+			return false;
+		}
+		if (!EnvironmentManager.Check(boomboxWorldPosition, EnvironmentType.UnderwaterLab))
+		{
+			return false;
+		}
+		return true;
+	}
+}
+
+
+using System.Collections.Generic;
+using Facepunch;
+using UnityEngine;
+using UnityEngine.Serialization;
+
+[CreateAssetMenu(menuName = "Rust/Missions/OBJECTIVES/Upgrade Building Block")]
+public class MissionObjective_UpgradeBuildingBlock : MissionObjective
+{
+	public bool ShouldPingBlocksLessThanTargetGrade;
+
+	[SerializeField]
+	[FormerlySerializedAs("PingType")]
+	private BasePlayer.PingType pingType;
+
+	public BuildingGrade.Enum TargetGrade;
+
+	public int RequiredCount = 6;
+
+	public override BasePlayer.PingType PingType => pingType;
+
+	public override void MissionStarted(int index, BaseMission.MissionInstance instance, BasePlayer forPlayer)
+	{
+		//IL_0054: Unknown result type (might be due to invalid IL or missing references)
+		base.MissionStarted(index, instance, forPlayer);
+		instance.objectiveStatuses[index].progressCurrent = 0f;
+		instance.objectiveStatuses[index].progressTarget = RequiredCount;
+		if (!ShouldPingBlocksLessThanTargetGrade)
+		{
+			return;
+		}
+		TutorialIsland currentTutorialIsland = forPlayer.GetCurrentTutorialIsland();
+		if (!((Object)(object)currentTutorialIsland != (Object)null))
+		{
+			return;
+		}
+		Vector3 worldPosOfBuildTarget = currentTutorialIsland.GetWorldPosOfBuildTarget(0);
+		List<BuildingBlock> list = Pool.Get<List<BuildingBlock>>();
+		Vis.Entities(worldPosOfBuildTarget, 32f, list, 2097152, (QueryTriggerInteraction)2);
+		if (list.Count != RequiredCount)
+		{
+			Debug.LogWarning((object)("Non matching building block count, check RequiredCount on " + ((Object)this).name));
+		}
+		foreach (BuildingBlock item in list)
+		{
+			forPlayer.RegisterPingedEntity(item, pingType);
+		}
+		Pool.FreeUnmanaged<BuildingBlock>(ref list);
+	}
+
+	public override void ProcessMissionEvent(BasePlayer playerFor, BaseMission.MissionInstance instance, int index, BaseMission.MissionEventType type, BaseMission.MissionEventPayload payload, float amount)
+	{
+		//IL_008c: Unknown result type (might be due to invalid IL or missing references)
+		base.ProcessMissionEvent(playerFor, instance, index, type, payload, amount);
+		if (type == BaseMission.MissionEventType.UPGRADE_BUILDING_GRADE && !IsCompleted(index, instance) && CanProgress(index, instance) && payload.IntIdentifier >= (int)TargetGrade)
+		{
+			instance.objectiveStatuses[index].progressCurrent += 1f;
+			if (instance.objectiveStatuses[index].progressCurrent >= (float)RequiredCount)
+			{
+				CompleteObjective(index, instance, playerFor);
+			}
+			playerFor.MissionsDirty(saveImmediately: true);
+			if (ShouldPingBlocksLessThanTargetGrade)
+			{
+				playerFor.DeregisterPingedEntity(payload.NetworkIdentifier, pingType);
+			}
+		}
+	}
+}
+
+
+using UnityEngine;
+
+public class PVPMissionManager : MonoBehaviour
+{
+	private void Start()
+	{
+	}
+
+	private void Update()
+	{
+	}
+}
+
+
+using System;
+using UnityEngine;
+
+public class TriggerMission : TriggerBase
+{
+	private BasePlayer cachedPlayer;
+
+	internal override void OnEntityEnter(BaseEntity ent)
+	{
+		base.OnEntityEnter(ent);
+		if ((Object)(object)ent.ToPlayer() != (Object)null)
+		{
+			cachedPlayer = ent.ToPlayer();
+			((FacepunchBehaviour)this).Invoke((Action)DelayedEntityCallback, 0f);
+		}
+	}
+
+	private void DelayedEntityCallback()
+	{
+		if ((Object)(object)cachedPlayer != (Object)null)
+		{
+			cachedPlayer.ProcessMissionEvent(BaseMission.MissionEventType.ENTER_TRIGGER, 0, 0f);
+		}
+		cachedPlayer = null;
+	}
+}
+
+
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Threading.Tasks;
+using Facepunch;
+using UnityEngine;
+
+[CreateAssetMenu(menuName = "Rust/Missions/WorldPositionGenerator")]
+public class WorldPositionGenerator : ScriptableObject
+{
+	private struct InputValuesIdentifierData : IEquatable<InputValuesIdentifierData>
+	{
+		public Vector3 origin;
+
+		public float minDist;
+
+		public float maxDist;
+
+		public InputValuesIdentifierData(Vector3 origin, float minDist, float maxDist)
+		{
+			//IL_0001: Unknown result type (might be due to invalid IL or missing references)
+			//IL_0002: Unknown result type (might be due to invalid IL or missing references)
+			this.origin = origin;
+			this.minDist = minDist;
+			this.maxDist = maxDist;
+		}
+
+		public bool Equals(InputValuesIdentifierData other)
+		{
+			//IL_0001: Unknown result type (might be due to invalid IL or missing references)
+			//IL_0007: Unknown result type (might be due to invalid IL or missing references)
+			if (origin == other.origin && Mathf.Approximately(minDist, other.minDist))
+			{
+				return Mathf.Approximately(maxDist, other.maxDist);
+			}
+			return false;
+		}
+
+		public override bool Equals(object obj)
+		{
+			if (obj is InputValuesIdentifierData other)
+			{
+				return Equals(other);
+			}
+			return false;
+		}
+
+		public override int GetHashCode()
+		{
+			//IL_0001: Unknown result type (might be due to invalid IL or missing references)
+			return HashCode.Combine<Vector3, float, float>(origin, minDist, maxDist);
+		}
+	}
+
+	private class PreprocessedData
+	{
+		public Rect[] preprocessedElementRects;
+	}
+
+	public SpawnFilter Filter = new SpawnFilter();
+
+	public float FilterCutoff;
+
+	public bool aboveWater;
+
+	public float MaxSlopeRadius;
+
+	public float MaxSlopeDegrees = 90f;
+
+	public float CheckSphereRadius;
+
+	public LayerMask CheckSphereMask;
+
+	private Vector3 _origin;
+
+	private Vector3 _area;
+
+	private ByteQuadtree _quadtree = new ByteQuadtree();
+
+	private Dictionary<InputValuesIdentifierData, PreprocessedData> _processedValuesCache = new Dictionary<InputValuesIdentifierData, PreprocessedData>();
+
+	private bool isInitialized;
+
+	private static WorldPositionGenerator precalculatePositionsInstance;
+
+	private static int res;
+
+	private static byte[] map;
+
+	[ThreadStatic]
+	private static float factor;
+
+	private static Action<int, int> _actionSlopeCheck;
+
+	private static bool isPrecalculating;
+
+	private static Action<int, int> actionSlopeCheck => SlopeCheck;
+
+	public bool TrySample(Vector3 origin, float minDist, float maxDist, float minDist_2x, float maxDist_2x, out Vector3 position)
+	{
+		//IL_0016: Unknown result type (might be due to invalid IL or missing references)
+		//IL_001b: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0030: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0038: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0044: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0049: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0050: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0058: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0064: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0069: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0110: Unknown result type (might be due to invalid IL or missing references)
+		//IL_009f: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00a4: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00a8: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00b5: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00d7: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0205: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0181: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0186: Unknown result type (might be due to invalid IL or missing references)
+		//IL_018a: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0285: Unknown result type (might be due to invalid IL or missing references)
+		//IL_02f9: Unknown result type (might be due to invalid IL or missing references)
+		//IL_02fe: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0301: Unknown result type (might be due to invalid IL or missing references)
+		//IL_031c: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0312: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0314: Unknown result type (might be due to invalid IL or missing references)
+		TimeWarning val = TimeWarning.New("WorldPositionGenerator.TrySample", 0);
+		BufferList<Rect> blockedRects;
+		Rect[] potentialElementRects;
+		int elementsToCheckCount;
+		int endIdx;
+		try
+		{
+			position = Vector3.zero;
+			if (!isInitialized)
+			{
+				PrecalculatePositions(this);
+			}
+			Rect inclusion = new Rect(origin.x - maxDist, origin.z - maxDist, maxDist_2x, maxDist_2x);
+			Rect exclusion = new Rect(origin.x - minDist, origin.z - minDist, minDist_2x, minDist_2x);
+			blockedRects = Pool.Get<BufferList<Rect>>();
+			Rect val3 = default(Rect);
+			foreach (ListHashSet<Vector3> value2 in BaseMission.blockedPoints.Values)
+			{
+				for (int i = 0; i < value2.Count; i++)
+				{
+					Vector3 val2 = value2[i];
+					((Rect)(ref val3))..ctor(val2.x - 10f, val2.z - 10f, 20f, 20f);
+					blockedRects.Add(val3);
+				}
+			}
+			bool result = false;
+			List<ByteQuadtree.Element> elementsBuffer;
+			if (_processedValuesCache.TryGetValue(new InputValuesIdentifierData(origin, minDist, maxDist), out var value))
+			{
+				potentialElementRects = value.preprocessedElementRects;
+			}
+			else
+			{
+				elementsBuffer = Pool.Get<List<ByteQuadtree.Element>>();
+				List<Rect> list = Pool.Get<List<Rect>>();
+				elementsBuffer.Add(_quadtree.Root);
+				for (int j = 0; j < elementsBuffer.Count; j++)
+				{
+					ByteQuadtree.Element element = elementsBuffer[j];
+					if (element.IsLeaf)
+					{
+						Rect elementRect = GetElementRect(element);
+						list.Add(elementRect);
+						continue;
+					}
+					ListEx.RemoveUnordered<ByteQuadtree.Element>(elementsBuffer, j--);
+					EvaluateElement(element.Child1);
+					EvaluateElement(element.Child2);
+					EvaluateElement(element.Child3);
+					EvaluateElement(element.Child4);
+				}
+				InputValuesIdentifierData key = new InputValuesIdentifierData(origin, minDist, maxDist);
+				_processedValuesCache.Add(key, new PreprocessedData
+				{
+					preprocessedElementRects = list.ToArray()
+				});
+				potentialElementRects = _processedValuesCache[key].preprocessedElementRects;
+				Pool.FreeUnmanaged<ByteQuadtree.Element>(ref elementsBuffer);
+				Pool.FreeUnmanaged<Rect>(ref list);
+				if (_processedValuesCache.Count > 16)
+				{
+					Debug.LogWarning((object)(string.Format("{0} {1} added a new preprocessed values cache for input values origin: {2}, minDist: {3}, maxDist: {4} bringing total number of preprocessed value instances to {5}. ", "WorldPositionGenerator", ((Object)this).name, origin, minDist, maxDist, _processedValuesCache.Count) + "This means that either this server either has many potential origin points for this WorldPositionGenerator, or the origin points are moving."));
+				}
+			}
+			elementsToCheckCount = potentialElementRects.Length;
+			endIdx = elementsToCheckCount;
+			while (elementsToCheckCount > 0)
+			{
+				int num = Random.Range(0, endIdx);
+				Rect val4 = potentialElementRects[num];
+				if (IsCandidateValid(val4, out var foundPosition2))
+				{
+					result = true;
+					position = foundPosition2;
+					break;
+				}
+				DiscardCandidate_End(val4, num);
+			}
+			Pool.FreeUnmanaged<Rect>(ref blockedRects);
+			return result;
+			void EvaluateElement(ByteQuadtree.Element child)
+			{
+				//IL_000c: Unknown result type (might be due to invalid IL or missing references)
+				//IL_0011: Unknown result type (might be due to invalid IL or missing references)
+				//IL_0015: Unknown result type (might be due to invalid IL or missing references)
+				//IL_002a: Unknown result type (might be due to invalid IL or missing references)
+				//IL_003e: Unknown result type (might be due to invalid IL or missing references)
+				if (child.Value != 0)
+				{
+					Rect elementRect2 = GetElementRect(child);
+					if (((Rect)(ref elementRect2)).Overlaps(inclusion) && (!((Rect)(ref exclusion)).Contains(((Rect)(ref elementRect2)).min) || !((Rect)(ref exclusion)).Contains(((Rect)(ref elementRect2)).max)))
+					{
+						elementsBuffer.Add(child);
+					}
+				}
+			}
+		}
+		finally
+		{
+			((IDisposable)val)?.Dispose();
+		}
+		void DiscardCandidate_End(Rect candidate, int candidateIdx)
+		{
+			//IL_001c: Unknown result type (might be due to invalid IL or missing references)
+			//IL_0021: Unknown result type (might be due to invalid IL or missing references)
+			//IL_0029: Unknown result type (might be due to invalid IL or missing references)
+			//IL_002a: Unknown result type (might be due to invalid IL or missing references)
+			//IL_003b: Unknown result type (might be due to invalid IL or missing references)
+			//IL_003c: Unknown result type (might be due to invalid IL or missing references)
+			endIdx--;
+			Rect val8 = potentialElementRects[endIdx];
+			potentialElementRects[candidateIdx] = val8;
+			potentialElementRects[endIdx] = candidate;
+			elementsToCheckCount--;
+		}
+		bool IsCandidateValid(Rect rect, out Vector3 foundPosition)
+		{
+			//IL_000d: Unknown result type (might be due to invalid IL or missing references)
+			//IL_0012: Unknown result type (might be due to invalid IL or missing references)
+			//IL_00b2: Unknown result type (might be due to invalid IL or missing references)
+			//IL_00b7: Unknown result type (might be due to invalid IL or missing references)
+			//IL_00bc: Unknown result type (might be due to invalid IL or missing references)
+			//IL_00c5: Unknown result type (might be due to invalid IL or missing references)
+			//IL_00d1: Unknown result type (might be due to invalid IL or missing references)
+			//IL_007f: Unknown result type (might be due to invalid IL or missing references)
+			//IL_0086: Unknown result type (might be due to invalid IL or missing references)
+			//IL_0095: Unknown result type (might be due to invalid IL or missing references)
+			//IL_009a: Unknown result type (might be due to invalid IL or missing references)
+			//IL_009f: Unknown result type (might be due to invalid IL or missing references)
+			//IL_00a4: Unknown result type (might be due to invalid IL or missing references)
+			//IL_00a9: Unknown result type (might be due to invalid IL or missing references)
+			//IL_00f0: Unknown result type (might be due to invalid IL or missing references)
+			//IL_00f2: Unknown result type (might be due to invalid IL or missing references)
+			//IL_00f9: Unknown result type (might be due to invalid IL or missing references)
+			//IL_0030: Unknown result type (might be due to invalid IL or missing references)
+			//IL_0035: Unknown result type (might be due to invalid IL or missing references)
+			//IL_003a: Unknown result type (might be due to invalid IL or missing references)
+			//IL_0119: Unknown result type (might be due to invalid IL or missing references)
+			//IL_010c: Unknown result type (might be due to invalid IL or missing references)
+			//IL_004a: Unknown result type (might be due to invalid IL or missing references)
+			//IL_0126: Unknown result type (might be due to invalid IL or missing references)
+			//IL_012b: Unknown result type (might be due to invalid IL or missing references)
+			//IL_0131: Unknown result type (might be due to invalid IL or missing references)
+			TimeWarning val5 = TimeWarning.New("WorldPositionGenerator.IsCandidateValid", 0);
+			try
+			{
+				foundPosition = Vector3.zero;
+				if (blockedRects.Count > 0)
+				{
+					for (int k = 0; k < blockedRects.Count; k++)
+					{
+						Rect val6 = blockedRects[k];
+						if (((Rect)(ref val6)).Contains(((Rect)(ref rect)).min) && ((Rect)(ref val6)).Contains(((Rect)(ref rect)).max))
+						{
+							return false;
+						}
+					}
+				}
+				if (CheckSphereRadius <= float.Epsilon)
+				{
+					foundPosition = Vector3Ex.XZ3D(((Rect)(ref rect)).min + ((Rect)(ref rect)).size * new Vector2(Random.value, Random.value));
+				}
+				else
+				{
+					Vector3 val7 = Vector3Ex.XZ3D(((Rect)(ref rect)).center);
+					val7.y = TerrainMeta.HeightMap.GetHeight(val7);
+					if (Physics.CheckSphere(val7, CheckSphereRadius, ((LayerMask)(ref CheckSphereMask)).value))
+					{
+						return false;
+					}
+					foundPosition = val7;
+				}
+				foundPosition = Vector3Ex.WithY(foundPosition, aboveWater ? WaterLevel.GetWaterOrTerrainSurface(foundPosition, waves: false, volumes: false) : TerrainMeta.HeightMap.GetHeight(foundPosition));
+				return BaseMission.PositionGenerator.TryAlignToGround(foundPosition, out foundPosition);
+			}
+			finally
+			{
+				((IDisposable)val5)?.Dispose();
+			}
+		}
+	}
+
+	private Rect GetElementRect(ByteQuadtree.Element element)
+	{
+		//IL_0018: Unknown result type (might be due to invalid IL or missing references)
+		//IL_001e: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0023: Unknown result type (might be due to invalid IL or missing references)
+		//IL_002f: Unknown result type (might be due to invalid IL or missing references)
+		//IL_004d: Unknown result type (might be due to invalid IL or missing references)
+		//IL_007a: Unknown result type (might be due to invalid IL or missing references)
+		int num = 1 << element.Depth;
+		float num2 = 1f / (float)num;
+		Vector2 val = element.Coords * num2;
+		return new Rect(_origin.x + val.x * _area.x, _origin.z + val.y * _area.z, _area.x * num2, _area.z * num2);
+	}
+
+	private static void SlopeCheck(int slopeX, int slopeZ)
+	{
+		if (TerrainMeta.HeightMap.GetSlope(slopeX, slopeZ) > precalculatePositionsInstance.MaxSlopeDegrees)
+		{
+			factor = 0f;
+		}
+	}
+
+	public static void PrecalculatePositions(WorldPositionGenerator positionGenerator)
+	{
+		//IL_00b1: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00b6: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00c0: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00c5: Unknown result type (might be due to invalid IL or missing references)
+		if (positionGenerator.isInitialized)
+		{
+			return;
+		}
+		if (isPrecalculating)
+		{
+			Debug.LogWarning((object)("Attempted to precalculate positions for " + ((Object)positionGenerator).name + " while already precalculating " + ((Object)precalculatePositionsInstance).name));
+			return;
+		}
+		precalculatePositionsInstance = positionGenerator;
+		isPrecalculating = true;
+		TimeWarning val = TimeWarning.New("WorldPositionGenerator.PrecalculatePositions", 0);
+		try
+		{
+			if (map == null)
+			{
+				res = Mathf.NextPowerOfTwo((int)((float)World.Size * 0.25f));
+				map = new byte[res * res];
+			}
+			Parallel.For(0, res, delegate(int z)
+			{
+				for (int i = 0; i < res; i++)
+				{
+					float normX = ((float)i + 0.5f) / (float)res;
+					float normZ = ((float)z + 0.5f) / (float)res;
+					factor = precalculatePositionsInstance.Filter.GetFactor(normX, normZ);
+					if (factor > 0f && precalculatePositionsInstance.MaxSlopeRadius > 0f)
+					{
+						TerrainMeta.HeightMap.ForEach(normX, normZ, precalculatePositionsInstance.MaxSlopeRadius / (float)res, actionSlopeCheck);
+					}
+					map[z * res + i] = (byte)((factor >= precalculatePositionsInstance.FilterCutoff) ? (255f * factor) : 0f);
+				}
+			});
+			precalculatePositionsInstance._origin = TerrainMeta.Position;
+			precalculatePositionsInstance._area = TerrainMeta.Size;
+			byte[] baseValues = map.ToArray();
+			precalculatePositionsInstance._quadtree.UpdateValues(baseValues);
+			precalculatePositionsInstance.isInitialized = true;
+			isPrecalculating = false;
+		}
+		finally
+		{
+			((IDisposable)val)?.Dispose();
+		}
+	}
+}
+
+
+using System;
+using UnityEngine;
+
+private struct InputValuesIdentifierData : IEquatable<InputValuesIdentifierData>
+{
+	public Vector3 origin;
+
+	public float minDist;
+
+	public float maxDist;
+
+	public InputValuesIdentifierData(Vector3 origin, float minDist, float maxDist)
+	{
+		//IL_0001: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0002: Unknown result type (might be due to invalid IL or missing references)
+		this.origin = origin;
+		this.minDist = minDist;
+		this.maxDist = maxDist;
+	}
+
+	public bool Equals(InputValuesIdentifierData other)
+	{
+		//IL_0001: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0007: Unknown result type (might be due to invalid IL or missing references)
+		if (origin == other.origin && Mathf.Approximately(minDist, other.minDist))
+		{
+			return Mathf.Approximately(maxDist, other.maxDist);
+		}
+		return false;
+	}
+
+	public override bool Equals(object obj)
+	{
+		if (obj is InputValuesIdentifierData other)
+		{
+			return Equals(other);
+		}
+		return false;
+	}
+
+	public override int GetHashCode()
+	{
+		//IL_0001: Unknown result type (might be due to invalid IL or missing references)
+		return HashCode.Combine<Vector3, float, float>(origin, minDist, maxDist);
+	}
+}
+
+
+using UnityEngine;
+
+private class PreprocessedData
+{
+	public Rect[] preprocessedElementRects;
+}
+
+
+using UnityEngine;
+
+public class DelayedEnable : MonoBehaviour, IClientComponent
+{
+	public GameObject Target;
+}
+
+
+using Facepunch;
+using ProtoBuf;
+using UnityEngine;
+
+public class CargoShipContainer : BaseEntity
+{
+	public GameObject[] DressingVariants;
+
+	public const Flags Descending = Flags.Reserved1;
+
+	public const Flags Targeted = Flags.Reserved2;
+
+	private int dressingVariant;
+
+	public override float AntiHackVelocity()
+	{
+		return 1f;
+	}
+
+	public override void PreInitShared()
+	{
+		base.PreInitShared();
+		AssignVariant();
+	}
+
+	public override void ServerInit()
+	{
+		base.ServerInit();
+		UpdateDressingVariant();
+	}
+
+	public override void PostMapEntitySpawn()
+	{
+		base.PostMapEntitySpawn();
+		UpdateDressingVariant();
+	}
+
+	public override void Save(SaveInfo info)
+	{
+		base.Save(info);
+		info.msg.cargoShipContainer = Pool.Get<CargoShipContainer>();
+		info.msg.cargoShipContainer.dressingVariant = dressingVariant;
+	}
+
+	private void AssignVariant()
+	{
+		dressingVariant = Random.Range(0, DressingVariants.Length);
+	}
+
+	public void ToggleHurtCollider(bool state)
+	{
+		using FlagsUpdateScope flagsUpdateScope = StartSetFlags(FlagsUpdateMode.SendNetworkUpdate);
+		flagsUpdateScope.Set(Flags.Reserved1, state);
+	}
+
+	public void SetTargeted(bool state)
+	{
+		using FlagsUpdateScope flagsUpdateScope = StartSetFlags(FlagsUpdateMode.SendNetworkUpdate);
+		flagsUpdateScope.Set(Flags.Reserved2, state);
+	}
+
+	public override void Load(LoadInfo info)
+	{
+		base.Load(info);
+		if (info.msg.cargoShipContainer != null)
+		{
+			dressingVariant = info.msg.cargoShipContainer.dressingVariant;
+		}
+		UpdateDressingVariant();
+	}
+
+	private void UpdateDressingVariant()
+	{
+		for (int i = 0; i < DressingVariants.Length; i++)
+		{
+			DressingVariants[i].SetActive(dressingVariant == i);
+		}
+	}
+
+	public override bool ShouldInheritNetworkGroup()
+	{
+		return false;
+	}
+}
+
+
+public class CargoShipContainerSounds : FacepunchBehaviour, IClientComponent
+{
+	public SoundDefinition liftDef;
+
+	public SoundDefinition dropDef;
+}
+
+
+using UnityEngine;
+
+public class HarborBridgeSounds : MonoBehaviour, IClientComponent
+{
+	public HarborProximityEntity bridge;
+
+	public SoundDefinition rootRotationLoopDef;
+
+	public SoundDefinition rootRotationStartDef;
+
+	public SoundDefinition rootRotationStopDef;
+}
+
+
+using UnityEngine;
+
+public class HarborCrane : HarborProximityEntity
+{
+	public Transform CraneGrab;
+
+	public Transform ArmRoot;
+
+	public Transform ArmSupportLower;
+
+	public Transform ArmSupportUpper;
+
+	public TransformLineRenderer[] LineRenderers;
+
+	protected void UpdateArmSupports(Vector3 fwd)
+	{
+		//IL_0023: Unknown result type (might be due to invalid IL or missing references)
+		//IL_002e: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0033: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0038: Unknown result type (might be due to invalid IL or missing references)
+		//IL_003b: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0040: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0047: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0048: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0049: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0059: Unknown result type (might be due to invalid IL or missing references)
+		//IL_005a: Unknown result type (might be due to invalid IL or missing references)
+		//IL_005b: Unknown result type (might be due to invalid IL or missing references)
+		if (!((Object)(object)ArmSupportUpper == (Object)null) && !((Object)(object)ArmSupportLower == (Object)null))
+		{
+			Vector3 val = ArmSupportUpper.position - ArmSupportLower.position;
+			Vector3 normalized = ((Vector3)(ref val)).normalized;
+			ArmSupportLower.rotation = Quaternion.LookRotation(fwd, normalized);
+			ArmSupportUpper.rotation = Quaternion.LookRotation(fwd, normalized);
+		}
+	}
+}
+
+
+using System;
 using System.Collections.Generic;
 using Facepunch;
 using Facepunch.Extend;
@@ -1221,7 +2429,7 @@ using System.Collections.Generic;
 using Facepunch;
 using UnityEngine;
 
-public class ScientistBoatOilrigManager : BaseEntity
+public class ScientistBoatOilrigManager : MonoBehaviour
 {
 	private BoatGroupSpawner _spawner;
 
@@ -2421,7 +3629,7 @@ public enum ConditionType
 
 using UnityEngine;
 
-public class DisableIfDlssNotSupported : MonoBehaviour
+public class DisableIfDLSSNotSupported : MonoBehaviour
 {
 	private void OnEnable()
 	{
@@ -2622,7 +3830,7 @@ public class NetworkCryptographyServer : NetworkCryptography
 		}
 		else
 		{
-			Craptography.XOR(2632u, src, ref dst);
+			Craptography.XOR(2633u, src, ref dst);
 		}
 	}
 
@@ -2634,7 +3842,7 @@ public class NetworkCryptographyServer : NetworkCryptography
 		}
 		else
 		{
-			Craptography.XOR(2632u, src, ref dst);
+			Craptography.XOR(2633u, src, ref dst);
 		}
 	}
 }
@@ -2647,19 +3855,40 @@ using UnityEngine;
 
 public static class NetworkProfiler
 {
-	private static void SetupProfile()
+	[RuntimeInitializeOnLoadMethod(/*Could not decode attribute arguments.*/)]
+	private static void InstallResolvers()
 	{
-		PacketProfiler.enabled = true;
-		PacketProfiler.detailedProfiling = true;
-		PacketProfiler.Reset();
+		NetProfileCapture.NameResolver = StringPool.Get;
+		NetProfileCapture.PrefabResolver = ResolvePrefabId;
+	}
+
+	private static uint ResolvePrefabId(ulong entityId, bool serverRealm)
+	{
+		//IL_0010: Unknown result type (might be due to invalid IL or missing references)
+		NetworkableId uid = default(NetworkableId);
+		((NetworkableId)(ref uid))..ctor(entityId);
+		if (serverRealm)
+		{
+			BaseNetworkable baseNetworkable = BaseNetworkable.serverEntities.Find(uid);
+			if (!((Object)(object)baseNetworkable != (Object)null))
+			{
+				return 0u;
+			}
+			return baseNetworkable.prefabID;
+		}
+		return 0u;
 	}
 
 	private static void ExportProfile()
 	{
-		Export.ToFile(Export.CreateSnapshot());
-		PacketProfiler.enabled = false;
-		PacketProfiler.detailedProfiling = false;
-		PacketProfiler.Reset();
+		NetProfileSnapshot val = NetProfileCapture.CreateSnapshot();
+		NetProfileCapture.Stop();
+		if (val != null)
+		{
+			string text = NetProfileSnapshot.DefaultPath();
+			val.Save(text);
+			Debug.Log((object)("[NetworkProfiler] Exported profile to: " + text));
+		}
 	}
 
 	[ServerVar(Help = "networkprofiler.serverprofile [time to profile(in seconds), min(0.1), max(1000), float]", ServerAdmin = true)]
@@ -2667,7 +3896,7 @@ public static class NetworkProfiler
 	{
 		float @float = arg.GetFloat(0, 0f);
 		@float = Mathf.Clamp(@float, 0.1f, 1000f);
-		SetupProfile();
+		NetProfileCapture.Start(@float);
 		Chat.Broadcast($"Server is taking a network snapshot for {@float} seconds...", "SERVER", "#eee", 0uL);
 		InvokeHandler.Invoke((Behaviour)(object)SingletonComponent<InvokeHandler>.Instance, (Action)delegate
 		{
@@ -4542,16 +5771,16 @@ public static class ServerOcclusion
 		NativeList<int> cellsToCheck = default(NativeList<int>);
 		cellsToCheck..ctor(1024, AllocatorHandle.op_Implicit((Allocator)3));
 		GenerateOcclusionBroadPhase(cellsToCheck, num);
-		int num2 = (cellsToCheck.Length + 32000 - 1) / 32000;
+		int num2 = (cellsToCheck.Length + 128 - 1) / 128;
 		NativeList<SubGrid> subGridCells = default(NativeList<SubGrid>);
-		subGridCells..ctor(16384000, AllocatorHandle.op_Implicit((Allocator)3));
+		subGridCells..ctor(65536, AllocatorHandle.op_Implicit((Allocator)3));
 		Debug.Log((object)$"Processing {num2} batches({cellsToCheck.Length} broadphase cells total)...");
 		for (int i = 0; i < num2; i++)
 		{
 			_ = stopwatch.Elapsed.TotalSeconds;
 			subGridCells.Clear();
-			int num3 = i * 32000;
-			int num4 = Math.Min(num3 + 32000, cellsToCheck.Length);
+			int num3 = i * 128;
+			int num4 = Math.Min(num3 + 128, cellsToCheck.Length);
 			for (int j = num3; j < num4; j++)
 			{
 				Grid grid = Grid.FromIndex(cellsToCheck[j]);
@@ -4679,7 +5908,7 @@ public static class ServerOcclusion
 			calculateSubGridSamplePointsJob.GridOffsets = val.AsReadOnly();
 			calculateSubGridSamplePointsJob.CellOffset = new Vector3((float)SubGrid.GetOffset(TerrainMeta.Size.x), (float)SubGrid.GetOffset(MaxY), (float)SubGrid.GetOffset(TerrainMeta.Size.z));
 			CalculateSubGridSamplePointsJob calculateSubGridSamplePointsJob2 = calculateSubGridSamplePointsJob;
-			int batchSize = GamePhysics.GetBatchSize(subGridCells.Length);
+			int batchSize = ThreadUtils.GetBatchSize(subGridCells.Length, 4, 64);
 			int length = subGridCells.Length;
 			JobHandle val2 = default(JobHandle);
 			val2 = IJobForExtensions.ScheduleParallel<CalculateSubGridSamplePointsJob>(calculateSubGridSamplePointsJob2, length, batchSize, val2);
@@ -6298,8 +7527,8 @@ public class RadialBlur : PostProcessEffectSettings
 		value = 0f
 	};
 
-	[Range(0f, 3f)]
 	[Header("Blur Quality")]
+	[Range(0f, 3f)]
 	public FixedIntParameter downsample = new FixedIntParameter
 	{
 		value = 1
@@ -12838,7 +14067,7 @@ public static class World
 			{
 				return $"{Name}_{MurmurHashEx.MurmurHashUnsigned(Url)}.map";
 			}
-			return Name.Replace(" ", "").ToLower() + "." + Size + "." + Seed + "." + 287 + ".map";
+			return Name.Replace(" ", "").ToLower() + "." + Size + "." + Seed + "." + 288 + ".map";
 		}
 	}
 
@@ -12862,9 +14091,9 @@ public static class World
 			}
 			if (CanLoadFromUrl())
 			{
-				return Name + "." + 287 + ".sav";
+				return Name + "." + 288 + ".sav";
 			}
-			return Name.Replace(" ", "").ToLower() + "." + Size + "." + Seed + "." + 287 + ".sav";
+			return Name.Replace(" ", "").ToLower() + "." + Size + "." + Seed + "." + 288 + ".sav";
 		}
 	}
 
@@ -12914,7 +14143,7 @@ public static class World
 			return;
 		}
 		Regex regex1 = new Regex("proceduralmap\\.[0-9]+\\.[0-9]+\\.[0-9]+(_occlusion)*\\.(map|dat)");
-		Regex regex2 = new Regex("\\.[0-9]+\\.[0-9]+\\." + 287 + "+(_occlusion)*\\.(map|dat)");
+		Regex regex2 = new Regex("\\.[0-9]+\\.[0-9]+\\." + 288 + "+(_occlusion)*\\.(map|dat)");
 		foreach (string item in new string[2] { "*.map", "*.dat" }.SelectMany((string ext) => from path in Directory.GetFiles(MapFolderName, ext)
 			where regex1.IsMatch(path) && !regex2.IsMatch(path)
 			select path))
@@ -12951,7 +14180,7 @@ public static class World
 
 	private static string SeedIdentifier()
 	{
-		return SystemInfo.deviceUniqueIdentifier + "_" + 287 + "_" + Server.identity;
+		return SystemInfo.deviceUniqueIdentifier + "_" + 288 + "_" + Server.identity;
 	}
 
 	public static void InitSalt(int salt)
@@ -15707,6 +16936,9 @@ public class TerrainAnchorRingGenerator : MonoBehaviour, IEditorComponent
 
 	public float PlaneHeight;
 
+	[Tooltip("Raises (or lowers, if negative) every generated anchor by this much relative to the slice plane, without moving the slice itself - the silhouette is still taken at PlaneHeight, so the gizmo shows the anchor ring floating off the outline by exactly this amount. Lifting the anchors sinks the rock into the terrain by the same distance, since the solve seats the root so the anchors meet the ground.\n\nNot the same as AnchorOffset: that is a slope-aware tolerance, scaled by slopeScale and always vertical. This is baked into the anchor's local position, so it rotates with the rock and shifts the sample points sideways on a tilted one.")]
+	public float AnchorLift;
+
 	public float StandOff = 3f;
 
 	public float Spacing = 4f;
@@ -15725,6 +16957,581 @@ public class TerrainAnchorRingGenerator : MonoBehaviour, IEditorComponent
 
 	[HideInInspector]
 	public List<TerrainAnchor> GeneratedAnchors = new List<TerrainAnchor>();
+
+	[HideInInspector]
+	public TerrainFootprint GeneratedFootprint;
+}
+
+
+using System;
+using UnityEngine;
+
+public class TerrainFootprint : PrefabAttribute
+{
+	private delegate void BandTexel(int x, int z, float lift, bool inside);
+
+	[HideInInspector]
+	public Vector3[] Ring = Array.Empty<Vector3>();
+
+	[HideInInspector]
+	public Vector3 Center = Vector3.zero;
+
+	[HideInInspector]
+	public int[] RunStarts = Array.Empty<int>();
+
+	[HideInInspector]
+	public bool[] RunClosed = Array.Empty<bool>();
+
+	[Tooltip("Where the fill stops, relative to the ring. 0 lands the ground exactly on the line, which is the point of drawing the line where you want the ground: the fill can then never come up above it. Positive buries the base that much deeper, negative leaves it standing that much prouder.\n\nMetres, taken literally - not multiplied by the prefab's scale or widened by tilt, so what you type is what you get on every instance.")]
+	[Header("Seating")]
+	public float FillOffset;
+
+	[Tooltip("Safety ceiling on how far any one point of ground may be raised, in metres. Keep it ABOVE the deepest gutter you want bridged - the plane the ring lies in is already the natural ceiling, so this is a backstop rather than a tuning dial.\n\nSet it too low and it does real damage: the shallow ground either side of a gutter reaches the plane while the gutter itself stops short, leaving a step between them. A 2.5 m gutter under a footprint clamped at 1.5 m leaves a 1.65 m wall; at 4 m it comes out flush.")]
+	[Header("Fill")]
+	public float MaxFill = 4f;
+
+	[Tooltip("Reject the placement outright when the ground has to come up further than this to meet the rock, in metres. 0 disables rejection, which is the default: the footprint then only ever fills, and cannot change which rocks the generator spawns.")]
+	public float RejectAboveGap;
+
+	[Tooltip("How far inward from the ring the fill reaches when FillInterior is off. The fill eases to nothing across this distance rather than stopping dead, so the band still meets untouched ground smoothly.")]
+	public float RimWidth = 2f;
+
+	[Tooltip("Falloff distance outside the ring, so filled ground meets untouched terrain without a lip.")]
+	public float Feather = 3f;
+
+	[Tooltip("Strength of the raise. Below 1 the fill only partially closes the gap.")]
+	[Range(0f, 1f)]
+	public float Opacity = 1f;
+
+	[Tooltip("Fill the whole interior of a closed ring, not just the band at its edge. On is almost always right: a gutter that runs under the rock has to be filled all the way across, or its two banks get raised and the trench between them is left behind as a pair of shoulders. Turn it off only for arches and overhangs, whose passable space this would seal.")]
+	public bool FillInterior = true;
+
+	[Header("Tilt")]
+	[Tooltip("Above this much tilt the footprint does nothing at all - no gap test, no fill - and placement behaves exactly as it did before. A rock aligned to steep terrain swings its body out past the captured ring by roughly its height times sin(tilt), so the silhouette stops describing where it really meets the ground.\n\nWhat that costs above the gate is coverage, not correctness - the fill simply does not reach ground the rock overhangs - so set it generously. Measured across 278 placed rocks on a 4.5k map, tilt ran 2-34 degrees with a median of 16, so 25 was standing down on the steepest 9% for no benefit. Steeper biomes will skew higher than that sample.")]
+	public float MaxTiltDegrees = 35f;
+
+	[NonSerialized]
+	private Vector3[] rootRing;
+
+	[NonSerialized]
+	private Vector3 rootCenter;
+
+	[NonSerialized]
+	private bool rootRingValid;
+
+	public bool HasRing
+	{
+		get
+		{
+			if (Ring != null)
+			{
+				return Ring.Length >= 2;
+			}
+			return false;
+		}
+	}
+
+	public int RunCount
+	{
+		get
+		{
+			if (RunStarts == null || RunStarts.Length == 0)
+			{
+				return 1;
+			}
+			return RunStarts.Length;
+		}
+	}
+
+	public float GetTilt(Quaternion rotation)
+	{
+		//IL_0000: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0005: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0006: Unknown result type (might be due to invalid IL or missing references)
+		//IL_000b: Unknown result type (might be due to invalid IL or missing references)
+		return Vector3.Angle(Vector3.up, rotation * Vector3.up);
+	}
+
+	public bool IsActive(Quaternion rotation)
+	{
+		//IL_0009: Unknown result type (might be due to invalid IL or missing references)
+		if (HasRing)
+		{
+			return GetTilt(rotation) <= MaxTiltDegrees;
+		}
+		return false;
+	}
+
+	public void InvalidateRootRing()
+	{
+		rootRingValid = false;
+	}
+
+	public void GetRun(int run, out int start, out int end, out bool closed)
+	{
+		int num = ((Ring != null) ? Ring.Length : 0);
+		if (RunStarts == null || RunStarts.Length == 0)
+		{
+			start = 0;
+			end = num;
+			closed = true;
+		}
+		else
+		{
+			start = Mathf.Clamp(RunStarts[run], 0, num);
+			end = ((run + 1 < RunStarts.Length) ? Mathf.Clamp(RunStarts[run + 1], start, num) : num);
+			closed = RunClosed != null && run < RunClosed.Length && RunClosed[run];
+		}
+	}
+
+	private void EnsureRootRing()
+	{
+		//IL_005c: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0062: Unknown result type (might be due to invalid IL or missing references)
+		//IL_006e: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0073: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0078: Unknown result type (might be due to invalid IL or missing references)
+		//IL_007d: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0093: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0099: Unknown result type (might be due to invalid IL or missing references)
+		//IL_009f: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00a4: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00a9: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00ae: Unknown result type (might be due to invalid IL or missing references)
+		if (!rootRingValid || rootRing == null || rootRing.Length != Ring.Length)
+		{
+			if (rootRing == null || rootRing.Length != Ring.Length)
+			{
+				rootRing = (Vector3[])(object)new Vector3[Ring.Length];
+			}
+			for (int i = 0; i < Ring.Length; i++)
+			{
+				rootRing[i] = worldPosition + worldRotation * Ring[i];
+			}
+			rootCenter = worldPosition + worldRotation * Center;
+			rootRingValid = true;
+		}
+	}
+
+	public float MeasureGap(Vector3 pos, Quaternion rot, Vector3 scale)
+	{
+		//IL_0012: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0013: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0014: Unknown result type (might be due to invalid IL or missing references)
+		float worst = 0f;
+		ForEachBandTexel(pos, rot, scale, delegate(int x, int z, float lift, bool inside)
+		{
+			if (inside && lift > worst)
+			{
+				worst = lift;
+			}
+		});
+		return worst;
+	}
+
+	public void Fill(Vector3 pos, Quaternion rot, Vector3 scale)
+	{
+		//IL_0050: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0051: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0052: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00aa: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00ab: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00ac: Unknown result type (might be due to invalid IL or missing references)
+		if (Opacity <= 0f)
+		{
+			return;
+		}
+		TerrainHeightMap heightMap = TerrainMeta.HeightMap;
+		if (!Object.op_Implicit((Object)(object)heightMap))
+		{
+			return;
+		}
+		int minX = int.MaxValue;
+		int maxX = int.MinValue;
+		int minZ = int.MaxValue;
+		int maxZ = int.MinValue;
+		ForEachBandTexel(pos, rot, scale, delegate(int x, int z, float lift, bool inside)
+		{
+			if (!(lift <= 0f))
+			{
+				if (x < minX)
+				{
+					minX = x;
+				}
+				if (x > maxX)
+				{
+					maxX = x;
+				}
+				if (z < minZ)
+				{
+					minZ = z;
+				}
+				if (z > maxZ)
+				{
+					maxZ = z;
+				}
+			}
+		});
+		if (minX > maxX)
+		{
+			return;
+		}
+		int width = maxX - minX + 1;
+		float[] lifts = new float[width * (maxZ - minZ + 1)];
+		ForEachBandTexel(pos, rot, scale, delegate(int x, int z, float lift, bool inside)
+		{
+			if (!(lift <= 0f))
+			{
+				int num = (z - minZ) * width + (x - minX);
+				if (lift > lifts[num])
+				{
+					lifts[num] = lift;
+				}
+			}
+		});
+		for (int i = minZ; i <= maxZ; i++)
+		{
+			for (int j = minX; j <= maxX; j++)
+			{
+				float num2 = lifts[(i - minZ) * width + (j - minX)];
+				if (!(num2 <= 0f))
+				{
+					float y = heightMap.GetHeight(j, i) + Mathf.Min(num2 * Opacity, MaxFill);
+					heightMap.RaiseHeight(j, i, TerrainMeta.NormalizeY(y), 1f);
+				}
+			}
+		}
+	}
+
+	private void ForEachBandTexel(Vector3 pos, Quaternion rot, Vector3 scale, BandTexel action)
+	{
+		//IL_0001: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0048: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0049: Unknown result type (might be due to invalid IL or missing references)
+		//IL_004e: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0053: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0055: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0069: Unknown result type (might be due to invalid IL or missing references)
+		//IL_006a: Unknown result type (might be due to invalid IL or missing references)
+		//IL_006c: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0071: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0072: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0077: Unknown result type (might be due to invalid IL or missing references)
+		//IL_007c: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0081: Unknown result type (might be due to invalid IL or missing references)
+		//IL_009b: Unknown result type (might be due to invalid IL or missing references)
+		//IL_009c: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00a5: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00aa: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00ab: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00b0: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00b5: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00ba: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0128: Unknown result type (might be due to invalid IL or missing references)
+		//IL_012d: Unknown result type (might be due to invalid IL or missing references)
+		//IL_013b: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0140: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0143: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0145: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0147: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0149: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0173: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0178: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0186: Unknown result type (might be due to invalid IL or missing references)
+		//IL_018b: Unknown result type (might be due to invalid IL or missing references)
+		//IL_018e: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0190: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0192: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0194: Unknown result type (might be due to invalid IL or missing references)
+		if (!IsActive(rot))
+		{
+			return;
+		}
+		TerrainHeightMap heightMap = TerrainMeta.HeightMap;
+		if (!Object.op_Implicit((Object)(object)heightMap))
+		{
+			return;
+		}
+		EnsureRootRing();
+		float fillOffset = FillOffset;
+		float rim = Mathf.Max(RimWidth, 0.01f);
+		float feather = Mathf.Max(Feather, 0.01f);
+		Vector3 val = rot * Vector3.up;
+		if (Mathf.Abs(val.y) < 0.0001f)
+		{
+			return;
+		}
+		Vector3 center = pos + rot * Vector3.Scale(rootCenter, scale);
+		Vector3[] array = (Vector3[])(object)new Vector3[Ring.Length];
+		for (int i = 0; i < Ring.Length; i++)
+		{
+			array[i] = pos + rot * Vector3.Scale(rootRing[i], scale);
+		}
+		for (int j = 0; j < RunCount; j++)
+		{
+			GetRun(j, out var start, out var end, out var closed);
+			int num = end - start;
+			if (num < 2)
+			{
+				continue;
+			}
+			bool flag = FillInterior && closed && num >= 3;
+			int num2 = (closed ? num : (num - 1));
+			for (int k = 0; k < num2; k++)
+			{
+				Vector3 a = array[start + k];
+				Vector3 b = array[start + (k + 1) % num];
+				SweepSegment(heightMap, a, b, center, val, fillOffset, rim, feather, flag, action);
+			}
+			if (flag)
+			{
+				for (int l = 0; l < num; l++)
+				{
+					Vector3 a2 = array[start + l];
+					Vector3 b2 = array[start + (l + 1) % num];
+					FanTriangle(heightMap, center, a2, b2, val, fillOffset, action);
+				}
+			}
+		}
+	}
+
+	private static float PlaneHeightAt(Vector3 normal, Vector3 center, float x, float z)
+	{
+		//IL_0000: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0006: Unknown result type (might be due to invalid IL or missing references)
+		//IL_000d: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0015: Unknown result type (might be due to invalid IL or missing references)
+		//IL_001c: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0025: Unknown result type (might be due to invalid IL or missing references)
+		return center.y - (normal.x * (x - center.x) + normal.z * (z - center.z)) / normal.y;
+	}
+
+	private static void SweepSegment(TerrainHeightMap heightmap, Vector3 a, Vector3 b, Vector3 center, Vector3 normal, float offset, float rim, float feather, bool interiorFilled, BandTexel action)
+	{
+		//IL_000e: Unknown result type (might be due to invalid IL or missing references)
+		//IL_000f: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0015: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0016: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0034: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0036: Unknown result type (might be due to invalid IL or missing references)
+		//IL_003c: Unknown result type (might be due to invalid IL or missing references)
+		//IL_003d: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0054: Unknown result type (might be due to invalid IL or missing references)
+		//IL_005a: Unknown result type (might be due to invalid IL or missing references)
+		//IL_005f: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0064: Unknown result type (might be due to invalid IL or missing references)
+		//IL_006b: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0071: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0076: Unknown result type (might be due to invalid IL or missing references)
+		//IL_007b: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0081: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0087: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0092: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0097: Unknown result type (might be due to invalid IL or missing references)
+		//IL_009c: Unknown result type (might be due to invalid IL or missing references)
+		//IL_009e: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00a4: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00af: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00b4: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00b9: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00bb: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00c1: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00cc: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00d1: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00d6: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00d8: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00de: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00e9: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00ee: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00f3: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0124: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0129: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0145: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0146: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0147: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0148: Unknown result type (might be due to invalid IL or missing references)
+		Vector3 inwardA = Inward(a, center);
+		Vector3 inwardB = Inward(b, center);
+		Vector3 v = a - inwardA * feather;
+		Vector3 v2 = b - inwardB * feather;
+		Vector3 v3 = a + inwardA * rim;
+		Vector3 v4 = b + inwardB * rim;
+		Vector2 ab = new Vector2(b.x - a.x, b.z - a.z);
+		float abSqr = ((Vector2)(ref ab)).sqrMagnitude;
+		ForEachQuad(heightmap, v, v2, v3, v4, delegate(int x, int z)
+		{
+			//IL_0052: Unknown result type (might be due to invalid IL or missing references)
+			//IL_0058: Unknown result type (might be due to invalid IL or missing references)
+			//IL_0070: Unknown result type (might be due to invalid IL or missing references)
+			//IL_0076: Unknown result type (might be due to invalid IL or missing references)
+			//IL_007c: Unknown result type (might be due to invalid IL or missing references)
+			//IL_0081: Unknown result type (might be due to invalid IL or missing references)
+			//IL_0085: Unknown result type (might be due to invalid IL or missing references)
+			//IL_008d: Unknown result type (might be due to invalid IL or missing references)
+			//IL_00a3: Unknown result type (might be due to invalid IL or missing references)
+			//IL_00a9: Unknown result type (might be due to invalid IL or missing references)
+			//IL_00af: Unknown result type (might be due to invalid IL or missing references)
+			//IL_00b4: Unknown result type (might be due to invalid IL or missing references)
+			//IL_00b6: Unknown result type (might be due to invalid IL or missing references)
+			//IL_00b8: Unknown result type (might be due to invalid IL or missing references)
+			//IL_00bf: Unknown result type (might be due to invalid IL or missing references)
+			//IL_00c6: Unknown result type (might be due to invalid IL or missing references)
+			//IL_013e: Unknown result type (might be due to invalid IL or missing references)
+			//IL_0144: Unknown result type (might be due to invalid IL or missing references)
+			float num = TerrainMeta.DenormalizeX(heightmap.Coordinate(x));
+			float num2 = TerrainMeta.DenormalizeZ(heightmap.Coordinate(z));
+			float num3 = ((abSqr > 1E-06f) ? Mathf.Clamp01(Vector2.Dot(new Vector2(num - a.x, num2 - a.z), ab) / abSqr) : 0f);
+			Vector3 val = Vector3.Lerp(a, b, num3);
+			Vector2 val2 = default(Vector2);
+			((Vector2)(ref val2))..ctor(num - val.x, num2 - val.z);
+			float magnitude = ((Vector2)(ref val2)).magnitude;
+			Vector3 val3 = Vector3.Lerp(inwardA, inwardB, num3);
+			bool flag = Vector2.Dot(val2, new Vector2(val3.x, val3.z)) >= 0f;
+			float num4 = ((!flag) ? Mathf.SmoothStep(0f, 1f, Mathf.Clamp01(1f - magnitude / feather)) : (interiorFilled ? 1f : Mathf.SmoothStep(1f, 0f, Mathf.Clamp01(magnitude / rim))));
+			if (!(num4 <= 0f))
+			{
+				float num5 = (PlaneHeightAt(normal, center, num, num2) + offset - heightmap.GetHeight(x, z)) * num4;
+				if (!(num5 <= 0f))
+				{
+					action(x, z, num5, flag);
+				}
+			}
+		});
+	}
+
+	private static void FanTriangle(TerrainHeightMap heightmap, Vector3 center, Vector3 a, Vector3 b, Vector3 normal, float offset, BandTexel action)
+	{
+		//IL_000e: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0010: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0016: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0017: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0033: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0038: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0039: Unknown result type (might be due to invalid IL or missing references)
+		ForEachTriangle(heightmap, center, a, b, delegate(int x, int z)
+		{
+			//IL_0025: Unknown result type (might be due to invalid IL or missing references)
+			//IL_002b: Unknown result type (might be due to invalid IL or missing references)
+			float x2 = TerrainMeta.DenormalizeX(heightmap.Coordinate(x));
+			float z2 = TerrainMeta.DenormalizeZ(heightmap.Coordinate(z));
+			float num = PlaneHeightAt(normal, center, x2, z2) + offset - heightmap.GetHeight(x, z);
+			if (!(num <= 0f))
+			{
+				action(x, z, num, inside: true);
+			}
+		});
+	}
+
+	private static void ForEachQuad(TerrainHeightMap heightmap, Vector3 v0, Vector3 v1, Vector3 v2, Vector3 v3, Action<int, int> action)
+	{
+		//IL_0000: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0001: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0002: Unknown result type (might be due to invalid IL or missing references)
+		//IL_001e: Unknown result type (might be due to invalid IL or missing references)
+		//IL_001f: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0020: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0021: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0010: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0011: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0012: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0013: Unknown result type (might be due to invalid IL or missing references)
+		if (SignedArea(v0, v1, v2) < 0f)
+		{
+			heightmap.ForEach(v0, v2, v1, v3, action);
+		}
+		else
+		{
+			heightmap.ForEach(v0, v1, v2, v3, action);
+		}
+	}
+
+	private static void ForEachTriangle(TerrainHeightMap heightmap, Vector3 v0, Vector3 v1, Vector3 v2, Action<int, int> action)
+	{
+		//IL_0000: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0001: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0002: Unknown result type (might be due to invalid IL or missing references)
+		//IL_001c: Unknown result type (might be due to invalid IL or missing references)
+		//IL_001d: Unknown result type (might be due to invalid IL or missing references)
+		//IL_001e: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0010: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0011: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0012: Unknown result type (might be due to invalid IL or missing references)
+		if (SignedArea(v0, v1, v2) < 0f)
+		{
+			heightmap.ForEach(v0, v2, v1, action);
+		}
+		else
+		{
+			heightmap.ForEach(v0, v1, v2, action);
+		}
+	}
+
+	private static float SignedArea(Vector3 a, Vector3 b, Vector3 c)
+	{
+		//IL_0000: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0006: Unknown result type (might be due to invalid IL or missing references)
+		//IL_000d: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0013: Unknown result type (might be due to invalid IL or missing references)
+		//IL_001b: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0021: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0028: Unknown result type (might be due to invalid IL or missing references)
+		//IL_002e: Unknown result type (might be due to invalid IL or missing references)
+		return (b.x - a.x) * (c.z - a.z) - (c.x - a.x) * (b.z - a.z);
+	}
+
+	private static Vector3 Inward(Vector3 point, Vector3 center)
+	{
+		//IL_0000: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0001: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0002: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0007: Unknown result type (might be due to invalid IL or missing references)
+		//IL_002a: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0022: Unknown result type (might be due to invalid IL or missing references)
+		Vector3 val = center - point;
+		val.y = 0f;
+		if (!(((Vector3)(ref val)).sqrMagnitude > 1E-06f))
+		{
+			return Vector3.zero;
+		}
+		return ((Vector3)(ref val)).normalized;
+	}
+
+	protected override Type GetIndexedType()
+	{
+		return typeof(TerrainFootprint);
+	}
+}
+
+
+private delegate void BandTexel(int x, int z, float lift, bool inside);
+
+
+using UnityEngine;
+
+public static class TerrainFootprintEx
+{
+	public static bool CheckTerrainFootprint(this Transform transform, TerrainFootprint footprint, Vector3 pos, Quaternion rot, Vector3 scale)
+	{
+		//IL_0018: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0019: Unknown result type (might be due to invalid IL or missing references)
+		//IL_001a: Unknown result type (might be due to invalid IL or missing references)
+		if (!footprint || footprint.RejectAboveGap <= 0f)
+		{
+			return true;
+		}
+		return footprint.MeasureGap(pos, rot, scale) <= footprint.RejectAboveGap;
+	}
+
+	public static void FillTerrainFootprint(this Transform transform, TerrainFootprint footprint, Vector3 pos, Quaternion rot, Vector3 scale)
+	{
+		//IL_000a: Unknown result type (might be due to invalid IL or missing references)
+		//IL_000b: Unknown result type (might be due to invalid IL or missing references)
+		//IL_000c: Unknown result type (might be due to invalid IL or missing references)
+		if ((bool)footprint)
+		{
+			footprint.Fill(pos, rot, scale);
+		}
+	}
 }
 
 
@@ -16798,8 +18605,9 @@ public class TerrainCollision : TerrainExtension
 		//IL_0179: Unknown result type (might be due to invalid IL or missing references)
 		//IL_0180: Unknown result type (might be due to invalid IL or missing references)
 		//IL_0187: Unknown result type (might be due to invalid IL or missing references)
-		//IL_01a8: Unknown result type (might be due to invalid IL or missing references)
-		//IL_01ad: Unknown result type (might be due to invalid IL or missing references)
+		//IL_018c: Unknown result type (might be due to invalid IL or missing references)
+		//IL_01a2: Unknown result type (might be due to invalid IL or missing references)
+		//IL_01a7: Unknown result type (might be due to invalid IL or missing references)
 		TimeWarning val = TimeWarning.New("TerrainCollision.GetIgnore", 0);
 		try
 		{
@@ -16850,7 +18658,7 @@ public class TerrainCollision : TerrainExtension
 				FillJob<int> fillJob4 = fillJob3;
 				IJobExtensions.RunByRef<FillJob<int>>(ref fillJob4);
 				new QueryParameters(262144, false, (QueryTriggerInteraction)2, false);
-				GamePhysics.CheckSpheres<TerrainCollisionTrigger>(results2.AsReadOnly(), results3.AsReadOnly(), values.AsReadOnly(), NativeArray<bool>.op_Implicit(ref results), GamePhysics.DefaultMaxResultsPerQuery, (QueryTriggerInteraction)2, GamePhysics.MasksToValidate.None);
+				GamePhysics.CheckSpheres<TerrainCollisionTrigger>(results2.AsReadOnly(), results3.AsReadOnly(), values.AsReadOnly(), results, GamePhysics.DefaultMaxResultsPerQuery, (QueryTriggerInteraction)2, GamePhysics.MasksToValidate.None);
 				Span<bool> values2 = NativeArray<bool>.op_Implicit(ref results);
 				ReadOnly<int> val4 = val2.AsReadOnly();
 				CollectionUtil.ScatterOutInplace(values2, ReadOnly<int>.op_Implicit(ref val4), defValue: false);
@@ -18277,8 +20085,8 @@ public class TerrainHeightMap : TerrainMap<short>
 
 	public Texture2D NormalTexture;
 
-	[Header("Collider Sampling")]
 	[Min(1f)]
+	[Header("Collider Sampling")]
 	public int ColliderSamplesPerAxis = 1;
 
 	[Range(0f, 1f)]
@@ -21788,9 +23596,9 @@ using UnityEngine;
 public static class TerrainWaterFlowMapBurst
 {
 	[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-	internal delegate void GetFlowDirections_00006D5A$PostfixBurstDelegate(in NativeArray<Vector3> positions3D, ref NativeArray<float3> results, in NativeArray<byte> source, in int res);
+	internal delegate void GetFlowDirections_00006EA6$PostfixBurstDelegate(in NativeArray<Vector3> positions3D, ref NativeArray<float3> results, in NativeArray<byte> source, in int res);
 
-	internal static class GetFlowDirections_00006D5A$BurstDirectCall
+	internal static class GetFlowDirections_00006EA6$BurstDirectCall
 	{
 		private static IntPtr Pointer;
 
@@ -21801,7 +23609,7 @@ public static class TerrainWaterFlowMapBurst
 			//IL_001b: Unknown result type (might be due to invalid IL or missing references)
 			if (Pointer == (IntPtr)0)
 			{
-				Pointer = BurstCompiler.CompileFunctionPointer<GetFlowDirections_00006D5A$PostfixBurstDelegate>((GetFlowDirections_00006D5A$PostfixBurstDelegate)GetFlowDirections).Value;
+				Pointer = BurstCompiler.CompileFunctionPointer<GetFlowDirections_00006EA6$PostfixBurstDelegate>((GetFlowDirections_00006EA6$PostfixBurstDelegate)GetFlowDirections).Value;
 			}
 			P_0 = Pointer;
 		}
@@ -21828,11 +23636,11 @@ public static class TerrainWaterFlowMapBurst
 		}
 	}
 
-	[MonoPInvokeCallback(typeof(GetFlowDirections_00006D5A$PostfixBurstDelegate))]
+	[MonoPInvokeCallback(typeof(GetFlowDirections_00006EA6$PostfixBurstDelegate))]
 	[BurstCompile]
 	public static void GetFlowDirections(in NativeArray<Vector3> positions3D, ref NativeArray<float3> results, in NativeArray<byte> source, in int res)
 	{
-		GetFlowDirections_00006D5A$BurstDirectCall.Invoke(in positions3D, ref results, in source, in res);
+		GetFlowDirections_00006EA6$BurstDirectCall.Invoke(in positions3D, ref results, in source, in res);
 	}
 
 	[MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -21881,7 +23689,7 @@ using Unity.Mathematics;
 using UnityEngine;
 
 [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-internal delegate void GetFlowDirections_00006D5A$PostfixBurstDelegate(in NativeArray<Vector3> positions3D, ref NativeArray<float3> results, in NativeArray<byte> source, in int res);
+internal delegate void GetFlowDirections_00006EA6$PostfixBurstDelegate(in NativeArray<Vector3> positions3D, ref NativeArray<float3> results, in NativeArray<byte> source, in int res);
 
 
 using System;
@@ -21890,7 +23698,7 @@ using Unity.Collections;
 using Unity.Mathematics;
 using UnityEngine;
 
-internal static class GetFlowDirections_00006D5A$BurstDirectCall
+internal static class GetFlowDirections_00006EA6$BurstDirectCall
 {
 	private static IntPtr Pointer;
 
@@ -21901,7 +23709,7 @@ internal static class GetFlowDirections_00006D5A$BurstDirectCall
 		//IL_001b: Unknown result type (might be due to invalid IL or missing references)
 		if (Pointer == (IntPtr)0)
 		{
-			Pointer = BurstCompiler.CompileFunctionPointer<GetFlowDirections_00006D5A$PostfixBurstDelegate>((GetFlowDirections_00006D5A$PostfixBurstDelegate)GetFlowDirections).Value;
+			Pointer = BurstCompiler.CompileFunctionPointer<GetFlowDirections_00006EA6$PostfixBurstDelegate>((GetFlowDirections_00006EA6$PostfixBurstDelegate)GetFlowDirections).Value;
 		}
 		P_0 = Pointer;
 	}
@@ -22571,10 +24379,17 @@ public class TerrainMargin
 }
 
 
+using System;
 using System.Collections.Generic;
+using System.Diagnostics;
+using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
+using Cysharp.Threading.Tasks;
+using Cysharp.Threading.Tasks.CompilerServices;
 using Facepunch;
 using Oxide.Core;
 using Unity.Burst;
+using Unity.Collections;
 using UnityEngine;
 using UnityEngine.Rendering;
 
@@ -22628,6 +24443,117 @@ public class TerrainMeta : SingletonComponent<TerrainMeta>
 		public Vector3 Size;
 
 		public Vector3 OneOverSize;
+	}
+
+	[StructLayout(LayoutKind.Auto)]
+	[CompilerGenerated]
+	private struct <<SampleTerrainMeshHeights>g__SampleAsync|134_0>d : IAsyncStateMachine
+	{
+		public int <>1__state;
+
+		public AsyncUniTaskMethodBuilder <>t__builder;
+
+		public int start;
+
+		public NativeArray<float> heights;
+
+		public ReadOnly<Vector3> posi;
+
+		public int end;
+
+		private Awaiter <>u__1;
+
+		private void MoveNext()
+		{
+			//IL_0045: Unknown result type (might be due to invalid IL or missing references)
+			//IL_004a: Unknown result type (might be due to invalid IL or missing references)
+			//IL_0051: Unknown result type (might be due to invalid IL or missing references)
+			//IL_000a: Unknown result type (might be due to invalid IL or missing references)
+			//IL_000f: Unknown result type (might be due to invalid IL or missing references)
+			//IL_0012: Unknown result type (might be due to invalid IL or missing references)
+			//IL_0017: Unknown result type (might be due to invalid IL or missing references)
+			//IL_002b: Unknown result type (might be due to invalid IL or missing references)
+			//IL_002c: Unknown result type (might be due to invalid IL or missing references)
+			//IL_0073: Unknown result type (might be due to invalid IL or missing references)
+			//IL_0078: Unknown result type (might be due to invalid IL or missing references)
+			//IL_0094: Unknown result type (might be due to invalid IL or missing references)
+			int num = <>1__state;
+			try
+			{
+				Awaiter val2;
+				if (num != 0)
+				{
+					MaybeSwitchToThreadPool val = UnsafeScriptingAccess.SwitchToMultithreading();
+					val2 = ((MaybeSwitchToThreadPool)(ref val)).GetAwaiter();
+					if (!((Awaiter)(ref val2)).IsCompleted)
+					{
+						num = (<>1__state = 0);
+						<>u__1 = val2;
+						((AsyncUniTaskMethodBuilder)(ref <>t__builder)).AwaitUnsafeOnCompleted<Awaiter, <<SampleTerrainMeshHeights>g__SampleAsync|134_0>d>(ref val2, ref this);
+						return;
+					}
+				}
+				else
+				{
+					val2 = <>u__1;
+					<>u__1 = default(Awaiter);
+					num = (<>1__state = -1);
+				}
+				((Awaiter)(ref val2)).GetResult();
+				TimeWarning val3 = TimeWarning.New("SampleTerrainMeshHeightsAsync", 0);
+				try
+				{
+					UnsafeScriptingAccess val4 = UnsafeScriptingAccess.Start();
+					try
+					{
+						for (int i = start; i < end; i++)
+						{
+							heights[i] = SampleTerrainMeshHeight(posi[i]);
+						}
+					}
+					finally
+					{
+						if (num < 0)
+						{
+							((IDisposable)(UnsafeScriptingAccess)(ref val4)/*cast due to .constrained prefix*/).Dispose();
+						}
+					}
+				}
+				finally
+				{
+					if (num < 0)
+					{
+						((IDisposable)val3)?.Dispose();
+					}
+				}
+			}
+			catch (Exception exception)
+			{
+				<>1__state = -2;
+				((AsyncUniTaskMethodBuilder)(ref <>t__builder)).SetException(exception);
+				return;
+			}
+			<>1__state = -2;
+			((AsyncUniTaskMethodBuilder)(ref <>t__builder)).SetResult();
+		}
+
+		void IAsyncStateMachine.MoveNext()
+		{
+			//ILSpy generated this explicit interface implementation from .override directive in MoveNext
+			this.MoveNext();
+		}
+
+		[DebuggerHidden]
+		private void SetStateMachine(IAsyncStateMachine stateMachine)
+		{
+			((AsyncUniTaskMethodBuilder)(ref <>t__builder)).SetStateMachine(stateMachine);
+		}
+
+		void IAsyncStateMachine.SetStateMachine(IAsyncStateMachine stateMachine)
+		{
+			//ILSpy generated this explicit interface implementation from .override directive in SetStateMachine
+			this.SetStateMachine(stateMachine);
+		}
 	}
 
 	public TerrainRenderer terrainRenderer = new TerrainRenderer();
@@ -22724,6 +24650,62 @@ public class TerrainMeta : SingletonComponent<TerrainMeta>
 		float num2 = NormalizeZ(worldPos.z);
 		float interpolatedHeight = TerrainData.GetInterpolatedHeight(num, num2);
 		return Position.y + interpolatedHeight;
+	}
+
+	public static void SampleTerrainMeshHeights(ReadOnly<Vector3> posi, NativeArray<float> heights)
+	{
+		//IL_008a: Unknown result type (might be due to invalid IL or missing references)
+		//IL_005a: Unknown result type (might be due to invalid IL or missing references)
+		//IL_005b: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0060: Unknown result type (might be due to invalid IL or missing references)
+		TimeWarning val = TimeWarning.New("SampleTerrainMeshHeights", 0);
+		try
+		{
+			int batchSize = ThreadUtils.GetBatchSize(posi.Length, 4, 256);
+			int num = (posi.Length + batchSize - 1) / batchSize;
+			if (num >= 4)
+			{
+				List<UniTask> list = new List<UniTask>();
+				for (int i = 0; i < num; i++)
+				{
+					int num2 = i * batchSize;
+					int end2 = Math.Min(num2 + batchSize, posi.Length);
+					list.Add(SampleAsync(heights, posi, num2, end2));
+				}
+				ThreadUtils.WaitForTasks(list);
+			}
+			else
+			{
+				for (int j = 0; j < posi.Length; j++)
+				{
+					heights[j] = SampleTerrainMeshHeight(posi[j]);
+				}
+			}
+		}
+		finally
+		{
+			((IDisposable)val)?.Dispose();
+		}
+		[AsyncStateMachine(typeof(<<SampleTerrainMeshHeights>g__SampleAsync|134_0>d))]
+		static UniTask SampleAsync(NativeArray<float> heights, ReadOnly<Vector3> posi, int start, int end)
+		{
+			//IL_0002: Unknown result type (might be due to invalid IL or missing references)
+			//IL_0007: Unknown result type (might be due to invalid IL or missing references)
+			//IL_000e: Unknown result type (might be due to invalid IL or missing references)
+			//IL_000f: Unknown result type (might be due to invalid IL or missing references)
+			//IL_0016: Unknown result type (might be due to invalid IL or missing references)
+			//IL_0017: Unknown result type (might be due to invalid IL or missing references)
+			//IL_0049: Unknown result type (might be due to invalid IL or missing references)
+			<<SampleTerrainMeshHeights>g__SampleAsync|134_0>d <<SampleTerrainMeshHeights>g__SampleAsync|134_0>d = default(<<SampleTerrainMeshHeights>g__SampleAsync|134_0>d);
+			<<SampleTerrainMeshHeights>g__SampleAsync|134_0>d.<>t__builder = AsyncUniTaskMethodBuilder.Create();
+			<<SampleTerrainMeshHeights>g__SampleAsync|134_0>d.heights = heights;
+			<<SampleTerrainMeshHeights>g__SampleAsync|134_0>d.posi = posi;
+			<<SampleTerrainMeshHeights>g__SampleAsync|134_0>d.start = start;
+			<<SampleTerrainMeshHeights>g__SampleAsync|134_0>d.end = end;
+			<<SampleTerrainMeshHeights>g__SampleAsync|134_0>d.<>1__state = -1;
+			((AsyncUniTaskMethodBuilder)(ref <<SampleTerrainMeshHeights>g__SampleAsync|134_0>d.<>t__builder)).Start<<<SampleTerrainMeshHeights>g__SampleAsync|134_0>d>(ref <<SampleTerrainMeshHeights>g__SampleAsync|134_0>d);
+			return ((AsyncUniTaskMethodBuilder)(ref <<SampleTerrainMeshHeights>g__SampleAsync|134_0>d.<>t__builder)).Task;
+		}
 	}
 
 	public static bool OutOfBounds(Vector3 worldPos)
@@ -24065,2087 +26047,6 @@ public enum TerrainRendererBackend
 	Null,
 	Unity,
 	GeoClipmapping
-}
-
-
-using System;
-using System.Collections.Generic;
-using System.Threading.Tasks;
-using Rust;
-using TerrainTexturingJobs;
-using Unity.Burst;
-using Unity.Collections;
-using Unity.Jobs;
-using Unity.Mathematics;
-using UnityEngine;
-using UnityEngine.Jobs;
-using UtilityJobs;
-
-[ExecuteInEditMode]
-public class TerrainTexturing : TerrainExtension
-{
-	public struct ShoreData : IDisposable
-	{
-		public int ShoreMapSize;
-
-		public float ShoreDistanceScale;
-
-		public Vector3 Position;
-
-		public Vector3 Size;
-
-		public Vector3 OneOverSize;
-
-		[ReadOnly]
-		public NativeArray<float> ShoreDistances;
-
-		[ReadOnly]
-		public NativeArray<Vector4> ShoreVectors;
-
-		public Vector4 DefaultVector;
-
-		public float DefaultDistance;
-
-		public int Len => ShoreMapSize * ShoreMapSize;
-
-		public void FillWithDefault()
-		{
-			//IL_0018: Unknown result type (might be due to invalid IL or missing references)
-			//IL_001d: Unknown result type (might be due to invalid IL or missing references)
-			//IL_0033: Unknown result type (might be due to invalid IL or missing references)
-			//IL_0038: Unknown result type (might be due to invalid IL or missing references)
-			//IL_0040: Unknown result type (might be due to invalid IL or missing references)
-			//IL_0045: Unknown result type (might be due to invalid IL or missing references)
-			FillJob<float> fillJob = default(FillJob<float>);
-			fillJob.Value = DefaultDistance;
-			fillJob.Values = ShoreDistances;
-			IJobExtensions.Run<FillJob<float>>(fillJob);
-			FillJob<Vector4> fillJob2 = default(FillJob<Vector4>);
-			fillJob2.Value = DefaultVector;
-			fillJob2.Values = ShoreVectors;
-			IJobExtensions.Run<FillJob<Vector4>>(fillJob2);
-		}
-
-		[BurstDiscard]
-		public Texture2D CreateTexture(string name)
-		{
-			//IL_0011: Unknown result type (might be due to invalid IL or missing references)
-			//IL_0016: Unknown result type (might be due to invalid IL or missing references)
-			//IL_001d: Unknown result type (might be due to invalid IL or missing references)
-			//IL_0024: Unknown result type (might be due to invalid IL or missing references)
-			//IL_0044: Unknown result type (might be due to invalid IL or missing references)
-			//IL_0045: Unknown result type (might be due to invalid IL or missing references)
-			//IL_0052: Unknown result type (might be due to invalid IL or missing references)
-			//IL_0057: Unknown result type (might be due to invalid IL or missing references)
-			//IL_0064: Unknown result type (might be due to invalid IL or missing references)
-			//IL_0069: Unknown result type (might be due to invalid IL or missing references)
-			//IL_007b: Unknown result type (might be due to invalid IL or missing references)
-			//IL_0081: Unknown result type (might be due to invalid IL or missing references)
-			//IL_0082: Unknown result type (might be due to invalid IL or missing references)
-			//IL_0087: Unknown result type (might be due to invalid IL or missing references)
-			//IL_008f: Unknown result type (might be due to invalid IL or missing references)
-			//IL_0090: Unknown result type (might be due to invalid IL or missing references)
-			//IL_0098: Unknown result type (might be due to invalid IL or missing references)
-			//IL_00a4: Unknown result type (might be due to invalid IL or missing references)
-			//IL_00aa: Unknown result type (might be due to invalid IL or missing references)
-			//IL_00ab: Unknown result type (might be due to invalid IL or missing references)
-			//IL_00b2: Expected O, but got Unknown
-			Texture2D val = new Texture2D(ShoreMapSize, ShoreMapSize, (TextureFormat)17, false, true, true)
-			{
-				name = name,
-				filterMode = (FilterMode)1,
-				wrapMode = (TextureWrapMode)1
-			};
-			NativeArray<half4> val2 = default(NativeArray<half4>);
-			val2..ctor(Len, (Allocator)3, (NativeArrayOptions)1);
-			PopulateTextureDataJob jobData = new PopulateTextureDataJob
-			{
-				colors = val2,
-				vectors = ShoreVectors.AsReadOnly(),
-				distances = ShoreDistances.AsReadOnly()
-			};
-			int length = val2.Length;
-			JobHandle val3 = default(JobHandle);
-			val3 = ParallelJobEx.ScheduleParallel<PopulateTextureDataJob>(ref jobData, length, val3);
-			((JobHandle)(ref val3)).Complete();
-			val.SetPixelData<half4>(val2, 0, 0);
-			val.Apply(false, true);
-			val3 = default(JobHandle);
-			val2.Dispose(val3);
-			return val;
-		}
-
-		public float GetCoarseDistanceToShore(Vector3 pos)
-		{
-			//IL_0002: Unknown result type (might be due to invalid IL or missing references)
-			//IL_0027: Unknown result type (might be due to invalid IL or missing references)
-			//IL_004b: Unknown result type (might be due to invalid IL or missing references)
-			Vector2 uv = default(Vector2);
-			uv.x = (pos.x - Position.x) * OneOverSize.x;
-			uv.y = (pos.z - Position.z) * OneOverSize.z;
-			return GetCoarseDistanceToShore(uv);
-		}
-
-		public (Vector3 shoreDir, float shoreDist) GetCoarseVectorToShore(Vector3 pos)
-		{
-			//IL_0002: Unknown result type (might be due to invalid IL or missing references)
-			//IL_0027: Unknown result type (might be due to invalid IL or missing references)
-			//IL_004b: Unknown result type (might be due to invalid IL or missing references)
-			Vector2 uv = default(Vector2);
-			uv.x = (pos.x - Position.x) * OneOverSize.x;
-			uv.y = (pos.z - Position.z) * OneOverSize.z;
-			return GetCoarseVectorToShore(uv);
-		}
-
-		public (Vector3 shoreDir, float shoreDist) GetCoarseVectorToShore(Vector2 uv)
-		{
-			//IL_000b: Unknown result type (might be due to invalid IL or missing references)
-			//IL_0015: Unknown result type (might be due to invalid IL or missing references)
-			//IL_0096: Unknown result type (might be due to invalid IL or missing references)
-			//IL_009b: Unknown result type (might be due to invalid IL or missing references)
-			//IL_00a0: Unknown result type (might be due to invalid IL or missing references)
-			//IL_00aa: Unknown result type (might be due to invalid IL or missing references)
-			//IL_00af: Unknown result type (might be due to invalid IL or missing references)
-			//IL_00b4: Unknown result type (might be due to invalid IL or missing references)
-			//IL_00be: Unknown result type (might be due to invalid IL or missing references)
-			//IL_00c3: Unknown result type (might be due to invalid IL or missing references)
-			//IL_00c8: Unknown result type (might be due to invalid IL or missing references)
-			//IL_00d2: Unknown result type (might be due to invalid IL or missing references)
-			//IL_00d7: Unknown result type (might be due to invalid IL or missing references)
-			//IL_00dc: Unknown result type (might be due to invalid IL or missing references)
-			//IL_00e0: Unknown result type (might be due to invalid IL or missing references)
-			//IL_00e7: Unknown result type (might be due to invalid IL or missing references)
-			//IL_00f2: Unknown result type (might be due to invalid IL or missing references)
-			//IL_0101: Unknown result type (might be due to invalid IL or missing references)
-			//IL_0108: Unknown result type (might be due to invalid IL or missing references)
-			//IL_0113: Unknown result type (might be due to invalid IL or missing references)
-			//IL_0122: Unknown result type (might be due to invalid IL or missing references)
-			//IL_0129: Unknown result type (might be due to invalid IL or missing references)
-			//IL_0134: Unknown result type (might be due to invalid IL or missing references)
-			//IL_0143: Unknown result type (might be due to invalid IL or missing references)
-			//IL_014a: Unknown result type (might be due to invalid IL or missing references)
-			//IL_0155: Unknown result type (might be due to invalid IL or missing references)
-			//IL_0164: Unknown result type (might be due to invalid IL or missing references)
-			//IL_016b: Unknown result type (might be due to invalid IL or missing references)
-			//IL_0176: Unknown result type (might be due to invalid IL or missing references)
-			//IL_0185: Unknown result type (might be due to invalid IL or missing references)
-			//IL_018c: Unknown result type (might be due to invalid IL or missing references)
-			//IL_0197: Unknown result type (might be due to invalid IL or missing references)
-			//IL_01a4: Unknown result type (might be due to invalid IL or missing references)
-			//IL_01ab: Unknown result type (might be due to invalid IL or missing references)
-			//IL_01b6: Unknown result type (might be due to invalid IL or missing references)
-			//IL_01be: Unknown result type (might be due to invalid IL or missing references)
-			//IL_01c5: Unknown result type (might be due to invalid IL or missing references)
-			//IL_01d0: Unknown result type (might be due to invalid IL or missing references)
-			//IL_01da: Unknown result type (might be due to invalid IL or missing references)
-			//IL_01e1: Unknown result type (might be due to invalid IL or missing references)
-			//IL_01ec: Unknown result type (might be due to invalid IL or missing references)
-			//IL_01fd: Unknown result type (might be due to invalid IL or missing references)
-			int shoreMapSize = ShoreMapSize;
-			int num = shoreMapSize - 1;
-			float num2 = uv.x * (float)num;
-			float num3 = uv.y * (float)num;
-			int num4 = (int)num2;
-			int num5 = (int)num3;
-			float num6 = num2 - (float)num4;
-			float num7 = num3 - (float)num5;
-			num4 = ((num4 >= 0) ? num4 : 0);
-			num5 = ((num5 >= 0) ? num5 : 0);
-			num4 = ((num4 <= num) ? num4 : num);
-			num5 = ((num5 <= num) ? num5 : num);
-			int num8 = ((num2 < (float)num) ? 1 : 0);
-			int num9 = ((num3 < (float)num) ? shoreMapSize : 0);
-			int num10 = num5 * shoreMapSize + num4;
-			int num11 = num10 + num8;
-			int num12 = num10 + num9;
-			int num13 = num12 + num8;
-			Vector3 val = Vector4.op_Implicit(ShoreVectors[num10]);
-			Vector3 val2 = Vector4.op_Implicit(ShoreVectors[num11]);
-			Vector3 val3 = Vector4.op_Implicit(ShoreVectors[num12]);
-			Vector3 val4 = Vector4.op_Implicit(ShoreVectors[num13]);
-			Vector3 val5 = default(Vector3);
-			val5.x = (val2.x - val.x) * num6 + val.x;
-			val5.y = (val2.y - val.y) * num6 + val.y;
-			val5.z = (val2.z - val.z) * num6 + val.z;
-			Vector3 val6 = default(Vector3);
-			val6.x = (val4.x - val3.x) * num6 + val3.x;
-			val6.y = (val4.y - val3.y) * num6 + val3.y;
-			val6.z = (val4.z - val3.z) * num6 + val3.z;
-			float num14 = (val6.x - val5.x) * num7 + val5.x;
-			float num15 = (val6.y - val5.y) * num7 + val5.y;
-			return new ValueTuple<Vector3, float>(item2: ((val6.z - val5.z) * num7 + val5.z) * ShoreDistanceScale, item1: new Vector3(num14, 0f, num15));
-		}
-
-		public (Vector3 shoreDir, float shoreDist) GetCoarseVectorToShore(float normX, float normY)
-		{
-			//IL_0003: Unknown result type (might be due to invalid IL or missing references)
-			return this.GetCoarseVectorToShore(new Vector2(normX, normY));
-		}
-
-		public Vector4 GetRawShoreVector(Vector3 pos)
-		{
-			//IL_0002: Unknown result type (might be due to invalid IL or missing references)
-			//IL_0027: Unknown result type (might be due to invalid IL or missing references)
-			//IL_004b: Unknown result type (might be due to invalid IL or missing references)
-			//IL_004c: Unknown result type (might be due to invalid IL or missing references)
-			Vector2 uv = default(Vector2);
-			uv.x = (pos.x - Position.x) * OneOverSize.x;
-			uv.y = (pos.z - Position.z) * OneOverSize.z;
-			return GetRawShoreVector(uv);
-		}
-
-		public Vector4 GetRawShoreVector(Vector2 uv)
-		{
-			//IL_000b: Unknown result type (might be due to invalid IL or missing references)
-			//IL_0015: Unknown result type (might be due to invalid IL or missing references)
-			//IL_005c: Unknown result type (might be due to invalid IL or missing references)
-			int shoreMapSize = ShoreMapSize;
-			int num = shoreMapSize - 1;
-			float num2 = uv.x * (float)num;
-			float num3 = uv.y * (float)num;
-			int num4 = (int)num2;
-			int num5 = (int)num3;
-			num4 = ((num4 >= 0) ? num4 : 0);
-			num5 = ((num5 >= 0) ? num5 : 0);
-			num4 = ((num4 <= num) ? num4 : num);
-			num5 = ((num5 <= num) ? num5 : num);
-			return ShoreVectors[num5 * shoreMapSize + num4];
-		}
-
-		public readonly float GetCoarseDistanceToShore(Vector2 uv)
-		{
-			//IL_000b: Unknown result type (might be due to invalid IL or missing references)
-			//IL_0015: Unknown result type (might be due to invalid IL or missing references)
-			//IL_008f: Unknown result type (might be due to invalid IL or missing references)
-			//IL_0094: Unknown result type (might be due to invalid IL or missing references)
-			//IL_00a2: Unknown result type (might be due to invalid IL or missing references)
-			//IL_00a7: Unknown result type (might be due to invalid IL or missing references)
-			//IL_00b5: Unknown result type (might be due to invalid IL or missing references)
-			//IL_00ba: Unknown result type (might be due to invalid IL or missing references)
-			//IL_00c8: Unknown result type (might be due to invalid IL or missing references)
-			//IL_00cd: Unknown result type (might be due to invalid IL or missing references)
-			int shoreMapSize = ShoreMapSize;
-			int num = shoreMapSize - 1;
-			float num2 = uv.x * (float)num;
-			float num3 = uv.y * (float)num;
-			int num4 = (int)num2;
-			int num5 = (int)num3;
-			float num6 = num2 - (float)num4;
-			float num7 = num3 - (float)num5;
-			num4 = ((num4 >= 0) ? num4 : 0);
-			num5 = ((num5 >= 0) ? num5 : 0);
-			num4 = ((num4 <= num) ? num4 : num);
-			num5 = ((num5 <= num) ? num5 : num);
-			int num8 = ((num2 < (float)num) ? 1 : 0);
-			int num9 = ((num3 < (float)num) ? shoreMapSize : 0);
-			int num10 = num5 * shoreMapSize + num4;
-			int num11 = num10 + num8;
-			int num12 = num10 + num9;
-			int num13 = num12 + num8;
-			float num14 = ShoreDistances[num10];
-			float num15 = ShoreDistances[num11];
-			float num16 = ShoreDistances[num12];
-			float num17 = ShoreDistances[num13];
-			float num18 = (num15 - num14) * num6 + num14;
-			return (((num17 - num16) * num6 + num16 - num18) * num7 + num18) * ShoreDistanceScale;
-		}
-
-		public void Dispose()
-		{
-			NativeArrayEx.SafeDispose<float>(ref ShoreDistances);
-			NativeArrayEx.SafeDispose<Vector4>(ref ShoreVectors);
-		}
-	}
-
-	public struct ShoreVectorQueryStructure
-	{
-		private ShoreData mainlandData;
-
-		private ShoreData deepSeaData;
-
-		private Bounds deepSeaBounds;
-
-		internal ShoreVectorQueryStructure(ShoreData mainlandData, ShoreData deepSeaData, Bounds deepSeaBounds)
-		{
-			//IL_000f: Unknown result type (might be due to invalid IL or missing references)
-			//IL_0010: Unknown result type (might be due to invalid IL or missing references)
-			this.mainlandData = mainlandData;
-			this.deepSeaData = deepSeaData;
-			this.deepSeaBounds = deepSeaBounds;
-		}
-
-		public float GetCoarseDistanceToShore(Vector3 pos)
-		{
-			//IL_0006: Unknown result type (might be due to invalid IL or missing references)
-			//IL_001f: Unknown result type (might be due to invalid IL or missing references)
-			return (((Bounds)(ref deepSeaBounds)).Contains(pos) ? deepSeaData : mainlandData).GetCoarseDistanceToShore(pos);
-		}
-	}
-
-	public const int ShoreVectorDownscale = 1;
-
-	private const int ShoreVectorBlurPasses = 1;
-
-	private float terrainSize;
-
-	private float deepSeaSize;
-
-	private ShoreData MainlandShoreData;
-
-	private ShoreData DeepSeaShoreData;
-
-	private bool deepSeaShoreDataDirty;
-
-	private List<(BakedShoreVectors data, Transform t)> deepSeaPostGenApplication;
-
-	public bool debugFoliageDisplacement;
-
-	private bool initialized;
-
-	private static TerrainTexturing instance;
-
-	private int afCached;
-
-	private int globalTextureMipmapLimitCached;
-
-	private int anisotropicFilteringCached;
-
-	private bool streamingMipmapsActiveCached;
-
-	private bool billboardsFaceCameraPositionCached;
-
-	public static TerrainTexturing Instance => instance;
-
-	public bool TexturesInitialized => initialized;
-
-	private void ReleaseBasePyramid()
-	{
-	}
-
-	private void UpdateBasePyramid()
-	{
-	}
-
-	private void InitializeCoarseHeightSlope()
-	{
-	}
-
-	private void ReleaseCoarseHeightSlope()
-	{
-	}
-
-	private void UpdateCoarseHeightSlope()
-	{
-	}
-
-	internal ShoreData GetMap(Vector3 position)
-	{
-		//IL_0000: Unknown result type (might be due to invalid IL or missing references)
-		if (!DeepSeaManager.IsInsideDeepSea(position))
-		{
-			return MainlandShoreData;
-		}
-		return DeepSeaShoreData;
-	}
-
-	internal ShoreData GetMap(bool isDeepSea)
-	{
-		if (!isDeepSea)
-		{
-			return MainlandShoreData;
-		}
-		return DeepSeaShoreData;
-	}
-
-	internal ref ShoreData GetMapByRef(bool isDeepSea)
-	{
-		if (!isDeepSea)
-		{
-			return ref MainlandShoreData;
-		}
-		return ref DeepSeaShoreData;
-	}
-
-	private void InitializeShoreVector()
-	{
-		//IL_001a: Unknown result type (might be due to invalid IL or missing references)
-		//IL_002a: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0044: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0049: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0080: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0085: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0091: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0096: Unknown result type (might be due to invalid IL or missing references)
-		//IL_009d: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00a2: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00a9: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00ae: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00b5: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00ba: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00e1: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00e6: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0132: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0137: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0143: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0148: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0154: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0159: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0165: Unknown result type (might be due to invalid IL or missing references)
-		//IL_016a: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0176: Unknown result type (might be due to invalid IL or missing references)
-		//IL_017b: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0180: Unknown result type (might be due to invalid IL or missing references)
-		//IL_01a7: Unknown result type (might be due to invalid IL or missing references)
-		//IL_01ac: Unknown result type (might be due to invalid IL or missing references)
-		int num = Mathf.ClosestPowerOfTwo(terrainData.heightmapResolution) >> 1;
-		terrainSize = Mathf.Max(terrainData.size.x, terrainData.size.z);
-		deepSeaSize = Vector3Ex.Max(Vector3Ex.XZ2D(((Bounds)(ref DeepSeaManager.DeepSeaBounds)).size));
-		MainlandShoreData = new ShoreData
-		{
-			ShoreMapSize = num,
-			ShoreDistanceScale = terrainSize / (float)num,
-			ShoreDistances = new NativeArray<float>(num * num, (Allocator)4, (NativeArrayOptions)0),
-			ShoreVectors = new NativeArray<Vector4>(num * num, (Allocator)4, (NativeArrayOptions)0),
-			Position = TerrainMeta.Position,
-			Size = TerrainMeta.Size,
-			OneOverSize = TerrainMeta.OneOverSize,
-			DefaultDistance = 10000f,
-			DefaultVector = new Vector4(1f, 1f, 1f, 0f)
-		};
-		MainlandShoreData.FillWithDefault();
-		int num2 = MainlandShoreData.ShoreMapSize >> 1;
-		DeepSeaShoreData = new ShoreData
-		{
-			ShoreMapSize = num2,
-			ShoreDistanceScale = deepSeaSize / (float)num2,
-			ShoreDistances = new NativeArray<float>(num2 * num2, (Allocator)4, (NativeArrayOptions)0),
-			ShoreVectors = new NativeArray<Vector4>(num2 * num2, (Allocator)4, (NativeArrayOptions)0),
-			Position = ((Bounds)(ref DeepSeaManager.DeepSeaBounds)).min,
-			Size = ((Bounds)(ref DeepSeaManager.DeepSeaBounds)).size,
-			OneOverSize = Vector3Ex.Inverse(((Bounds)(ref DeepSeaManager.DeepSeaBounds)).size),
-			DefaultDistance = 10000f,
-			DefaultVector = new Vector4(1f, 1f, 1f, 1f)
-		};
-		DeepSeaShoreData.FillWithDefault();
-		deepSeaShoreDataDirty = true;
-		deepSeaPostGenApplication = new List<(BakedShoreVectors, Transform)>();
-	}
-
-	private void GenerateShoreVector()
-	{
-		//IL_0021: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0022: Unknown result type (might be due to invalid IL or missing references)
-		//IL_002d: Unknown result type (might be due to invalid IL or missing references)
-		//IL_002e: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0058: Unknown result type (might be due to invalid IL or missing references)
-		//IL_005d: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0087: Unknown result type (might be due to invalid IL or missing references)
-		//IL_008c: Unknown result type (might be due to invalid IL or missing references)
-		TimeWarning val = TimeWarning.New("GenerateShoreVector", 500);
-		try
-		{
-			GenerateShoreVector(out var distances, out var vectors);
-			MainlandShoreData.ShoreDistances = distances;
-			MainlandShoreData.ShoreVectors = vectors;
-			if (!DeepSeaShoreData.ShoreDistances.IsCreated)
-			{
-				DeepSeaShoreData.ShoreDistances = new NativeArray<float>(DeepSeaShoreData.Len, (Allocator)4, (NativeArrayOptions)1);
-			}
-			if (!DeepSeaShoreData.ShoreVectors.IsCreated)
-			{
-				DeepSeaShoreData.ShoreVectors = new NativeArray<Vector4>(DeepSeaShoreData.Len, (Allocator)4, (NativeArrayOptions)1);
-			}
-			DeepSeaShoreData.FillWithDefault();
-		}
-		finally
-		{
-			((IDisposable)val)?.Dispose();
-		}
-	}
-
-	private void UpdateDeepSeaShoreVectorTexture()
-	{
-		//IL_0045: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0046: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0061: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0062: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0067: Unknown result type (might be due to invalid IL or missing references)
-		//IL_006c: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0070: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0075: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0079: Unknown result type (might be due to invalid IL or missing references)
-		//IL_007e: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0083: Unknown result type (might be due to invalid IL or missing references)
-		//IL_008c: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0091: Unknown result type (might be due to invalid IL or missing references)
-		//IL_009d: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00a2: Unknown result type (might be due to invalid IL or missing references)
-		//IL_010c: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0118: Unknown result type (might be due to invalid IL or missing references)
-		//IL_011f: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0127: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0131: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0138: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0140: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0188: Unknown result type (might be due to invalid IL or missing references)
-		//IL_018d: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0199: Unknown result type (might be due to invalid IL or missing references)
-		TimeWarning val = TimeWarning.New("UpdateDeepSeaShoreVectorTexture", 0);
-		try
-		{
-			if (!deepSeaShoreDataDirty)
-			{
-				return;
-			}
-			deepSeaShoreDataDirty = false;
-			GenerateShoreVector(out var distances, out var vectors, genDeepSea: true);
-			NativeArrayEx.SafeDispose<float>(ref DeepSeaShoreData.ShoreDistances);
-			DeepSeaShoreData.ShoreDistances = distances;
-			NativeArrayEx.SafeDispose<Vector4>(ref DeepSeaShoreData.ShoreVectors);
-			DeepSeaShoreData.ShoreVectors = vectors;
-			Bounds deepSeaBounds = DeepSeaManager.DeepSeaBounds;
-			Vector3 min = ((Bounds)(ref deepSeaBounds)).min;
-			Vector3 val2 = Vector3Ex.Inverse(((Bounds)(ref deepSeaBounds)).size);
-			NativeArray<float> deepSeaShoreDistances = DeepSeaShoreData.ShoreDistances;
-			NativeArray<Vector4> deepSeaShoreVectors = DeepSeaShoreData.ShoreVectors;
-			Vector3 val3 = default(Vector3);
-			Quaternion val4 = default(Quaternion);
-			foreach (var item3 in deepSeaPostGenApplication)
-			{
-				BakedShoreVectors item = item3.data;
-				Transform item2 = item3.t;
-				if (!item || !Object.op_Implicit((Object)(object)item2))
-				{
-					continue;
-				}
-				ShoreVectorData shoreVectorData = item.ShoreVectorData;
-				item2.GetPositionAndRotation(ref val3, ref val4);
-				float y = ((Quaternion)(ref val4)).eulerAngles.y;
-				float normX = (val3.x - min.x) * val2.x;
-				float normZ = (val3.z - min.z) * val2.z;
-				float worldSize = shoreVectorData.WorldSize;
-				int shoreMapSize = DeepSeaShoreData.ShoreMapSize;
-				float[] srcDistances = shoreVectorData.Distances;
-				Vector4[] srcVectors = shoreVectorData.Vectors;
-				Quaternion quat = Quaternion.Euler(0f, y, 0f);
-				BlitBakedData(worldSize, shoreVectorData.ShoreVectorDimension, deepSeaBounds, shoreMapSize, normX, normZ, y, delegate(int si, int di)
-				{
-					//IL_003d: Unknown result type (might be due to invalid IL or missing references)
-					//IL_0042: Unknown result type (might be due to invalid IL or missing references)
-					//IL_0045: Unknown result type (might be due to invalid IL or missing references)
-					//IL_0050: Unknown result type (might be due to invalid IL or missing references)
-					//IL_005c: Unknown result type (might be due to invalid IL or missing references)
-					//IL_0061: Unknown result type (might be due to invalid IL or missing references)
-					//IL_0062: Unknown result type (might be due to invalid IL or missing references)
-					//IL_0067: Unknown result type (might be due to invalid IL or missing references)
-					//IL_006a: Unknown result type (might be due to invalid IL or missing references)
-					//IL_0070: Unknown result type (might be due to invalid IL or missing references)
-					//IL_0076: Unknown result type (might be due to invalid IL or missing references)
-					//IL_007c: Unknown result type (might be due to invalid IL or missing references)
-					//IL_0093: Unknown result type (might be due to invalid IL or missing references)
-					float num = srcDistances[si];
-					float num2 = deepSeaShoreDistances[di];
-					if (num < num2)
-					{
-						deepSeaShoreDistances[di] = srcDistances[si];
-						Vector4 val5 = srcVectors[si];
-						Vector3 val6 = default(Vector3);
-						((Vector3)(ref val6))..ctor(val5.x, 0f, val5.y);
-						val6 = quat * val6;
-						((Vector4)(ref val5))..ctor(val6.x, val6.z, val5.z, val5.w);
-						deepSeaShoreVectors[di] = val5;
-					}
-				});
-			}
-		}
-		finally
-		{
-			((IDisposable)val)?.Dispose();
-		}
-	}
-
-	private void OnDestroy()
-	{
-		ReleaseShoreVector();
-	}
-
-	private void ReleaseShoreVector()
-	{
-		MainlandShoreData.Dispose();
-		DeepSeaShoreData.Dispose();
-	}
-
-	public void GenerateShoreVector(out NativeArray<float> distances, out NativeArray<Vector4> vectors, bool genDeepSea = false)
-	{
-		//IL_0053: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0058: Unknown result type (might be due to invalid IL or missing references)
-		//IL_002d: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0032: Unknown result type (might be due to invalid IL or missing references)
-		//IL_005e: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0063: Unknown result type (might be due to invalid IL or missing references)
-		//IL_006a: Unknown result type (might be due to invalid IL or missing references)
-		//IL_006f: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0076: Unknown result type (might be due to invalid IL or missing references)
-		//IL_007b: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0083: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0088: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0093: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0098: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00cc: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00ce: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00d5: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00d7: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00e6: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00e7: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0101: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0156: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0158: Unknown result type (might be due to invalid IL or missing references)
-		//IL_015f: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0161: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0166: Unknown result type (might be due to invalid IL or missing references)
-		//IL_016a: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0171: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0177: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0188: Unknown result type (might be due to invalid IL or missing references)
-		//IL_018a: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0193: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0198: Unknown result type (might be due to invalid IL or missing references)
-		//IL_01a1: Unknown result type (might be due to invalid IL or missing references)
-		//IL_01a6: Unknown result type (might be due to invalid IL or missing references)
-		//IL_01b8: Unknown result type (might be due to invalid IL or missing references)
-		//IL_01ba: Unknown result type (might be due to invalid IL or missing references)
-		//IL_01bf: Unknown result type (might be due to invalid IL or missing references)
-		//IL_01c3: Unknown result type (might be due to invalid IL or missing references)
-		//IL_01c5: Unknown result type (might be due to invalid IL or missing references)
-		//IL_01cd: Unknown result type (might be due to invalid IL or missing references)
-		//IL_01cf: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0126: Unknown result type (might be due to invalid IL or missing references)
-		//IL_012b: Unknown result type (might be due to invalid IL or missing references)
-		//IL_012f: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0135: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0137: Unknown result type (might be due to invalid IL or missing references)
-		//IL_013c: Unknown result type (might be due to invalid IL or missing references)
-		//IL_01f0: Unknown result type (might be due to invalid IL or missing references)
-		//IL_01f2: Unknown result type (might be due to invalid IL or missing references)
-		//IL_01fe: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0203: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0208: Unknown result type (might be due to invalid IL or missing references)
-		//IL_020a: Unknown result type (might be due to invalid IL or missing references)
-		//IL_020f: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0213: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0219: Unknown result type (might be due to invalid IL or missing references)
-		//IL_021b: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0220: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0225: Unknown result type (might be due to invalid IL or missing references)
-		//IL_022b: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0230: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0232: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0237: Unknown result type (might be due to invalid IL or missing references)
-		//IL_023b: Unknown result type (might be due to invalid IL or missing references)
-		//IL_023d: Unknown result type (might be due to invalid IL or missing references)
-		//IL_02fa: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0356: Unknown result type (might be due to invalid IL or missing references)
-		//IL_035b: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0362: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0364: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0376: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0378: Unknown result type (might be due to invalid IL or missing references)
-		//IL_037d: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0386: Unknown result type (might be due to invalid IL or missing references)
-		//IL_038d: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0392: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0394: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0396: Unknown result type (might be due to invalid IL or missing references)
-		//IL_039b: Unknown result type (might be due to invalid IL or missing references)
-		//IL_03a9: Unknown result type (might be due to invalid IL or missing references)
-		//IL_03ae: Unknown result type (might be due to invalid IL or missing references)
-		//IL_03b6: Unknown result type (might be due to invalid IL or missing references)
-		//IL_03bb: Unknown result type (might be due to invalid IL or missing references)
-		//IL_03cc: Unknown result type (might be due to invalid IL or missing references)
-		//IL_03ce: Unknown result type (might be due to invalid IL or missing references)
-		//IL_03d3: Unknown result type (might be due to invalid IL or missing references)
-		//IL_03d7: Unknown result type (might be due to invalid IL or missing references)
-		//IL_03d9: Unknown result type (might be due to invalid IL or missing references)
-		//IL_03e1: Unknown result type (might be due to invalid IL or missing references)
-		//IL_03e3: Unknown result type (might be due to invalid IL or missing references)
-		//IL_030e: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0313: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0324: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0326: Unknown result type (might be due to invalid IL or missing references)
-		//IL_032b: Unknown result type (might be due to invalid IL or missing references)
-		//IL_03eb: Unknown result type (might be due to invalid IL or missing references)
-		//IL_03ed: Unknown result type (might be due to invalid IL or missing references)
-		//IL_03f5: Unknown result type (might be due to invalid IL or missing references)
-		//IL_03f7: Unknown result type (might be due to invalid IL or missing references)
-		//IL_02a2: Unknown result type (might be due to invalid IL or missing references)
-		//IL_02a7: Unknown result type (might be due to invalid IL or missing references)
-		//IL_02b8: Unknown result type (might be due to invalid IL or missing references)
-		//IL_02d3: Unknown result type (might be due to invalid IL or missing references)
-		//IL_02d9: Unknown result type (might be due to invalid IL or missing references)
-		//IL_02db: Unknown result type (might be due to invalid IL or missing references)
-		//IL_02e5: Unknown result type (might be due to invalid IL or missing references)
-		//IL_02eb: Unknown result type (might be due to invalid IL or missing references)
-		//IL_02ed: Unknown result type (might be due to invalid IL or missing references)
-		TimeWarning val = TimeWarning.New("GenerateShoreVector", 0);
-		try
-		{
-			int size;
-			float shoreDistanceScale;
-			Vector3 position;
-			if (genDeepSea)
-			{
-				size = DeepSeaShoreData.ShoreMapSize;
-				shoreDistanceScale = DeepSeaShoreData.ShoreDistanceScale;
-				position = DeepSeaShoreData.Position;
-			}
-			else
-			{
-				size = MainlandShoreData.ShoreMapSize;
-				shoreDistanceScale = MainlandShoreData.ShoreDistanceScale;
-				position = MainlandShoreData.Position;
-			}
-			NativeArray<Vector3> positions = new NativeArray<Vector3>(size * size, (Allocator)3, (NativeArrayOptions)1);
-			NativeArray<float> val2 = new NativeArray<float>(size * size, (Allocator)3, (NativeArrayOptions)1);
-			NativeArray<byte> bitmap = new NativeArray<byte>(size * size, (Allocator)3, (NativeArrayOptions)1);
-			distances = new NativeArray<float>(size * size, (Allocator)4, (NativeArrayOptions)1);
-			vectors = new NativeArray<Vector4>(size * size, (Allocator)4, (NativeArrayOptions)1);
-			TimeWarning val3 = TimeWarning.New("WaterDepth", 0);
-			JobHandle val5;
-			try
-			{
-				NativeArray<int> indices = default(NativeArray<int>);
-				indices..ctor(size * size, (Allocator)3, (NativeArrayOptions)1);
-				NativeArray<float> heights = default(NativeArray<float>);
-				heights..ctor(size * size, (Allocator)3, (NativeArrayOptions)1);
-				GenSamplePoints genSamplePoints = default(GenSamplePoints);
-				genSamplePoints.indices = indices;
-				genSamplePoints.positions = positions;
-				genSamplePoints.shoreMapSize = size;
-				genSamplePoints.terrainPosition = position;
-				genSamplePoints.upscaleCoords = shoreDistanceScale;
-				GenSamplePoints genSamplePoints2 = genSamplePoints;
-				IJobExtensions.RunByRef<GenSamplePoints>(ref genSamplePoints2);
-				JobHandle val4 = default(JobHandle);
-				if (Object.op_Implicit((Object)(object)TerrainMeta.HeightMap) && TerrainMeta.HeightMap.isInitialized)
-				{
-					val4 = TerrainMeta.HeightMap.GetHeights(positions.AsReadOnly(), val2);
-				}
-				else
-				{
-					FillJob<float> fillJob = default(FillJob<float>);
-					fillJob.Value = 0f;
-					fillJob.Values = val2;
-					val4 = IJobExtensions.Schedule<FillJob<float>>(fillJob, val4);
-				}
-				WaterLevel.GetWaterLevels(positions.AsReadOnly(), indices.AsReadOnly(), waves: false, heights);
-				GenShoreVecBitMapJob genShoreVecBitMapJob = default(GenShoreVecBitMapJob);
-				genShoreVecBitMapJob.bitmap = bitmap;
-				genShoreVecBitMapJob.terrainHeights = val2.AsReadOnly();
-				genShoreVecBitMapJob.waterHeights = heights.AsReadOnly();
-				GenShoreVecBitMapJob jobData = genShoreVecBitMapJob;
-				val5 = ParallelJobEx.ScheduleParallel<GenShoreVecBitMapJob>(ref jobData, bitmap.Length, val4);
-				indices.Dispose(val5);
-				heights.Dispose(val5);
-			}
-			finally
-			{
-				((IDisposable)val3)?.Dispose();
-			}
-			val3 = TimeWarning.New("DistanceField.XXX", 0);
-			try
-			{
-				JobHandle val6 = val5;
-				val6 = DistanceField.GenerateNative(in size, (byte)127, bitmap.AsReadOnly(), in distances, val6);
-				val6 = DistanceField.ApplyGaussianBlurNative(size, distances, 1, val6);
-				val6 = DistanceField.GenerateVectorsNative(in size, distances.AsReadOnly(), vectors, val6);
-				bitmap.Dispose(val6);
-				((JobHandle)(ref val6)).Complete();
-			}
-			finally
-			{
-				((IDisposable)val3)?.Dispose();
-			}
-			val3 = TimeWarning.New("Topology Mask", 0);
-			try
-			{
-				if (!((Object)(object)TerrainMeta.TopologyMap != (Object)null) || !TerrainMeta.TopologyMap.isInitialized || !((Object)(object)TerrainMeta.HeightMap != (Object)null) || !TerrainMeta.HeightMap.isInitialized)
-				{
-					for (int i = 0; i < vectors.Length; i++)
-					{
-						Vector4 val7 = vectors[i];
-						val7.w = -1f;
-						vectors[i] = val7;
-					}
-					positions.Dispose(default(JobHandle));
-					val2.Dispose(default(JobHandle));
-					return;
-				}
-				JobHandle val8 = default(JobHandle);
-				if (genDeepSea)
-				{
-					FillAsOceanTopologyJob fillAsOceanTopologyJob = default(FillAsOceanTopologyJob);
-					fillAsOceanTopologyJob.vectors = vectors;
-					FillAsOceanTopologyJob jobData2 = fillAsOceanTopologyJob;
-					val8 = ParallelJobEx.ScheduleParallel<FillAsOceanTopologyJob>(ref jobData2, vectors.Length, val8);
-				}
-				else
-				{
-					NativeArray<float> radii = default(NativeArray<float>);
-					radii..ctor(size * size, (Allocator)3, (NativeArrayOptions)1);
-					NativeArray<int> results = default(NativeArray<int>);
-					results..ctor(size * size, (Allocator)3, (NativeArrayOptions)1);
-					GenTopologyRadiiJob genTopologyRadiiJob = default(GenTopologyRadiiJob);
-					genTopologyRadiiJob.heights = val2.AsReadOnly();
-					genTopologyRadiiJob.radii = radii;
-					GenTopologyRadiiJob jobData3 = genTopologyRadiiJob;
-					val8 = ParallelJobEx.ScheduleParallel<GenTopologyRadiiJob>(ref jobData3, radii.Length, val8);
-					val8 = TerrainMeta.TopologyMap.GetTopologiesIndirect(positions.AsReadOnly(), radii.AsReadOnly(), results, val8);
-					ProcessTopologyJob processTopologyJob = default(ProcessTopologyJob);
-					processTopologyJob.topologies = results.AsReadOnly();
-					processTopologyJob.vectors = vectors;
-					ProcessTopologyJob jobData4 = processTopologyJob;
-					val8 = ParallelJobEx.ScheduleParallel<ProcessTopologyJob>(ref jobData4, vectors.Length, val8);
-					radii.Dispose(val8);
-					results.Dispose(val8);
-				}
-				positions.Dispose(val8);
-				val2.Dispose(val8);
-				((JobHandle)(ref val8)).Complete();
-			}
-			finally
-			{
-				((IDisposable)val3)?.Dispose();
-			}
-		}
-		finally
-		{
-			((IDisposable)val)?.Dispose();
-		}
-	}
-
-	public float GetCoarseDistanceToShore(Vector3 pos)
-	{
-		//IL_0001: Unknown result type (might be due to invalid IL or missing references)
-		//IL_000a: Unknown result type (might be due to invalid IL or missing references)
-		return GetMap(pos).GetCoarseDistanceToShore(pos);
-	}
-
-	public (Vector3 shoreDir, float shoreDist) GetCoarseVectorToShore(Vector3 pos)
-	{
-		//IL_0001: Unknown result type (might be due to invalid IL or missing references)
-		//IL_000a: Unknown result type (might be due to invalid IL or missing references)
-		return GetMap(pos).GetCoarseVectorToShore(pos);
-	}
-
-	public (Vector3 shoreDir, float shoreDist) GetMainlandCoarseVectorToShore(float normX, float normY)
-	{
-		//IL_0008: Unknown result type (might be due to invalid IL or missing references)
-		return MainlandShoreData.GetCoarseVectorToShore(new Vector2(normX, normY));
-	}
-
-	public Vector4 GetRawShoreVector(Vector3 pos)
-	{
-		//IL_0001: Unknown result type (might be due to invalid IL or missing references)
-		//IL_000a: Unknown result type (might be due to invalid IL or missing references)
-		//IL_000b: Unknown result type (might be due to invalid IL or missing references)
-		return GetMap(pos).GetRawShoreVector(pos);
-	}
-
-	public ShoreVectorQueryStructure GetShoreVectorQueryStructure()
-	{
-		//IL_000c: Unknown result type (might be due to invalid IL or missing references)
-		return new ShoreVectorQueryStructure(MainlandShoreData, DeepSeaShoreData, DeepSeaManager.DeepSeaBounds);
-	}
-
-	public void GetCoarseDistancesToShoreIndirect(ReadOnly<Vector3> positions, ReadOnly<int> indices, NativeArray<float> results)
-	{
-		//IL_000a: Unknown result type (might be due to invalid IL or missing references)
-		//IL_000b: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0012: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0013: Unknown result type (might be due to invalid IL or missing references)
-		//IL_001a: Unknown result type (might be due to invalid IL or missing references)
-		//IL_001b: Unknown result type (might be due to invalid IL or missing references)
-		GetCoarseDistsToShoreJobIndirect getCoarseDistsToShoreJobIndirect = default(GetCoarseDistsToShoreJobIndirect);
-		getCoarseDistsToShoreJobIndirect.Dists = results;
-		getCoarseDistsToShoreJobIndirect.Positions = positions;
-		getCoarseDistsToShoreJobIndirect.Indices = indices;
-		getCoarseDistsToShoreJobIndirect.QueryStructure = GetShoreVectorQueryStructure();
-		GetCoarseDistsToShoreJobIndirect getCoarseDistsToShoreJobIndirect2 = getCoarseDistsToShoreJobIndirect;
-		IJobExtensions.RunByRef<GetCoarseDistsToShoreJobIndirect>(ref getCoarseDistsToShoreJobIndirect2);
-	}
-
-	public void ApplyBakedDeepSeaVectors(BakedShoreVectors bakedShoreVectors, Transform t)
-	{
-		//IL_0064: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0070: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0075: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0079: Unknown result type (might be due to invalid IL or missing references)
-		//IL_007e: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0082: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0087: Unknown result type (might be due to invalid IL or missing references)
-		//IL_008c: Unknown result type (might be due to invalid IL or missing references)
-		//IL_008e: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0094: Unknown result type (might be due to invalid IL or missing references)
-		//IL_009c: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00a6: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00ac: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00b4: Unknown result type (might be due to invalid IL or missing references)
-		//IL_010f: Unknown result type (might be due to invalid IL or missing references)
-		TimeWarning val = TimeWarning.New("ApplyBakedDeepSeaVectors", 0);
-		try
-		{
-			if (bakedShoreVectors.ShoreVectorData == null || bakedShoreVectors.ShoreVectorData.Distances == null)
-			{
-				return;
-			}
-			ShoreVectorData shoreVectorData = bakedShoreVectors.ShoreVectorData;
-			Vector3 val2 = default(Vector3);
-			Quaternion val3 = default(Quaternion);
-			t.GetPositionAndRotation(ref val2, ref val3);
-			if (bakedShoreVectors.OnlyBakeShoreVectors)
-			{
-				deepSeaPostGenApplication.Add((bakedShoreVectors, t));
-			}
-			float y = ((Quaternion)(ref val3)).eulerAngles.y;
-			Bounds deepSeaBounds = DeepSeaManager.DeepSeaBounds;
-			Vector3 min = ((Bounds)(ref deepSeaBounds)).min;
-			Vector3 val4 = Vector3Ex.Inverse(((Bounds)(ref deepSeaBounds)).size);
-			float normX = (val2.x - min.x) * val4.x;
-			float normZ = (val2.z - min.z) * val4.z;
-			float worldSize = shoreVectorData.WorldSize;
-			short[] srcHeightData = shoreVectorData.HeightData;
-			short[] array = srcHeightData;
-			if (array != null && array.Length != 0)
-			{
-				float srcPositionY = shoreVectorData.HeightInfo.x;
-				float srcSizeY = shoreVectorData.HeightInfo.y;
-				BlitBakedData(worldSize, shoreVectorData.HeightDimension, deepSeaBounds, TerrainMeta.HeightMap.res, normX, normZ, y, delegate(int si, int di)
-				{
-					float num = BitUtility.Short2Float((int)srcHeightData[si]);
-					short num2 = BitUtility.Float2Short(TerrainMeta.NormalizeY(srcPositionY + num * srcSizeY));
-					short num3 = TerrainMeta.HeightMap.deepSeaHeights[di];
-					if (num2 > num3)
-					{
-						TerrainMeta.HeightMap.deepSeaHeights[di] = num2;
-					}
-				});
-			}
-			deepSeaShoreDataDirty = true;
-		}
-		finally
-		{
-			((IDisposable)val)?.Dispose();
-		}
-	}
-
-	private static void BlitBakedData(float worldSize, int dimension, Bounds deepSeaBounds, int dstMapSize, float normX, float normZ, float yaw, Action<int, int> action)
-	{
-		//IL_0034: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0039: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0066: Unknown result type (might be due to invalid IL or missing references)
-		//IL_006b: Unknown result type (might be due to invalid IL or missing references)
-		//IL_008c: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00b7: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00bc: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00d9: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00e2: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00ee: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00f7: Unknown result type (might be due to invalid IL or missing references)
-		//IL_01fb: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0200: Unknown result type (might be due to invalid IL or missing references)
-		TimeWarning val = TimeWarning.New("BlitBakedData", 0);
-		try
-		{
-			float scaleMod = worldSize / (float)dimension / (Vector3Ex.Max(Vector3Ex.XZ2D(((Bounds)(ref deepSeaBounds)).size)) / (float)dstMapSize);
-			Vector2 destCenterPx = new Vector2(normX * (float)dstMapSize, normZ * (float)dstMapSize);
-			Vector2 val2 = new Vector2((float)dimension * scaleMod, (float)dimension * scaleMod);
-			float num = yaw * (MathF.PI / 180f);
-			float cosA = Mathf.Cos(num);
-			float sinA = Mathf.Sin(num);
-			Vector2 val3 = val2 * 0.5f;
-			float num2 = Mathf.Abs(cosA);
-			float num3 = Mathf.Abs(sinA);
-			float num4 = num2 * val3.x + num3 * val3.y;
-			float num5 = num3 * val3.x + num2 * val3.y;
-			int left = Mathf.FloorToInt(destCenterPx.x - num4);
-			int right = Mathf.CeilToInt(destCenterPx.x + num4);
-			int num6 = Mathf.FloorToInt(destCenterPx.y - num5);
-			int num7 = Mathf.CeilToInt(destCenterPx.y + num5);
-			if (right < 0 || left >= dstMapSize || num7 < 0 || num6 >= dstMapSize)
-			{
-				return;
-			}
-			left = Mathf.Clamp(left, 0, dstMapSize - 1);
-			right = Mathf.Clamp(right, 0, dstMapSize - 1);
-			num6 = Mathf.Clamp(num6, 0, dstMapSize - 1);
-			num7 = Mathf.Clamp(num7, 0, dstMapSize - 1);
-			Vector2 srcPivotPx = new Vector2((float)dimension * 0.5f, (float)dimension * 0.5f);
-			Parallel.For(num6, num7 + 1, delegate(int z)
-			{
-				for (int i = left; i <= right; i++)
-				{
-					float num8 = (float)i + 0.5f - destCenterPx.x;
-					float num9 = (float)z + 0.5f - destCenterPx.y;
-					float num10 = (cosA * num8 - sinA * num9) / scaleMod;
-					float num11 = (sinA * num8 + cosA * num9) / scaleMod;
-					int num12 = (int)(srcPivotPx.x + num10);
-					int num13 = (int)(srcPivotPx.y + num11);
-					if (num12 >= 0 && num12 <= dimension - 1 && num13 >= 0 && num13 <= dimension - 1)
-					{
-						int arg = z * dstMapSize + i;
-						int arg2 = num13 * dimension + num12;
-						action(arg2, arg);
-					}
-				}
-			});
-		}
-		finally
-		{
-			((IDisposable)val)?.Dispose();
-		}
-	}
-
-	public void ClearDeepSeaData()
-	{
-		DeepSeaShoreData.FillWithDefault();
-		deepSeaShoreDataDirty = true;
-	}
-
-	private void InitializeWaterHeight()
-	{
-	}
-
-	private void ReleaseWaterHeight()
-	{
-	}
-
-	private void UpdateWaterHeight()
-	{
-	}
-
-	private void CheckInstance()
-	{
-		instance = (((Object)(object)instance != (Object)null) ? instance : this);
-	}
-
-	private void Awake()
-	{
-		CheckInstance();
-	}
-
-	public override void Setup()
-	{
-		CheckInstance();
-		InitializeShoreVector();
-	}
-
-	public override void PostSetup()
-	{
-		TerrainMeta component = ((Component)this).GetComponent<TerrainMeta>();
-		if ((Object)(object)component == (Object)null || component.config == null)
-		{
-			Debug.LogError((object)"[TerrainTexturing] Missing TerrainMeta or TerrainConfig not assigned.");
-			return;
-		}
-		Shutdown();
-		InitializeCoarseHeightSlope();
-		GenerateShoreVector();
-		InitializeWaterHeight();
-		initialized = true;
-	}
-
-	private void Shutdown()
-	{
-		ReleaseBasePyramid();
-		ReleaseCoarseHeightSlope();
-		ReleaseShoreVector();
-		ReleaseWaterHeight();
-		initialized = false;
-	}
-
-	public void OnEnable()
-	{
-		CheckInstance();
-	}
-
-	private void OnDisable()
-	{
-		if (!Application.isQuitting)
-		{
-			Shutdown();
-		}
-	}
-
-	private void Update()
-	{
-		if (initialized)
-		{
-			UpdateBasePyramid();
-			UpdateCoarseHeightSlope();
-			UpdateWaterHeight();
-			UpdateDeepSeaShoreVectorTexture();
-		}
-	}
-}
-
-
-using System;
-using TerrainTexturingJobs;
-using Unity.Burst;
-using Unity.Collections;
-using Unity.Jobs;
-using Unity.Mathematics;
-using UnityEngine;
-using UnityEngine.Jobs;
-using UtilityJobs;
-
-public struct ShoreData : IDisposable
-{
-	public int ShoreMapSize;
-
-	public float ShoreDistanceScale;
-
-	public Vector3 Position;
-
-	public Vector3 Size;
-
-	public Vector3 OneOverSize;
-
-	[ReadOnly]
-	public NativeArray<float> ShoreDistances;
-
-	[ReadOnly]
-	public NativeArray<Vector4> ShoreVectors;
-
-	public Vector4 DefaultVector;
-
-	public float DefaultDistance;
-
-	public int Len => ShoreMapSize * ShoreMapSize;
-
-	public void FillWithDefault()
-	{
-		//IL_0018: Unknown result type (might be due to invalid IL or missing references)
-		//IL_001d: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0033: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0038: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0040: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0045: Unknown result type (might be due to invalid IL or missing references)
-		FillJob<float> fillJob = default(FillJob<float>);
-		fillJob.Value = DefaultDistance;
-		fillJob.Values = ShoreDistances;
-		IJobExtensions.Run<FillJob<float>>(fillJob);
-		FillJob<Vector4> fillJob2 = default(FillJob<Vector4>);
-		fillJob2.Value = DefaultVector;
-		fillJob2.Values = ShoreVectors;
-		IJobExtensions.Run<FillJob<Vector4>>(fillJob2);
-	}
-
-	[BurstDiscard]
-	public Texture2D CreateTexture(string name)
-	{
-		//IL_0011: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0016: Unknown result type (might be due to invalid IL or missing references)
-		//IL_001d: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0024: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0044: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0045: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0052: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0057: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0064: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0069: Unknown result type (might be due to invalid IL or missing references)
-		//IL_007b: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0081: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0082: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0087: Unknown result type (might be due to invalid IL or missing references)
-		//IL_008f: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0090: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0098: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00a4: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00aa: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00ab: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00b2: Expected O, but got Unknown
-		Texture2D val = new Texture2D(ShoreMapSize, ShoreMapSize, (TextureFormat)17, false, true, true)
-		{
-			name = name,
-			filterMode = (FilterMode)1,
-			wrapMode = (TextureWrapMode)1
-		};
-		NativeArray<half4> val2 = default(NativeArray<half4>);
-		val2..ctor(Len, (Allocator)3, (NativeArrayOptions)1);
-		PopulateTextureDataJob jobData = new PopulateTextureDataJob
-		{
-			colors = val2,
-			vectors = ShoreVectors.AsReadOnly(),
-			distances = ShoreDistances.AsReadOnly()
-		};
-		int length = val2.Length;
-		JobHandle val3 = default(JobHandle);
-		val3 = ParallelJobEx.ScheduleParallel<PopulateTextureDataJob>(ref jobData, length, val3);
-		((JobHandle)(ref val3)).Complete();
-		val.SetPixelData<half4>(val2, 0, 0);
-		val.Apply(false, true);
-		val3 = default(JobHandle);
-		val2.Dispose(val3);
-		return val;
-	}
-
-	public float GetCoarseDistanceToShore(Vector3 pos)
-	{
-		//IL_0002: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0027: Unknown result type (might be due to invalid IL or missing references)
-		//IL_004b: Unknown result type (might be due to invalid IL or missing references)
-		Vector2 uv = default(Vector2);
-		uv.x = (pos.x - Position.x) * OneOverSize.x;
-		uv.y = (pos.z - Position.z) * OneOverSize.z;
-		return GetCoarseDistanceToShore(uv);
-	}
-
-	public (Vector3 shoreDir, float shoreDist) GetCoarseVectorToShore(Vector3 pos)
-	{
-		//IL_0002: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0027: Unknown result type (might be due to invalid IL or missing references)
-		//IL_004b: Unknown result type (might be due to invalid IL or missing references)
-		Vector2 uv = default(Vector2);
-		uv.x = (pos.x - Position.x) * OneOverSize.x;
-		uv.y = (pos.z - Position.z) * OneOverSize.z;
-		return GetCoarseVectorToShore(uv);
-	}
-
-	public (Vector3 shoreDir, float shoreDist) GetCoarseVectorToShore(Vector2 uv)
-	{
-		//IL_000b: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0015: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0096: Unknown result type (might be due to invalid IL or missing references)
-		//IL_009b: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00a0: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00aa: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00af: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00b4: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00be: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00c3: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00c8: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00d2: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00d7: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00dc: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00e0: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00e7: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00f2: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0101: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0108: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0113: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0122: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0129: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0134: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0143: Unknown result type (might be due to invalid IL or missing references)
-		//IL_014a: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0155: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0164: Unknown result type (might be due to invalid IL or missing references)
-		//IL_016b: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0176: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0185: Unknown result type (might be due to invalid IL or missing references)
-		//IL_018c: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0197: Unknown result type (might be due to invalid IL or missing references)
-		//IL_01a4: Unknown result type (might be due to invalid IL or missing references)
-		//IL_01ab: Unknown result type (might be due to invalid IL or missing references)
-		//IL_01b6: Unknown result type (might be due to invalid IL or missing references)
-		//IL_01be: Unknown result type (might be due to invalid IL or missing references)
-		//IL_01c5: Unknown result type (might be due to invalid IL or missing references)
-		//IL_01d0: Unknown result type (might be due to invalid IL or missing references)
-		//IL_01da: Unknown result type (might be due to invalid IL or missing references)
-		//IL_01e1: Unknown result type (might be due to invalid IL or missing references)
-		//IL_01ec: Unknown result type (might be due to invalid IL or missing references)
-		//IL_01fd: Unknown result type (might be due to invalid IL or missing references)
-		int shoreMapSize = ShoreMapSize;
-		int num = shoreMapSize - 1;
-		float num2 = uv.x * (float)num;
-		float num3 = uv.y * (float)num;
-		int num4 = (int)num2;
-		int num5 = (int)num3;
-		float num6 = num2 - (float)num4;
-		float num7 = num3 - (float)num5;
-		num4 = ((num4 >= 0) ? num4 : 0);
-		num5 = ((num5 >= 0) ? num5 : 0);
-		num4 = ((num4 <= num) ? num4 : num);
-		num5 = ((num5 <= num) ? num5 : num);
-		int num8 = ((num2 < (float)num) ? 1 : 0);
-		int num9 = ((num3 < (float)num) ? shoreMapSize : 0);
-		int num10 = num5 * shoreMapSize + num4;
-		int num11 = num10 + num8;
-		int num12 = num10 + num9;
-		int num13 = num12 + num8;
-		Vector3 val = Vector4.op_Implicit(ShoreVectors[num10]);
-		Vector3 val2 = Vector4.op_Implicit(ShoreVectors[num11]);
-		Vector3 val3 = Vector4.op_Implicit(ShoreVectors[num12]);
-		Vector3 val4 = Vector4.op_Implicit(ShoreVectors[num13]);
-		Vector3 val5 = default(Vector3);
-		val5.x = (val2.x - val.x) * num6 + val.x;
-		val5.y = (val2.y - val.y) * num6 + val.y;
-		val5.z = (val2.z - val.z) * num6 + val.z;
-		Vector3 val6 = default(Vector3);
-		val6.x = (val4.x - val3.x) * num6 + val3.x;
-		val6.y = (val4.y - val3.y) * num6 + val3.y;
-		val6.z = (val4.z - val3.z) * num6 + val3.z;
-		float num14 = (val6.x - val5.x) * num7 + val5.x;
-		float num15 = (val6.y - val5.y) * num7 + val5.y;
-		return new ValueTuple<Vector3, float>(item2: ((val6.z - val5.z) * num7 + val5.z) * ShoreDistanceScale, item1: new Vector3(num14, 0f, num15));
-	}
-
-	public (Vector3 shoreDir, float shoreDist) GetCoarseVectorToShore(float normX, float normY)
-	{
-		//IL_0003: Unknown result type (might be due to invalid IL or missing references)
-		return this.GetCoarseVectorToShore(new Vector2(normX, normY));
-	}
-
-	public Vector4 GetRawShoreVector(Vector3 pos)
-	{
-		//IL_0002: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0027: Unknown result type (might be due to invalid IL or missing references)
-		//IL_004b: Unknown result type (might be due to invalid IL or missing references)
-		//IL_004c: Unknown result type (might be due to invalid IL or missing references)
-		Vector2 uv = default(Vector2);
-		uv.x = (pos.x - Position.x) * OneOverSize.x;
-		uv.y = (pos.z - Position.z) * OneOverSize.z;
-		return GetRawShoreVector(uv);
-	}
-
-	public Vector4 GetRawShoreVector(Vector2 uv)
-	{
-		//IL_000b: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0015: Unknown result type (might be due to invalid IL or missing references)
-		//IL_005c: Unknown result type (might be due to invalid IL or missing references)
-		int shoreMapSize = ShoreMapSize;
-		int num = shoreMapSize - 1;
-		float num2 = uv.x * (float)num;
-		float num3 = uv.y * (float)num;
-		int num4 = (int)num2;
-		int num5 = (int)num3;
-		num4 = ((num4 >= 0) ? num4 : 0);
-		num5 = ((num5 >= 0) ? num5 : 0);
-		num4 = ((num4 <= num) ? num4 : num);
-		num5 = ((num5 <= num) ? num5 : num);
-		return ShoreVectors[num5 * shoreMapSize + num4];
-	}
-
-	public readonly float GetCoarseDistanceToShore(Vector2 uv)
-	{
-		//IL_000b: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0015: Unknown result type (might be due to invalid IL or missing references)
-		//IL_008f: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0094: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00a2: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00a7: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00b5: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00ba: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00c8: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00cd: Unknown result type (might be due to invalid IL or missing references)
-		int shoreMapSize = ShoreMapSize;
-		int num = shoreMapSize - 1;
-		float num2 = uv.x * (float)num;
-		float num3 = uv.y * (float)num;
-		int num4 = (int)num2;
-		int num5 = (int)num3;
-		float num6 = num2 - (float)num4;
-		float num7 = num3 - (float)num5;
-		num4 = ((num4 >= 0) ? num4 : 0);
-		num5 = ((num5 >= 0) ? num5 : 0);
-		num4 = ((num4 <= num) ? num4 : num);
-		num5 = ((num5 <= num) ? num5 : num);
-		int num8 = ((num2 < (float)num) ? 1 : 0);
-		int num9 = ((num3 < (float)num) ? shoreMapSize : 0);
-		int num10 = num5 * shoreMapSize + num4;
-		int num11 = num10 + num8;
-		int num12 = num10 + num9;
-		int num13 = num12 + num8;
-		float num14 = ShoreDistances[num10];
-		float num15 = ShoreDistances[num11];
-		float num16 = ShoreDistances[num12];
-		float num17 = ShoreDistances[num13];
-		float num18 = (num15 - num14) * num6 + num14;
-		return (((num17 - num16) * num6 + num16 - num18) * num7 + num18) * ShoreDistanceScale;
-	}
-
-	public void Dispose()
-	{
-		NativeArrayEx.SafeDispose<float>(ref ShoreDistances);
-		NativeArrayEx.SafeDispose<Vector4>(ref ShoreVectors);
-	}
-}
-
-
-using UnityEngine;
-
-public struct ShoreVectorQueryStructure
-{
-	private ShoreData mainlandData;
-
-	private ShoreData deepSeaData;
-
-	private Bounds deepSeaBounds;
-
-	internal ShoreVectorQueryStructure(ShoreData mainlandData, ShoreData deepSeaData, Bounds deepSeaBounds)
-	{
-		//IL_000f: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0010: Unknown result type (might be due to invalid IL or missing references)
-		this.mainlandData = mainlandData;
-		this.deepSeaData = deepSeaData;
-		this.deepSeaBounds = deepSeaBounds;
-	}
-
-	public float GetCoarseDistanceToShore(Vector3 pos)
-	{
-		//IL_0006: Unknown result type (might be due to invalid IL or missing references)
-		//IL_001f: Unknown result type (might be due to invalid IL or missing references)
-		return (((Bounds)(ref deepSeaBounds)).Contains(pos) ? deepSeaData : mainlandData).GetCoarseDistanceToShore(pos);
-	}
-}
-
-
-internal enum TextureCacheState
-{
-	Initializing,
-	Uncached,
-	CachedRaw,
-	CachedCompressed
-}
-
-
-using UnityEngine;
-
-public class TerrainTreeBatch : MonoBehaviour
-{
-}
-
-
-using UnityEngine;
-
-public class TreeMesh : MonoBehaviour
-{
-}
-
-
-using System;
-using UnityEngine;
-
-public class TerrainFilter : PrefabAttribute
-{
-	public SpawnFilter Filter;
-
-	public bool CheckPlacementMap = true;
-
-	public bool CheckTerrainBounds;
-
-	public float CheckTopologyRadius;
-
-	public bool Check(Vector3 pos)
-	{
-		//IL_0018: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0008: Unknown result type (might be due to invalid IL or missing references)
-		if (CheckTerrainBounds && TerrainMeta.OutOfBounds(pos))
-		{
-			return false;
-		}
-		return Filter.GetFactor(pos, CheckPlacementMap, CheckTopologyRadius) > 0f;
-	}
-
-	protected override Type GetIndexedType()
-	{
-		return typeof(TerrainFilter);
-	}
-}
-
-
-using UnityEngine;
-
-public static class TerrainFilterEx
-{
-	public static bool ApplyTerrainFilters(this Transform transform, TerrainFilter[] filters, Vector3 pos, Quaternion rot, Vector3 scale, SpawnFilter globalFilter = null)
-	{
-		//IL_000f: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0014: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0016: Unknown result type (might be due to invalid IL or missing references)
-		//IL_001b: Unknown result type (might be due to invalid IL or missing references)
-		//IL_001c: Unknown result type (might be due to invalid IL or missing references)
-		//IL_001d: Unknown result type (might be due to invalid IL or missing references)
-		//IL_001e: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0023: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0024: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0025: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0026: Unknown result type (might be due to invalid IL or missing references)
-		//IL_002b: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0048: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0032: Unknown result type (might be due to invalid IL or missing references)
-		if (filters.Length == 0)
-		{
-			return true;
-		}
-		foreach (TerrainFilter terrainFilter in filters)
-		{
-			Vector3 val = Vector3.Scale(terrainFilter.worldPosition, scale);
-			val = rot * val;
-			Vector3 val2 = pos + val;
-			if (globalFilter != null && globalFilter.GetFactor(val2) == 0f)
-			{
-				return false;
-			}
-			if (!terrainFilter.Check(val2))
-			{
-				return false;
-			}
-		}
-		return true;
-	}
-}
-
-
-using UnityEngine;
-
-public class TerrainFilterGenerator : MonoBehaviour, IEditorComponent
-{
-	public float PlacementRadius = 32f;
-
-	public float PlacementDistance = 8f;
-
-	public SpawnFilter Filter;
-
-	public bool CheckPlacementMap = true;
-}
-
-
-using UnityEngine;
-
-public class CollateTrainTracks : ProceduralComponent
-{
-	private const float MAX_NODE_DIST = 0.1f;
-
-	private const float MAX_NODE_DIST_SQR = 0.010000001f;
-
-	private const float MAX_NODE_ANGLE = 10f;
-
-	public override bool RunOnCache => true;
-
-	public override void Process(uint seed)
-	{
-		//IL_0189: Unknown result type (might be due to invalid IL or missing references)
-		//IL_018e: Unknown result type (might be due to invalid IL or missing references)
-		//IL_019c: Unknown result type (might be due to invalid IL or missing references)
-		//IL_01a1: Unknown result type (might be due to invalid IL or missing references)
-		//IL_01af: Unknown result type (might be due to invalid IL or missing references)
-		//IL_01b4: Unknown result type (might be due to invalid IL or missing references)
-		//IL_01c2: Unknown result type (might be due to invalid IL or missing references)
-		//IL_01c7: Unknown result type (might be due to invalid IL or missing references)
-		//IL_01ce: Unknown result type (might be due to invalid IL or missing references)
-		//IL_01d5: Unknown result type (might be due to invalid IL or missing references)
-		//IL_01dc: Unknown result type (might be due to invalid IL or missing references)
-		//IL_01e3: Unknown result type (might be due to invalid IL or missing references)
-		//IL_006e: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0073: Unknown result type (might be due to invalid IL or missing references)
-		//IL_008b: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0090: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0256: Unknown result type (might be due to invalid IL or missing references)
-		//IL_025b: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0269: Unknown result type (might be due to invalid IL or missing references)
-		//IL_026e: Unknown result type (might be due to invalid IL or missing references)
-		//IL_027c: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0281: Unknown result type (might be due to invalid IL or missing references)
-		//IL_028f: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0294: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00b8: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00bd: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00c1: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00c6: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00ca: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00cf: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00d3: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00d8: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00da: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00dc: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00eb: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00ed: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00fc: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00fe: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0100: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0112: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0114: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0116: Unknown result type (might be due to invalid IL or missing references)
-		TrainTrackSpline[] array = Object.FindObjectsByType<TrainTrackSpline>((FindObjectsSortMode)0);
-		TrainTrackSpline[] array2;
-		for (int num = array.Length - 1; num >= 0; num--)
-		{
-			TrainTrackSpline ourSpline = array[num];
-			if (ourSpline.dataIndex < 0 && ourSpline.points.Length > 3)
-			{
-				int nodeIndex;
-				for (nodeIndex = ourSpline.points.Length - 2; nodeIndex >= 1; nodeIndex--)
-				{
-					Vector3 ourPos2 = ourSpline.points[nodeIndex];
-					Vector3 ourTangent2 = ourSpline.tangents[nodeIndex];
-					array2 = array;
-					foreach (TrainTrackSpline trainTrackSpline in array2)
-					{
-						if (!((Object)(object)ourSpline == (Object)(object)trainTrackSpline))
-						{
-							Vector3 startPointWorld = trainTrackSpline.GetStartPointWorld();
-							Vector3 endPointWorld = trainTrackSpline.GetEndPointWorld();
-							Vector3 startTangentWorld = trainTrackSpline.GetStartTangentWorld();
-							Vector3 endTangentWorld = trainTrackSpline.GetEndTangentWorld();
-							if (!CompareNodes(startPointWorld, startTangentWorld) && !CompareNodes(endPointWorld, endTangentWorld) && !CompareNodes(startPointWorld, -startTangentWorld))
-							{
-								CompareNodes(endPointWorld, -endTangentWorld);
-							}
-						}
-					}
-					bool CompareNodes(Vector3 theirPos, Vector3 theirTangent)
-					{
-						//IL_0002: Unknown result type (might be due to invalid IL or missing references)
-						//IL_0007: Unknown result type (might be due to invalid IL or missing references)
-						//IL_000a: Unknown result type (might be due to invalid IL or missing references)
-						//IL_000f: Unknown result type (might be due to invalid IL or missing references)
-						//IL_00b3: Unknown result type (might be due to invalid IL or missing references)
-						//IL_00b8: Unknown result type (might be due to invalid IL or missing references)
-						//IL_00d4: Unknown result type (might be due to invalid IL or missing references)
-						//IL_00d9: Unknown result type (might be due to invalid IL or missing references)
-						//IL_00f8: Unknown result type (might be due to invalid IL or missing references)
-						//IL_00fd: Unknown result type (might be due to invalid IL or missing references)
-						//IL_0113: Unknown result type (might be due to invalid IL or missing references)
-						//IL_0118: Unknown result type (might be due to invalid IL or missing references)
-						if (NodesConnect(ourPos2, theirPos, ourTangent2, theirTangent))
-						{
-							TrainTrackSpline trainTrackSpline2 = ((Component)ourSpline).gameObject.AddComponent<TrainTrackSpline>();
-							Vector3[] array4 = (Vector3[])(object)new Vector3[ourSpline.points.Length - nodeIndex];
-							Vector3[] array5 = (Vector3[])(object)new Vector3[ourSpline.points.Length - nodeIndex];
-							Vector3[] array6 = (Vector3[])(object)new Vector3[nodeIndex + 1];
-							Vector3[] array7 = (Vector3[])(object)new Vector3[nodeIndex + 1];
-							for (int num2 = ourSpline.points.Length - 1; num2 >= 0; num2--)
-							{
-								if (num2 >= nodeIndex)
-								{
-									array4[num2 - nodeIndex] = ourSpline.points[num2];
-									array5[num2 - nodeIndex] = ourSpline.tangents[num2];
-								}
-								if (num2 <= nodeIndex)
-								{
-									array6[num2] = ourSpline.points[num2];
-									array7[num2] = ourSpline.tangents[num2];
-								}
-							}
-							ourSpline.SetAll(array6, array7, ourSpline);
-							trainTrackSpline2.SetAll(array4, array5, ourSpline);
-							nodeIndex--;
-							return true;
-						}
-						return false;
-					}
-				}
-			}
-		}
-		array = Object.FindObjectsByType<TrainTrackSpline>((FindObjectsSortMode)0);
-		array2 = array;
-		foreach (TrainTrackSpline ourSpline2 in array2)
-		{
-			Vector3 ourStartPos = ourSpline2.GetStartPointWorld();
-			Vector3 ourEndPos = ourSpline2.GetEndPointWorld();
-			Vector3 ourStartTangent = ourSpline2.GetStartTangentWorld();
-			Vector3 ourEndTangent = ourSpline2.GetEndTangentWorld();
-			if (NodesConnect(ourStartPos, ourEndPos, ourStartTangent, ourEndTangent))
-			{
-				ourSpline2.AddTrackConnection(ourSpline2, TrainTrackSpline.TrackPosition.Next, TrainTrackSpline.TrackOrientation.Same);
-				ourSpline2.AddTrackConnection(ourSpline2, TrainTrackSpline.TrackPosition.Prev, TrainTrackSpline.TrackOrientation.Same);
-				continue;
-			}
-			TrainTrackSpline[] array3 = array;
-			foreach (TrainTrackSpline otherSpline in array3)
-			{
-				Vector3 theirStartPos;
-				Vector3 theirEndPos;
-				Vector3 theirStartTangent;
-				Vector3 theirEndTangent;
-				if (!((Object)(object)ourSpline2 == (Object)(object)otherSpline))
-				{
-					theirStartPos = otherSpline.GetStartPointWorld();
-					theirEndPos = otherSpline.GetEndPointWorld();
-					theirStartTangent = otherSpline.GetStartTangentWorld();
-					theirEndTangent = otherSpline.GetEndTangentWorld();
-					if (!CompareNodes(ourStart: false, theirStart: true) && !CompareNodes(ourStart: false, theirStart: false) && !CompareNodes(ourStart: true, theirStart: true))
-					{
-						CompareNodes(ourStart: true, theirStart: false);
-					}
-				}
-				bool CompareNodes(bool ourStart, bool theirStart)
-				{
-					//IL_000c: Unknown result type (might be due to invalid IL or missing references)
-					//IL_0004: Unknown result type (might be due to invalid IL or missing references)
-					//IL_001d: Unknown result type (might be due to invalid IL or missing references)
-					//IL_0015: Unknown result type (might be due to invalid IL or missing references)
-					//IL_0022: Unknown result type (might be due to invalid IL or missing references)
-					//IL_0031: Unknown result type (might be due to invalid IL or missing references)
-					//IL_0028: Unknown result type (might be due to invalid IL or missing references)
-					//IL_0036: Unknown result type (might be due to invalid IL or missing references)
-					//IL_0045: Unknown result type (might be due to invalid IL or missing references)
-					//IL_003c: Unknown result type (might be due to invalid IL or missing references)
-					//IL_004a: Unknown result type (might be due to invalid IL or missing references)
-					//IL_005b: Unknown result type (might be due to invalid IL or missing references)
-					//IL_005c: Unknown result type (might be due to invalid IL or missing references)
-					//IL_005d: Unknown result type (might be due to invalid IL or missing references)
-					//IL_004f: Unknown result type (might be due to invalid IL or missing references)
-					//IL_0055: Unknown result type (might be due to invalid IL or missing references)
-					//IL_005a: Unknown result type (might be due to invalid IL or missing references)
-					Vector3 ourPos3 = (ourStart ? ourStartPos : ourEndPos);
-					Vector3 ourTangent3 = (ourStart ? ourStartTangent : ourEndTangent);
-					Vector3 theirPos2 = (theirStart ? theirStartPos : theirEndPos);
-					Vector3 val = (theirStart ? theirStartTangent : theirEndTangent);
-					if (ourStart == theirStart)
-					{
-						val *= -1f;
-					}
-					if (NodesConnect(ourPos3, theirPos2, ourTangent3, val))
-					{
-						if (ourStart)
-						{
-							ourSpline2.AddTrackConnection(otherSpline, TrainTrackSpline.TrackPosition.Prev, theirStart ? TrainTrackSpline.TrackOrientation.Reverse : TrainTrackSpline.TrackOrientation.Same);
-						}
-						else
-						{
-							ourSpline2.AddTrackConnection(otherSpline, TrainTrackSpline.TrackPosition.Next, (!theirStart) ? TrainTrackSpline.TrackOrientation.Reverse : TrainTrackSpline.TrackOrientation.Same);
-						}
-						if (theirStart)
-						{
-							otherSpline.AddTrackConnection(ourSpline2, TrainTrackSpline.TrackPosition.Prev, ourStart ? TrainTrackSpline.TrackOrientation.Reverse : TrainTrackSpline.TrackOrientation.Same);
-						}
-						else
-						{
-							otherSpline.AddTrackConnection(ourSpline2, TrainTrackSpline.TrackPosition.Next, (!ourStart) ? TrainTrackSpline.TrackOrientation.Reverse : TrainTrackSpline.TrackOrientation.Same);
-						}
-						return true;
-					}
-					return false;
-				}
-			}
-		}
-		static bool NodesConnect(Vector3 ourPos, Vector3 theirPos, Vector3 ourTangent, Vector3 theirTangent)
-		{
-			//IL_0000: Unknown result type (might be due to invalid IL or missing references)
-			//IL_0001: Unknown result type (might be due to invalid IL or missing references)
-			//IL_0002: Unknown result type (might be due to invalid IL or missing references)
-			//IL_0013: Unknown result type (might be due to invalid IL or missing references)
-			//IL_0014: Unknown result type (might be due to invalid IL or missing references)
-			if (Vector3.SqrMagnitude(ourPos - theirPos) < 0.010000001f)
-			{
-				return Vector3.Angle(ourTangent, theirTangent) < 10f;
-			}
-			return false;
-		}
-	}
-}
-
-
-using UnityEngine;
-
-public class MonumentNode : MonoBehaviour
-{
-	public string ResourceFolder = string.Empty;
-
-	protected void Awake()
-	{
-		if (!((Object)(object)SingletonComponent<WorldSetup>.Instance == (Object)null))
-		{
-			if (SingletonComponent<WorldSetup>.Instance.MonumentNodes == null)
-			{
-				Debug.LogError((object)"WorldSetup.Instance.MonumentNodes is null.", (Object)(object)this);
-			}
-			else
-			{
-				SingletonComponent<WorldSetup>.Instance.MonumentNodes.Add(this);
-			}
-		}
-	}
-
-	public void Process(ref uint seed)
-	{
-		//IL_005c: Unknown result type (might be due to invalid IL or missing references)
-		//IL_006f: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0080: Unknown result type (might be due to invalid IL or missing references)
-		//IL_009a: Unknown result type (might be due to invalid IL or missing references)
-		//IL_009f: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00ac: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00b1: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00c5: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00c6: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00c8: Unknown result type (might be due to invalid IL or missing references)
-		if (World.Networked)
-		{
-			World.Spawn("Monument", "assets/bundled/prefabs/autospawn/" + ResourceFolder + "/");
-			return;
-		}
-		Prefab<MonumentInfo>[] array = Prefab.Load<MonumentInfo>("assets/bundled/prefabs/autospawn/" + ResourceFolder, (GameManager)null, (PrefabAttribute.Library)null, useProbabilities: true, useWorldConfig: true);
-		if (array != null && array.Length != 0)
-		{
-			Prefab<MonumentInfo> random = array.GetRandom(ref seed);
-			float height = TerrainMeta.HeightMap.GetHeight(((Component)this).transform.position);
-			Vector3 pos = default(Vector3);
-			((Vector3)(ref pos))..ctor(((Component)this).transform.position.x, height, ((Component)this).transform.position.z);
-			Quaternion rot = random.Object.transform.localRotation;
-			Vector3 scale = random.Object.transform.localScale;
-			random.ApplyDecorComponents(ref pos, ref rot, ref scale);
-			World.AddPrefab("Monument", random, pos, rot, scale);
-		}
-	}
-}
-
-
-using UnityEngine;
-
-public abstract class ProceduralComponent : MonoBehaviour
-{
-	public enum Realm
-	{
-		Client = 1,
-		Server
-	}
-
-	[InspectorFlags]
-	public Realm Mode = (Realm)(-1);
-
-	public bool Disabled;
-
-	[Space]
-	public string Description = "Procedural Component";
-
-	[Header("Map Creator Settings")]
-	[Space]
-	public bool HideInMapCreator;
-
-	public string MapCreatorCategory = "";
-
-	public virtual bool RunOnCache => false;
-
-	public bool ShouldRun()
-	{
-		if (Disabled)
-		{
-			return false;
-		}
-		if (World.Cached && !RunOnCache)
-		{
-			return false;
-		}
-		if ((Mode & Realm.Server) != 0)
-		{
-			return true;
-		}
-		return false;
-	}
-
-	public abstract void Process(uint seed);
-}
-
-
-public enum Realm
-{
-	Client = 1,
-	Server
-}
-
-
-using System.Runtime.InteropServices;
-using Unity.Collections.LowLevel.Unsafe;
-using UnityEngine;
-
-public class GenerateBiome : ProceduralComponent
-{
-	[DllImport("RustNative", EntryPoint = "generate_biome")]
-	public unsafe static extern void Native_GenerateBiome(byte* nativeArrayPtr, int res, Vector3 pos, Vector3 size, uint seed, float lootAngle, float lootTier0, float lootTier1, float lootTier2, float biomeAngle, float biomeArid, float biomeTemperate, float biomeTundra, float biomeArctic, float biomeJungle, short* heightmap, int heightres);
-
-	public unsafe override void Process(uint seed)
-	{
-		//IL_0005: Unknown result type (might be due to invalid IL or missing references)
-		//IL_001b: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0020: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0021: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0026: Unknown result type (might be due to invalid IL or missing references)
-		//IL_003a: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0054: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0055: Unknown result type (might be due to invalid IL or missing references)
-		byte* unsafePtr = (byte*)NativeArrayUnsafeUtility.GetUnsafePtr<byte>(TerrainMeta.BiomeMap.dst);
-		int res = TerrainMeta.BiomeMap.res;
-		Vector3 position = TerrainMeta.Position;
-		Vector3 size = TerrainMeta.Size;
-		float lootAxisAngle = TerrainMeta.LootAxisAngle;
-		float biomeAxisAngle = TerrainMeta.BiomeAxisAngle;
-		short* unsafePtr2 = (short*)NativeArrayUnsafeUtility.GetUnsafePtr<short>(TerrainMeta.HeightMap.src);
-		int res2 = TerrainMeta.HeightMap.res;
-		Native_GenerateBiome(unsafePtr, res, position, size, seed, lootAxisAngle, World.Config.PercentageTier0, World.Config.PercentageTier1, World.Config.PercentageTier2, biomeAxisAngle, World.Config.PercentageBiomeArid, World.Config.PercentageBiomeTemperate, World.Config.PercentageBiomeTundra, World.Config.PercentageBiomeArctic, World.Config.PercentageBiomeJungle, unsafePtr2, res2);
-	}
-}
-
-
-using System.Threading.Tasks;
-using UnityEngine;
-
-public class GenerateCliffSplat : ProceduralComponent
-{
-	private const int filter = 8389632;
-
-	public static void Process(int x, int z)
-	{
-		TerrainSplatMap splatMap = TerrainMeta.SplatMap;
-		float normZ = splatMap.Coordinate(z);
-		float normX = splatMap.Coordinate(x);
-		if ((TerrainMeta.TopologyMap.GetTopology(normX, normZ) & 0x800400) == 0)
-		{
-			float slope = TerrainMeta.HeightMap.GetSlope(normX, normZ);
-			if (slope > 30f)
-			{
-				splatMap.SetSplat(x, z, 8, Mathf.InverseLerp(30f, 50f, slope));
-			}
-		}
-	}
-
-	public override void Process(uint seed)
-	{
-		TerrainSplatMap splatMap = TerrainMeta.SplatMap;
-		int splatres = splatMap.res;
-		Parallel.For(0, splatres, delegate(int z)
-		{
-			for (int i = 0; i < splatres; i++)
-			{
-				Process(i, z);
-			}
-		});
-	}
-}
-
-
-using System.Threading.Tasks;
-using Unity.Collections;
-
-public class GenerateCliffTopology : ProceduralComponent
-{
-	public bool KeepExisting = true;
-
-	private const float slopeCutoff = 30f;
-
-	private const float splatCutoff = 0.4f;
-
-	private const int filter = 8389632;
-
-	public static void Process(int x, int z)
-	{
-		TerrainTopologyMap topologyMap = TerrainMeta.TopologyMap;
-		float normZ = topologyMap.Coordinate(z);
-		float normX = topologyMap.Coordinate(x);
-		if ((topologyMap.GetTopology(x, z) & 0x800400) == 0)
-		{
-			float slope = TerrainMeta.HeightMap.GetSlope(normX, normZ);
-			float splat = TerrainMeta.SplatMap.GetSplat(normX, normZ, 8);
-			if (slope > 30f || splat > 0.4f)
-			{
-				topologyMap.AddTopology(x, z, 2);
-			}
-			else
-			{
-				topologyMap.RemoveTopology(x, z, 2);
-			}
-		}
-	}
-
-	private static void Process(int x, int z, bool keepExisting)
-	{
-		TerrainTopologyMap topologyMap = TerrainMeta.TopologyMap;
-		float normZ = topologyMap.Coordinate(z);
-		float normX = topologyMap.Coordinate(x);
-		int topology = topologyMap.GetTopology(x, z);
-		if (!World.Procedural || (topology & 0x800400) == 0)
-		{
-			float slope = TerrainMeta.HeightMap.GetSlope(normX, normZ);
-			float splat = TerrainMeta.SplatMap.GetSplat(normX, normZ, 8);
-			if (slope > 30f || splat > 0.4f)
-			{
-				topologyMap.AddTopology(x, z, 2);
-			}
-			else if (!keepExisting)
-			{
-				topologyMap.RemoveTopology(x, z, 2);
-			}
-		}
-	}
-
-	public override void Process(uint seed)
-	{
-		//IL_0013: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0018: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0047: Unknown result type (might be due to invalid IL or missing references)
-		NativeArray<int> map = TerrainMeta.TopologyMap.dst;
-		int res = TerrainMeta.TopologyMap.res;
-		Parallel.For(0, res, delegate(int z)
-		{
-			for (int i = 0; i < res; i++)
-			{
-				Process(i, z, KeepExisting);
-			}
-		});
-		ImageProcessing.Dilate2D(map, res, res, 4194306, 1, delegate(int x, int y)
-		{
-			if ((map[x * res + y] & 2) == 0)
-			{
-				ref NativeArray<int> reference = ref map;
-				int num = x * res + y;
-				reference[num] |= 0x400000;
-			}
-		});
-	}
-}
-
-
-using Unity.Collections;
-
-public class GenerateClutterTopology : ProceduralComponent
-{
-	public override void Process(uint seed)
-	{
-		//IL_000c: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0011: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0027: Unknown result type (might be due to invalid IL or missing references)
-		NativeArray<int> map = TerrainMeta.TopologyMap.dst;
-		int res = TerrainMeta.TopologyMap.res;
-		ImageProcessing.Dilate2D(map, res, res, 16777728, 3, delegate(int x, int y)
-		{
-			if ((map[x * res + y] & 0x200) == 0)
-			{
-				ref NativeArray<int> reference = ref map;
-				int num = x * res + y;
-				reference[num] |= 0x1000000;
-			}
-		});
-	}
-}
-
-
-using System.Threading.Tasks;
-
-public class GenerateDecorTopology : ProceduralComponent
-{
-	public bool KeepExisting = true;
-
-	public override void Process(uint seed)
-	{
-		TerrainTopologyMap topomap = TerrainMeta.TopologyMap;
-		int topores = topomap.res;
-		Parallel.For(0, topores, delegate(int z)
-		{
-			for (int i = 0; i < topores; i++)
-			{
-				if (topomap.GetTopology(i, z, 4194306))
-				{
-					topomap.AddTopology(i, z, 512);
-				}
-				else if (!KeepExisting)
-				{
-					topomap.RemoveTopology(i, z, 512);
-				}
-			}
-		});
-	}
 }
 
 

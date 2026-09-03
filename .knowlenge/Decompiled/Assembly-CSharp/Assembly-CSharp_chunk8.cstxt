@@ -4,12 +4,14 @@ using Network;
 using UnityEngine;
 using UnityEngine.Assertions;
 
-public class RentableShopVendingMachine : InvisibleVendingMachine
+public class RentableShopVendingMachine : InvisibleVendingMachine, IPowergridEntity
 {
 	private RentableShop _cachedParent;
 
 	[SerializeField]
 	private ItemListScriptableObject BannedItemsList;
+
+	private const Flags Refrigerated = Flags.Reserved12;
 
 	private RentableShop ParentRentableShop
 	{
@@ -455,6 +457,19 @@ public class RentableShopVendingMachine : InvisibleVendingMachine
 		return false;
 	}
 
+	public override float GetSpoilMultiplier(Item arg)
+	{
+		if (!Powergrid.enabled)
+		{
+			return base.GetSpoilMultiplier(arg);
+		}
+		if (HasFlag(Flags.Reserved12))
+		{
+			return PoweredFoodSpoilageRateMultiplier;
+		}
+		return base.GetSpoilMultiplier(arg);
+	}
+
 	public override void ServerInit()
 	{
 		base.ServerInit();
@@ -482,8 +497,8 @@ public class RentableShopVendingMachine : InvisibleVendingMachine
 		base.RPC_UpdateShopName(msg);
 	}
 
-	[RPC_Server.MaxDistance(9f)]
 	[RPC_Server]
+	[RPC_Server.MaxDistance(9f)]
 	private void RPC_BuyItem(RPCMessage msg)
 	{
 		BuyItem(msg);
@@ -496,22 +511,22 @@ public class RentableShopVendingMachine : InvisibleVendingMachine
 		SV_RequestLongTermData(msg);
 	}
 
-	[RPC_Server.MaxDistance(9f)]
 	[RPC_Server]
+	[RPC_Server.MaxDistance(9f)]
 	private void RPC_RequestPurchaseData(RPCMessage msg)
 	{
 		SV_RequestPurchaseData(msg);
 	}
 
-	[RPC_Server.MaxDistance(9f)]
 	[RPC_Server]
+	[RPC_Server.MaxDistance(9f)]
 	private void RPC_DeleteSellOrderDistanceCheckOnly(RPCMessage msg)
 	{
 		RPC_DeleteSellOrder(msg);
 	}
 
-	[RPC_Server.MaxDistance(9f)]
 	[RPC_Server]
+	[RPC_Server.MaxDistance(9f)]
 	private void RPC_DeleteAllSellOrdersDistanceCheckOnly(RPCMessage msg)
 	{
 		RPC_DeleteAllSellOrders(msg);
@@ -545,6 +560,17 @@ public class RentableShopVendingMachine : InvisibleVendingMachine
 			return PlayerInventory.CanMoveFromResponse.Success();
 		}
 		return base.CanMoveFrom(player, item);
+	}
+
+	public bool Server_ShouldConnectToPowergrid()
+	{
+		return true;
+	}
+
+	public void Server_OnPowergridStageChanged(int newStage)
+	{
+		using FlagsUpdateScope flagsUpdateScope = StartSetFlags(FlagsUpdateMode.SendNetworkUpdate_Flags);
+		flagsUpdateScope.Set(Flags.Reserved12, newStage > 0);
 	}
 }
 
@@ -765,8 +791,8 @@ public class RepairBench : StorageContainer
 		}
 	}
 
-	[RPC_Server.IsVisible(3f)]
 	[RPC_Server]
+	[RPC_Server.IsVisible(3f)]
 	public void ChangeSkin(RPCMessage msg)
 	{
 		//IL_0043: Unknown result type (might be due to invalid IL or missing references)
@@ -973,8 +999,8 @@ public class RepairBench : StorageContainer
 		}
 	}
 
-	[RPC_Server.IsVisible(3f)]
 	[RPC_Server]
+	[RPC_Server.IsVisible(3f)]
 	public void RepairItem(RPCMessage msg)
 	{
 		Item slot = base.inventory.GetSlot(0);
@@ -1325,13 +1351,13 @@ public class ResearchTable : StorageContainer
 		base.inventory.canAcceptItem = ItemFilter;
 	}
 
-	public override bool ItemFilter(Item item, int targetSlot)
+	public override bool ItemFilter(BasePlayer player, Item item, int targetSlot)
 	{
 		if (targetSlot == 1 && (Object)(object)item.info != (Object)(object)researchResource)
 		{
 			return false;
 		}
-		return base.ItemFilter(item, targetSlot);
+		return base.ItemFilter(player, item, targetSlot);
 	}
 
 	public Item GetTargetItem()
@@ -1383,13 +1409,9 @@ public class ResearchTable : StorageContainer
 		}
 		BasePlayer player = msg.player;
 		Item targetItem = GetTargetItem();
-		if (targetItem == null || Interface.CallHook("CanResearchItem", (object)player, (object)targetItem) != null || targetItem.amount > 1 || !IsItemResearchable(targetItem))
+		if (targetItem != null && Interface.CallHook("CanResearchItem", (object)player, (object)targetItem) == null && targetItem.amount <= 1 && IsItemResearchable(targetItem) && (!onlyOneUser || !((Object)(object)msg.player.inventory.loot.entitySource != (Object)(object)this)))
 		{
-			return;
-		}
-		Interface.CallHook("OnItemResearch", (object)this, (object)targetItem, (object)player);
-		if (!onlyOneUser || !((Object)(object)msg.player.inventory.loot.entitySource != (Object)(object)this))
-		{
+			Interface.CallHook("OnItemResearch", (object)this, (object)targetItem, (object)player);
 			targetItem.CollectedForCrafting(player);
 			researchFinishedTime = Time.realtimeSinceStartup + researchDuration;
 			((FacepunchBehaviour)this).Invoke((Action)ResearchAttemptFinished, researchDuration);
@@ -1783,8 +1805,8 @@ public class RFBroadcaster : IOEntity, IRFObject
 	}
 
 	[RPC_Server]
-	[RPC_Server.IsVisible(3f)]
 	[RPC_Server.CallsPerSecond(3uL)]
+	[RPC_Server.IsVisible(3f)]
 	public void ServerSetFrequency(RPCMessage msg)
 	{
 		if (CanChangeFrequency(msg.player) && !(Time.time < nextChangeTime))
@@ -1860,8 +1882,8 @@ public class RFBroadcaster : IOEntity, IRFObject
 	}
 
 	[RPC_Server]
-	[RPC_Server.IsVisible(3f)]
 	[RPC_Server.MaxDistance(3f)]
+	[RPC_Server.IsVisible(3f)]
 	[RPC_Server.CallsPerSecond(3uL)]
 	public void SERVER_RequestOpenPanel(RPCMessage msg)
 	{
@@ -2086,9 +2108,9 @@ public class RFReceiver : IOEntity, IRFObject
 		}
 	}
 
+	[RPC_Server]
 	[RPC_Server.IsVisible(3f)]
 	[RPC_Server.CallsPerSecond(3uL)]
-	[RPC_Server]
 	public void ServerSetFrequency(RPCMessage msg)
 	{
 		if (!((Object)(object)msg.player == (Object)null) && msg.player.CanBuild())
@@ -2112,8 +2134,8 @@ public class RFReceiver : IOEntity, IRFObject
 	}
 
 	[RPC_Server.IsVisible(3f)]
-	[RPC_Server]
 	[RPC_Server.CallsPerSecond(3uL)]
+	[RPC_Server]
 	public void SERVER_RequestOpenPanel(RPCMessage msg)
 	{
 		BasePlayer player = msg.player;
@@ -2436,8 +2458,8 @@ public class RFTimedExplosive : TimedExplosive, IRFObject
 		}
 	}
 
-	[RPC_Server.IsVisible(3f)]
 	[RPC_Server]
+	[RPC_Server.IsVisible(3f)]
 	public void Pickup(RPCMessage msg)
 	{
 		if (Interface.CallHook("ICanPickupEntity", (object)msg.player, (object)this) != null || !msg.player.CanInteract() || !IsArmed())
@@ -2461,8 +2483,8 @@ public class RFTimedExplosive : TimedExplosive, IRFObject
 		}
 	}
 
-	[RPC_Server.IsVisible(3f)]
 	[RPC_Server]
+	[RPC_Server.IsVisible(3f)]
 	public void PickupTimer(RPCMessage msg)
 	{
 		if (msg.player.CanInteract() && IsArmed())
@@ -2611,8 +2633,8 @@ public class RHIB : MotorRowboat
 		return base.OnRpcMessage(player, rpc, msg);
 	}
 
-	[RPC_Server.IsVisible(6f)]
 	[RPC_Server]
+	[RPC_Server.IsVisible(6f)]
 	public void Server_Release(RPCMessage msg)
 	{
 		//IL_0035: Unknown result type (might be due to invalid IL or missing references)
@@ -2853,8 +2875,8 @@ public class RidableHorse : BaseVehicle, IInventoryProvider, IDetector, HitchTro
 	[NonSerialized]
 	public HorseModifiers modifiers;
 
-	[ServerVar]
 	[Help("Scale all rideable animal dung production rates by this value. 0 will disable dung production.")]
+	[ServerVar]
 	public static float dungTimeScale = 1f;
 
 	private float nextEatTime;
@@ -2951,8 +2973,8 @@ public class RidableHorse : BaseVehicle, IInventoryProvider, IDetector, HitchTro
 	[HideInInspector]
 	private float baseDrag;
 
-	[HideInInspector]
 	[SerializeField]
+	[HideInInspector]
 	private float baseAngularDrag;
 
 	private HorseAvoidanceState currentAvoidanceState;
@@ -2973,8 +2995,8 @@ public class RidableHorse : BaseVehicle, IInventoryProvider, IDetector, HitchTro
 
 	private float nextDecayTime;
 
-	[Header("Horse")]
 	[SerializeField]
+	[Header("Horse")]
 	private Animator animator;
 
 	[SerializeField]
@@ -3034,21 +3056,21 @@ public class RidableHorse : BaseVehicle, IInventoryProvider, IDetector, HitchTro
 
 	public AnimationCurve slopeAngleSpeedFactor;
 
+	[Space]
 	[Header("Collision Damage")]
 	[SerializeField]
-	[Space]
 	private GameObjectRef collisionEffect;
 
-	[SerializeField]
 	[Tooltip("Ignore low magnitude so e.g. Players running into stationary vehicles doesn't trigger damage or FX")]
+	[SerializeField]
 	private float minCollisionDamageForce = 20000f;
 
-	[Tooltip("Cap max magnitude so unusual events can't cause mega damage")]
 	[SerializeField]
+	[Tooltip("Cap max magnitude so unusual events can't cause mega damage")]
 	private float maxCollisionDamageForce = 2500000f;
 
-	[SerializeField]
 	[Tooltip("Adjust this away from 1.0 if collision damage to this vehicle seems too high or low")]
+	[SerializeField]
 	private float collisionDamageMultiplier = 1f;
 
 	[SerializeField]
@@ -3115,8 +3137,8 @@ public class RidableHorse : BaseVehicle, IInventoryProvider, IDetector, HitchTro
 
 	public Sprite SwapToDoubleIcon;
 
-	[SerializeField]
 	[HideInInspector]
+	[SerializeField]
 	protected bool[] hasItemTokenCache;
 
 	[Space]
@@ -3130,8 +3152,8 @@ public class RidableHorse : BaseVehicle, IInventoryProvider, IDetector, HitchTro
 
 	public GameObjectRef ragdollPrefab;
 
-	[SerializeField]
 	[Header("Pulling")]
+	[SerializeField]
 	private List<ModifierDefintion> pullingPlayerModifiers;
 
 	[Header("Avoidance")]
@@ -3153,8 +3175,8 @@ public class RidableHorse : BaseVehicle, IInventoryProvider, IDetector, HitchTro
 	[HideInInspector]
 	public float normalVariation;
 
-	[Min(0f)]
 	[Header("Healing")]
+	[Min(0f)]
 	public float healingMultiplier = 4f;
 
 	[Min(0f)]
@@ -3169,7 +3191,7 @@ public class RidableHorse : BaseVehicle, IInventoryProvider, IDetector, HitchTro
 
 	public const Flags Flag_HideHair = Flags.Reserved4;
 
-	public const Flags Flag_WoodArmor = Flags.Reserved5;
+	public const Flags Flag_WoodArmor = Flags.Reserved8;
 
 	public const Flags Flag_RoadsignArmor = Flags.Reserved6;
 
@@ -3738,12 +3760,12 @@ public class RidableHorse : BaseVehicle, IInventoryProvider, IDetector, HitchTro
 		return itemContainer;
 	}
 
-	public bool StorageItemFilter(Item item, int targetSlot)
+	public bool StorageItemFilter(BasePlayer player, Item item, int targetSlot)
 	{
 		return true;
 	}
 
-	public bool EquipmentItemFilter(Item item, int targetSlot)
+	public bool EquipmentItemFilter(BasePlayer player, Item item, int targetSlot)
 	{
 		if (IsForSale && ItemIsSaddle(item))
 		{
@@ -3806,7 +3828,7 @@ public class RidableHorse : BaseVehicle, IInventoryProvider, IDetector, HitchTro
 		using (FlagsUpdateScope flagsUpdateScope = StartSetFlags(FlagsUpdateMode.Local))
 		{
 			flagsUpdateScope.Set(Flags.Reserved4, b: false);
-			flagsUpdateScope.Set(Flags.Reserved5, b: false);
+			flagsUpdateScope.Set(Flags.Reserved8, b: false);
 			flagsUpdateScope.Set(Flags.Reserved6, b: false);
 			flagsUpdateScope.Set(Flags.Unused23, b: false);
 			riderProtection.Clear();
@@ -3904,8 +3926,8 @@ public class RidableHorse : BaseVehicle, IInventoryProvider, IDetector, HitchTro
 		}
 	}
 
-	[RPC_Server.IsVisible(3f)]
 	[RPC_Server]
+	[RPC_Server.IsVisible(3f)]
 	public void SERVER_Claim(RPCMessage msg)
 	{
 		BasePlayer player = msg.player;
@@ -5906,9 +5928,9 @@ public class RidableHorse : BaseVehicle, IInventoryProvider, IDetector, HitchTro
 		}
 	}
 
+	[RPC_Server]
 	[RPC_Server.IsVisible(3f)]
 	[RPC_Server.CallsPerSecond(1uL)]
-	[RPC_Server]
 	public void SERVER_Lead(RPCMessage msg)
 	{
 		BasePlayer player = msg.player;
@@ -6372,10 +6394,10 @@ public class RidableHorse : BaseVehicle, IInventoryProvider, IDetector, HitchTro
 		}, 1f);
 	}
 
-	[RPC_Server.IsVisible(3f)]
-	[RPC_Server.MaxDistance(3f)]
-	[RPC_Server.CallsPerSecond(1uL)]
 	[RPC_Server]
+	[RPC_Server.CallsPerSecond(1uL)]
+	[RPC_Server.MaxDistance(3f)]
+	[RPC_Server.IsVisible(3f)]
 	public void SERVER_RequestTow(RPCMessage msg)
 	{
 		//IL_0039: Unknown result type (might be due to invalid IL or missing references)
@@ -6388,9 +6410,9 @@ public class RidableHorse : BaseVehicle, IInventoryProvider, IDetector, HitchTro
 	}
 
 	[RPC_Server.CallsPerSecond(1uL)]
-	[RPC_Server.MaxDistance(3f)]
-	[RPC_Server.IsVisible(3f)]
 	[RPC_Server]
+	[RPC_Server.IsVisible(3f)]
+	[RPC_Server.MaxDistance(3f)]
 	public void SERVER_RequestDetach(RPCMessage msg)
 	{
 		//IL_0049: Unknown result type (might be due to invalid IL or missing references)
@@ -6923,14 +6945,14 @@ public class RustigeEgg : BaseCombatEntity
 		return HasFlag(Flags.Reserved1);
 	}
 
-	[RPC_Server.IsVisible(3f)]
 	[RPC_Server]
+	[RPC_Server.IsVisible(3f)]
 	public void RPC_Spin(RPCMessage msg)
 	{
 	}
 
-	[RPC_Server.IsVisible(3f)]
 	[RPC_Server]
+	[RPC_Server.IsVisible(3f)]
 	public void RPC_Open(RPCMessage msg)
 	{
 		//IL_003e: Unknown result type (might be due to invalid IL or missing references)
@@ -6985,8 +7007,8 @@ public class Sail : DecayEntity, IBoatBuildingPiece, IBoatPropulsion
 	[ReplicatedVar]
 	public static float MaxThrustMultiplier = 1f;
 
-	[Header("Sail")]
 	[SerializeField]
+	[Header("Sail")]
 	private float maxThrust = 1000f;
 
 	public float RaiseDuration = 1.5f;
@@ -7008,6 +7030,10 @@ public class Sail : DecayEntity, IBoatBuildingPiece, IBoatPropulsion
 
 	public Animator Animator;
 
+	public GameObject RaisedFarVisual;
+
+	public GameObject LoweredFarVisual;
+
 	public GameObjectRef sailRotateEffect;
 
 	public const Flags Flag_Lowered = Flags.Reserved3;
@@ -7017,6 +7043,14 @@ public class Sail : DecayEntity, IBoatBuildingPiece, IBoatPropulsion
 	public const Flags Flag_Raising = Flags.Reserved13;
 
 	public const Flags Flag_WindBlocked = Flags.Reserved14;
+
+	private static readonly int WindBlockedHash = Animator.StringToHash("windblocked");
+
+	private static readonly int LoweredHash = Animator.StringToHash("lowered");
+
+	private static readonly int LoweringHash = Animator.StringToHash("lowering");
+
+	private static readonly int RaisingHash = Animator.StringToHash("raising");
 
 	private TimeUntil timeUntilLoweredRaised;
 
@@ -7546,8 +7580,8 @@ public class Sail : DecayEntity, IBoatBuildingPiece, IBoatPropulsion
 		ToggleColliders();
 	}
 
-	[RPC_Server]
 	[RPC_Server.CallsPerSecond(5uL)]
+	[RPC_Server]
 	[RPC_Server.IsVisible(3f)]
 	public void RaiseSail(RPCMessage msg)
 	{
@@ -7592,9 +7626,9 @@ public class Sail : DecayEntity, IBoatBuildingPiece, IBoatPropulsion
 		OnRaisedOrLowered();
 	}
 
-	[RPC_Server]
-	[RPC_Server.IsVisible(3f)]
 	[RPC_Server.CallsPerSecond(5uL)]
+	[RPC_Server.IsVisible(3f)]
+	[RPC_Server]
 	public void RotateSail(RPCMessage msg)
 	{
 		RotateSail(msg.player);
@@ -7690,11 +7724,14 @@ public class SamSite : ContainerIOEntity
 
 		public readonly float timeBetweenBursts;
 
-		public SamTargetType(float scanRadius, float speedMultiplier, float timeBetweenBursts)
+		public readonly bool applyAimError;
+
+		public SamTargetType(float scanRadius, float speedMultiplier, float timeBetweenBursts, bool applyAimError = true)
 		{
 			this.scanRadius = scanRadius;
 			this.speedMultiplier = speedMultiplier;
 			this.timeBetweenBursts = timeBetweenBursts;
+			this.applyAimError = applyAimError;
 		}
 	}
 
@@ -7762,6 +7799,8 @@ public class SamSite : ContainerIOEntity
 	public static SamTargetType targetTypeVehicle;
 
 	public static SamTargetType targetTypeMissile;
+
+	public static SamTargetType targetTypeDrone;
 
 	public ISamSiteTarget currentTarget;
 
@@ -7911,12 +7950,13 @@ public class SamSite : ContainerIOEntity
 
 	public override void ServerInit()
 	{
-		//IL_008d: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0092: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00ab: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00b0: Unknown result type (might be due to invalid IL or missing references)
 		base.ServerInit();
 		targetTypeUnknown = new SamTargetType(vehicleScanRadius, 1f, 5f);
 		targetTypeVehicle = new SamTargetType(vehicleScanRadius, 1f, 5f);
 		targetTypeMissile = new SamTargetType(missileScanRadius, 2.25f, 3.5f);
+		targetTypeDrone = new SamTargetType(vehicleScanRadius, 2.25f, 5f, applyAimError: false);
 		mostRecentTargetType = targetTypeUnknown;
 		ClearTarget();
 		((FacepunchBehaviour)this).InvokeRandomized((Action)TargetScan, 1f, 3f, 0.2f);
@@ -7995,31 +8035,31 @@ public class SamSite : ContainerIOEntity
 	{
 		//IL_0001: Unknown result type (might be due to invalid IL or missing references)
 		//IL_0006: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0164: Unknown result type (might be due to invalid IL or missing references)
-		//IL_016f: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0174: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0179: Unknown result type (might be due to invalid IL or missing references)
-		//IL_017c: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0176: Unknown result type (might be due to invalid IL or missing references)
 		//IL_0181: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0182: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0183: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0188: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0186: Unknown result type (might be due to invalid IL or missing references)
+		//IL_018b: Unknown result type (might be due to invalid IL or missing references)
+		//IL_018e: Unknown result type (might be due to invalid IL or missing references)
 		//IL_0193: Unknown result type (might be due to invalid IL or missing references)
-		//IL_01b7: Unknown result type (might be due to invalid IL or missing references)
-		//IL_01c2: Unknown result type (might be due to invalid IL or missing references)
-		//IL_01c7: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0194: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0195: Unknown result type (might be due to invalid IL or missing references)
+		//IL_019a: Unknown result type (might be due to invalid IL or missing references)
+		//IL_01a5: Unknown result type (might be due to invalid IL or missing references)
+		//IL_01c9: Unknown result type (might be due to invalid IL or missing references)
 		//IL_01d4: Unknown result type (might be due to invalid IL or missing references)
+		//IL_01d9: Unknown result type (might be due to invalid IL or missing references)
 		//IL_01e6: Unknown result type (might be due to invalid IL or missing references)
-		//IL_01eb: Unknown result type (might be due to invalid IL or missing references)
-		//IL_01ef: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0204: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0209: Unknown result type (might be due to invalid IL or missing references)
-		//IL_020d: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0219: Unknown result type (might be due to invalid IL or missing references)
-		//IL_021e: Unknown result type (might be due to invalid IL or missing references)
+		//IL_01f8: Unknown result type (might be due to invalid IL or missing references)
+		//IL_01fd: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0201: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0216: Unknown result type (might be due to invalid IL or missing references)
+		//IL_021b: Unknown result type (might be due to invalid IL or missing references)
+		//IL_021f: Unknown result type (might be due to invalid IL or missing references)
 		//IL_022b: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0233: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0238: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0230: Unknown result type (might be due to invalid IL or missing references)
+		//IL_023d: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0245: Unknown result type (might be due to invalid IL or missing references)
+		//IL_024a: Unknown result type (might be due to invalid IL or missing references)
 		//IL_0050: Unknown result type (might be due to invalid IL or missing references)
 		//IL_0055: Unknown result type (might be due to invalid IL or missing references)
 		//IL_0061: Unknown result type (might be due to invalid IL or missing references)
@@ -8036,19 +8076,19 @@ public class SamSite : ContainerIOEntity
 		//IL_00c1: Unknown result type (might be due to invalid IL or missing references)
 		//IL_00c9: Unknown result type (might be due to invalid IL or missing references)
 		//IL_00ce: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0124: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0131: Unknown result type (might be due to invalid IL or missing references)
 		//IL_0136: Unknown result type (might be due to invalid IL or missing references)
-		//IL_013b: Unknown result type (might be due to invalid IL or missing references)
-		//IL_013f: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0144: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00ff: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0107: Unknown result type (might be due to invalid IL or missing references)
-		//IL_010c: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0110: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0117: Unknown result type (might be due to invalid IL or missing references)
-		//IL_011c: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0121: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0143: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0148: Unknown result type (might be due to invalid IL or missing references)
+		//IL_014d: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0151: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0156: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0111: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0119: Unknown result type (might be due to invalid IL or missing references)
+		//IL_011e: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0122: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0129: Unknown result type (might be due to invalid IL or missing references)
+		//IL_012e: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0133: Unknown result type (might be due to invalid IL or missing references)
 		Vector3 val = currentAimDir;
 		if (!currentTarget.IsUnityNull() && IsPowered())
 		{
@@ -8060,7 +8100,7 @@ public class SamSite : ContainerIOEntity
 			num3 = Vector3.Distance(val3, ((Component)eyePoint).transform.position) / num;
 			val3 = val2 + currentTarget.GetWorldVelocity() * num3;
 			Vector3 val4 = currentTarget.GetWorldVelocity();
-			if (((Vector3)(ref val4)).magnitude > 0.1f)
+			if (((Vector3)(ref val4)).magnitude > 0.1f && currentTarget.SAMTargetType.applyAimError)
 			{
 				float num4 = Mathf.Sin(Time.time * 3f) * (1f + num3 * 0.5f);
 				Vector3 val5 = val3;
@@ -8380,9 +8420,9 @@ public class SamSite : ContainerIOEntity
 		}
 	}
 
-	[RPC_Server]
-	[RPC_Server.IsVisible(3f)]
 	[RPC_Server.CallsPerSecond(1uL)]
+	[RPC_Server.IsVisible(3f)]
+	[RPC_Server]
 	private void ToggleDefenderMode(RPCMessage msg)
 	{
 		if (staticRespawn)
@@ -8467,11 +8507,14 @@ public class SamTargetType
 
 	public readonly float timeBetweenBursts;
 
-	public SamTargetType(float scanRadius, float speedMultiplier, float timeBetweenBursts)
+	public readonly bool applyAimError;
+
+	public SamTargetType(float scanRadius, float speedMultiplier, float timeBetweenBursts, bool applyAimError = true)
 	{
 		this.scanRadius = scanRadius;
 		this.speedMultiplier = speedMultiplier;
 		this.timeBetweenBursts = timeBetweenBursts;
+		this.applyAimError = applyAimError;
 	}
 }
 
@@ -8767,6 +8810,7 @@ using System.Diagnostics;
 using System.Text;
 using ConVar;
 using Facepunch;
+using Facepunch.Rust;
 using Network;
 using ProtoBuf;
 using Rust;
@@ -8862,8 +8906,8 @@ public class SatelliteControlComputer : BaseMountable
 	[Tooltip("Pre-spawned world-space monitor UI (a prefab child like the spectator screen) that shows only the countdown to impact. Initialised in ClientInit.")]
 	public SatelliteCountdownScreenUI countdownScreen;
 
-	[Tooltip("Items the player must have, and which are consumed, to power up the terminal. amount is the minimum required/consumed; set maxAmount higher to roll a random cost in that range each session (leave maxAmount at -1/0 for a fixed cost).")]
 	[Header("Power")]
+	[Tooltip("Items the player must have, and which are consumed, to power up the terminal. amount is the minimum required/consumed; set maxAmount higher to roll a random cost in that range each session (leave maxAmount at -1/0 for a fixed cost).")]
 	public List<ItemAmountRanged> powerCost = new List<ItemAmountRanged>();
 
 	private List<int> resolvedPowerCost = new List<int>();
@@ -8871,8 +8915,8 @@ public class SatelliteControlComputer : BaseMountable
 	[Tooltip("Child SatelliteFuelStorage prefab the player loads the power-up items into. Spawned and parented to this computer on first init.")]
 	public GameObjectRef fuelStoragePrefab;
 
-	[Header("Satellites")]
 	[Tooltip("Number of satellites to generate each session")]
+	[Header("Satellites")]
 	public int satelliteCount = 6;
 
 	[Header("Satellite Prefab")]
@@ -8880,6 +8924,13 @@ public class SatelliteControlComputer : BaseMountable
 
 	[Tooltip("Prevent-building volume spawned at the locked crash site to reserve the area during descent")]
 	public GameObjectRef preventBuildingPrefab;
+
+	[Tooltip("Pre-spawned child of this entity's prefab (must live inside the entity prefab, not the launch site — monument-authored references don't reach the client entity). Leave disabled in the prefab; enabled only while a satellite is descending. Optional — skipped when unset.")]
+	[Header("Siren")]
+	public Transform launchSiren;
+
+	[Tooltip("Inverse of launchSiren — enabled whenever launchSiren is not. Same prefab rules: must be a pre-spawned child of this entity's prefab. Optional — skipped when unset.")]
+	public Transform launchSirenOff;
 
 	[Header("Audio")]
 	public SoundDefinition selectSatellite;
@@ -9467,7 +9518,7 @@ public class SatelliteControlComputer : BaseMountable
 	{
 		if (HasFlag(Flags.Reserved10) && Time.time >= targeting.cooldownEndTime)
 		{
-			SetFlag(Flags.Reserved10, b: false);
+			SetFlagLocal(Flags.Reserved10, b: false);
 			targeting.cooldownEndTime = 0f;
 			GenerateSatellites();
 			RollPowerCost();
@@ -9489,9 +9540,9 @@ public class SatelliteControlComputer : BaseMountable
 		}
 	}
 
-	[RPC_Server]
-	[RPC_Server.IsVisible(3f)]
 	[RPC_Server.CallsPerSecond(2uL)]
+	[RPC_Server.IsVisible(3f)]
+	[RPC_Server]
 	public void RPC_PowerUp(RPCMessage msg)
 	{
 		if (HasFlag(Flags.Reserved8) || HasFlag(Flags.Reserved10))
@@ -9526,7 +9577,7 @@ public class SatelliteControlComputer : BaseMountable
 			}
 			TakePowerCost();
 		}
-		SetFlag(Flags.Reserved8, b: true);
+		SetFlagLocal(Flags.Reserved8, b: true);
 		GenerateSatellites();
 		SendNetworkUpdate();
 	}
@@ -9648,9 +9699,9 @@ public class SatelliteControlComputer : BaseMountable
 		paidPowerCost.Clear();
 	}
 
-	[RPC_Server]
 	[RPC_Server.CallsPerSecond(2uL)]
 	[RPC_Server.IsVisible(3f)]
+	[RPC_Server]
 	public void RPC_OpenFuelStorage(RPCMessage msg)
 	{
 		BasePlayer player = msg.player;
@@ -9659,7 +9710,7 @@ public class SatelliteControlComputer : BaseMountable
 			SatelliteFuelStorage fuelStorage = GetFuelStorage();
 			if (!((Object)(object)fuelStorage == (Object)null))
 			{
-				fuelStorage.PlayerOpenLoot(player, "", doPositionChecks: false);
+				fuelStorage.PlayerOpenLoot(player);
 			}
 		}
 	}
@@ -9685,9 +9736,9 @@ public class SatelliteControlComputer : BaseMountable
 		}
 	}
 
+	[RPC_Server]
 	[RPC_Server.CallsPerSecond(5uL)]
 	[RPC_Server.IsVisible(3f)]
-	[RPC_Server]
 	public void RPC_SelectSatellite(RPCMessage msg)
 	{
 		if (State == ControlState.Ready && !((Object)(object)msg.player == (Object)null) && !((Object)(object)msg.player != (Object)(object)GetMounted()))
@@ -9703,7 +9754,7 @@ public class SatelliteControlComputer : BaseMountable
 				fuelRemaining = satelliteData.fuel;
 				float control_window = Satellite.control_window;
 				controlPhaseEndTime = Time.time + control_window;
-				SetFlag(Flags.Reserved9, b: true);
+				SetFlagLocal(Flags.Reserved9, b: true);
 				SendNetworkUpdate();
 				ClientRPC(RpcTarget.Player("RPC_ControlPhaseStarted", msg.player), control_window, fuelRemaining, Satellite.default_crash_radius, selectedSatelliteIndex);
 				TryInitialOffsetAttempt(msg.player, 0);
@@ -9746,9 +9797,9 @@ public class SatelliteControlComputer : BaseMountable
 		});
 	}
 
+	[RPC_Server]
 	[RPC_Server.CallsPerSecond(5uL)]
 	[RPC_Server.IsVisible(3f)]
-	[RPC_Server]
 	public void RPC_FireThruster(RPCMessage msg)
 	{
 		//IL_00ce: Unknown result type (might be due to invalid IL or missing references)
@@ -10001,14 +10052,16 @@ public class SatelliteControlComputer : BaseMountable
 		lateralOffset += val * num2;
 	}
 
-	[RPC_Server]
-	[RPC_Server.CallsPerSecond(1uL)]
 	[RPC_Server.IsVisible(3f)]
+	[RPC_Server.CallsPerSecond(1uL)]
+	[RPC_Server]
 	public void RPC_LockTrajectory(RPCMessage msg)
 	{
+		//IL_0051: Unknown result type (might be due to invalid IL or missing references)
 		if (HasFlag(Flags.Reserved9) && !((Object)(object)msg.player == (Object)null) && !((Object)(object)msg.player != (Object)(object)GetMounted()) && !targetingSearchActive)
 		{
 			EndControlPhase(msg.player);
+			Analytics.Azure.OnSatelliteLockTrajectory(msg.player, targeting.center);
 		}
 	}
 
@@ -10109,17 +10162,20 @@ public class SatelliteControlComputer : BaseMountable
 
 	private void EndControlPhase(BasePlayer notifyPlayer = null)
 	{
-		//IL_00d7: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00dc: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00fb: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0108: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00ef: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00f4: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0113: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0120: Unknown result type (might be due to invalid IL or missing references)
 		if (!HasFlag(Flags.Reserved9))
 		{
 			return;
 		}
-		SetFlag(Flags.Reserved9, b: false);
-		SetFlag(Flags.Reserved8, b: false);
-		SetFlag(Flags.Reserved10, b: true);
+		using (FlagsUpdateScope flagsUpdateScope = StartSetFlags(FlagsUpdateMode.Local))
+		{
+			flagsUpdateScope.Set(Flags.Reserved9, b: false);
+			flagsUpdateScope.Set(Flags.Reserved8, b: false);
+			flagsUpdateScope.Set(Flags.Reserved10, b: true);
+		}
 		controlPhaseEndTime = 0f;
 		targeting.cooldownEndTime = Time.time + RollCooldownSeconds();
 		SendNetworkUpdate();
@@ -10342,6 +10398,8 @@ public class SatelliteControlComputer : BaseMountable
 
 	public void OnSatelliteCrashed(bool crashed = true)
 	{
+		//IL_0007: Unknown result type (might be due to invalid IL or missing references)
+		Analytics.Azure.OnSatelliteCrashed(crashed, targeting.finalCrashPos);
 		targeting.isDescending = false;
 		if ((Object)(object)ActiveDescending == (Object)(object)this)
 		{
@@ -10395,9 +10453,9 @@ public class SatelliteControlComputer : BaseMountable
 		}
 	}
 
-	[Menu.Icon("power")]
 	[Menu("satcomp.powerup", "Power Up Terminal")]
 	[Menu.Description("satcomp.powerup_desc", "Power up the satellite terminal")]
+	[Menu.Icon("power")]
 	[Menu.ShowIf("Menu_PowerUp_ShowIf")]
 	public void Menu_PowerUp(BasePlayer player)
 	{
@@ -10650,8 +10708,8 @@ public class SearchLight : IOEntity
 		return (Object)(object)mountedPlayer != (Object)null;
 	}
 
-	[RPC_Server.MaxDistance(3f)]
 	[RPC_Server]
+	[RPC_Server.MaxDistance(3f)]
 	public void RPC_UseLight(RPCMessage msg)
 	{
 		BasePlayer player = msg.player;
@@ -10956,6 +11014,8 @@ public class Shield : HeldEntity
 
 	public float ShieldOnBackToggleCooldown = 3f;
 
+	public float ShieldStowAimDelay = 0.75f;
+
 	public ProtectionProperties Protection;
 
 	[Range(0f, 1f)]
@@ -11118,9 +11178,9 @@ public class Shield : HeldEntity
 		return ShieldCollider.sharedMaterial.GetName();
 	}
 
-	[RPC_Server]
 	[RPC_Server.FromOwner]
 	[RPC_Server.CallsPerSecond(10uL)]
+	[RPC_Server]
 	private void ServerToggleBlock(RPCMessage msg)
 	{
 		bool flag = msg.read.Bit();
@@ -11413,7 +11473,7 @@ public class ShopFront : StorageContainer
 	{
 		public const Flags VendorAccepted = Flags.Reserved1;
 
-		public const Flags CustomerAccepted = Flags.Reserved2;
+		public const Flags CustomerAccepted = Flags.Reserved4;
 
 		public const Flags Exchanging = Flags.Reserved3;
 	}
@@ -11630,7 +11690,7 @@ public class ShopFront : StorageContainer
 		using (FlagsUpdateScope flagsUpdateScope = StartSetFlags(FlagsUpdateMode.SendNetworkUpdate))
 		{
 			flagsUpdateScope.Set(Flags.Reserved1, b: false);
-			flagsUpdateScope.Set(Flags.Reserved2, b: false);
+			flagsUpdateScope.Set(Flags.Reserved4, b: false);
 			flagsUpdateScope.Set(Flags.Reserved3, b: false);
 		}
 		vendorInventory.SetLocked(isLocked: false);
@@ -11642,7 +11702,7 @@ public class ShopFront : StorageContainer
 	{
 		//IL_00ec: Unknown result type (might be due to invalid IL or missing references)
 		//IL_00f1: Unknown result type (might be due to invalid IL or missing references)
-		if ((Object)(object)vendorPlayer != (Object)null && (Object)(object)customerPlayer != (Object)null && HasFlag(Flags.Reserved1) && HasFlag(Flags.Reserved2))
+		if ((Object)(object)vendorPlayer != (Object)null && (Object)(object)customerPlayer != (Object)null && HasFlag(Flags.Reserved1) && HasFlag(Flags.Reserved4))
 		{
 			if (Interface.CallHook("OnShopCompleteTrade", (object)this) != null)
 			{
@@ -11675,8 +11735,8 @@ public class ShopFront : StorageContainer
 		SendNetworkUpdate();
 	}
 
-	[RPC_Server]
 	[RPC_Server.IsVisible(3f)]
+	[RPC_Server]
 	public void AcceptClicked(RPCMessage msg)
 	{
 		if (!IsTradingPlayer(msg.player) || (Object)(object)vendorPlayer == (Object)null || (Object)(object)customerPlayer == (Object)null || Interface.CallHook("OnShopAcceptClick", (object)this, (object)msg.player) != null)
@@ -11691,10 +11751,10 @@ public class ShopFront : StorageContainer
 		}
 		else if (IsPlayerCustomer(msg.player))
 		{
-			flagsUpdateScope.Set(Flags.Reserved2, b: true);
+			flagsUpdateScope.Set(Flags.Reserved4, b: true);
 			customerInventory.SetLocked(isLocked: true);
 		}
-		if (HasFlag(Flags.Reserved1) && HasFlag(Flags.Reserved2))
+		if (HasFlag(Flags.Reserved1) && HasFlag(Flags.Reserved4))
 		{
 			flagsUpdateScope.Set(Flags.Reserved3, b: true);
 			((FacepunchBehaviour)this).Invoke((Action)CompleteTrade, 2f);
@@ -11717,7 +11777,7 @@ public class ShopFront : StorageContainer
 	{
 		base.ServerInit();
 		ItemContainer itemContainer = vendorInventory;
-		itemContainer.canAcceptItem = (Func<Item, int, bool>)Delegate.Combine(itemContainer.canAcceptItem, new Func<Item, int, bool>(CanAcceptVendorItem));
+		itemContainer.canAcceptItem = (Func<BasePlayer, Item, int, bool>)Delegate.Combine(itemContainer.canAcceptItem, new Func<BasePlayer, Item, int, bool>(CanAcceptVendorItem));
 		if (customerInventory == null)
 		{
 			customerInventory = Pool.Get<ItemContainer>();
@@ -11732,7 +11792,7 @@ public class ShopFront : StorageContainer
 			customerInventory.onItemAddedToStack = OnItemAddedToStack;
 			customerInventory.onItemRemovedFromStack = OnItemRemovedFromStack;
 			ItemContainer itemContainer2 = customerInventory;
-			itemContainer2.canAcceptItem = (Func<Item, int, bool>)Delegate.Combine(itemContainer2.canAcceptItem, new Func<Item, int, bool>(CanAcceptCustomerItem));
+			itemContainer2.canAcceptItem = (Func<BasePlayer, Item, int, bool>)Delegate.Combine(itemContainer2.canAcceptItem, new Func<BasePlayer, Item, int, bool>(CanAcceptCustomerItem));
 			OnInventoryFirstCreated(customerInventory);
 		}
 	}
@@ -11761,7 +11821,7 @@ public class ShopFront : StorageContainer
 		ResetTrade();
 	}
 
-	private bool CanAcceptVendorItem(Item item, int targetSlot)
+	private bool CanAcceptVendorItem(BasePlayer player, Item item, int targetSlot)
 	{
 		if (swappingItems || ((Object)(object)vendorPlayer != (Object)null && (Object)(object)item.GetOwnerPlayer() == (Object)(object)vendorPlayer) || vendorInventory.itemList.Contains(item))
 		{
@@ -11770,7 +11830,7 @@ public class ShopFront : StorageContainer
 		return false;
 	}
 
-	private bool CanAcceptCustomerItem(Item item, int targetSlot)
+	private bool CanAcceptCustomerItem(BasePlayer player, Item item, int targetSlot)
 	{
 		if (swappingItems || ((Object)(object)customerPlayer != (Object)null && (Object)(object)item.GetOwnerPlayer() == (Object)(object)customerPlayer) || customerInventory.itemList.Contains(item))
 		{
@@ -11900,7 +11960,7 @@ public static class ShopFrontFlags
 {
 	public const Flags VendorAccepted = Flags.Reserved1;
 
-	public const Flags CustomerAccepted = Flags.Reserved2;
+	public const Flags CustomerAccepted = Flags.Reserved4;
 
 	public const Flags Exchanging = Flags.Reserved3;
 }
@@ -11919,8 +11979,8 @@ using UnityEngine.Assertions;
 
 public class ShutterFrame : PhotoFrame, IFlagNotify
 {
-	[Header("Shutter Frame")]
 	[Tooltip("Tiling for the shutter material UVs, needs to be set because it will be overwritten during animation if not")]
+	[Header("Shutter Frame")]
 	public Vector2 shutterDefaultTiling = new Vector2(1.15f, 1f);
 
 	[Tooltip("Offsets for the shutter material UVs, needs to be set because it will be overwritten during animation if not")]
@@ -12095,9 +12155,9 @@ public class ShutterFrame : PhotoFrame, IFlagNotify
 		}
 	}
 
-	[RPC_Server]
-	[RPC_Server.CallsPerSecond(2uL)]
 	[RPC_Server.IsVisible(6f)]
+	[RPC_Server.CallsPerSecond(2uL)]
+	[RPC_Server]
 	public void RPC_ToggleShutter(RPCMessage msg)
 	{
 		IsShutterOpen = !IsShutterOpen;
@@ -12237,8 +12297,8 @@ public class SiegeTower : BaseSiegeWeapon
 
 	private float raiseTimer;
 
-	[Header("Siege Tower")]
 	[SerializeField]
+	[Header("Siege Tower")]
 	private SiegeTowerDoor drawBridgePrefab;
 
 	[SerializeField]
@@ -13223,8 +13283,8 @@ public class Signage : IOEntity, ILOD, ISignage, IUGCBrowserEntity, IEaselPainta
 		}
 	}
 
-	[RPC_Server.MaxDistance(3f)]
 	[RPC_Server]
+	[RPC_Server.MaxDistance(3f)]
 	public void LockSign(RPCMessage msg)
 	{
 		if (msg.player.CanInteract() && CanUpdateSign(msg.player))
@@ -13238,7 +13298,7 @@ public class Signage : IOEntity, ILOD, ISignage, IUGCBrowserEntity, IEaselPainta
 
 	public void LockSign(BasePlayer forPlayer)
 	{
-		SetFlag(Flags.Locked, b: true, recursive: false, networkupdate: false);
+		SetFlagLocal(Flags.Locked, b: true);
 		base.OwnerID = (((Object)(object)forPlayer != (Object)null) ? forPlayer.userID : ((EncryptedValue<ulong>)0uL));
 		SendNetworkUpdate();
 	}
@@ -13655,9 +13715,9 @@ public class SimpleBuildingBlock : StabilityEntity, ISimpleUpgradable, IReskinCa
 		return true;
 	}
 
-	[RPC_Server.CallsPerSecond(5uL)]
 	[RPC_Server]
 	[RPC_Server.IsVisible(3f)]
+	[RPC_Server.CallsPerSecond(5uL)]
 	public void DoSimpleUpgrade(RPCMessage msg)
 	{
 		if (base.SecondsSinceAttacked < 30f)
@@ -15411,8 +15471,8 @@ public class SleepingBag : DecayEntity
 		}
 	}
 
-	[RPC_Server.IsVisible(3f)]
 	[RPC_Server]
+	[RPC_Server.IsVisible(3f)]
 	public void AssignToFriend(RPCMessage msg)
 	{
 		if (!msg.player.CanInteract() || deployerUserID != (ulong)msg.player.userID || !canReassignToFriends)
@@ -15868,6 +15928,12 @@ public class SleepingBagCamper : SleepingBag
 		return base.OnRpcMessage(player, rpc, msg);
 	}
 
+	public override void ResetState()
+	{
+		base.ResetState();
+		AssociatedSeat = default(EntityRef<BaseVehicleSeat>);
+	}
+
 	protected override bool CanAccessBed(BasePlayer player)
 	{
 		if (!base.CanAccessBed(player) || !(GetParentEntity() is VehicleModuleCamper vehicleModuleCamper))
@@ -15948,8 +16014,8 @@ public class SleepingBagCamper : SleepingBag
 		return (RespawnState)1;
 	}
 
-	[RPC_Server]
 	[RPC_Server.MaxDistance(3f)]
+	[RPC_Server]
 	public void ServerClearBed(RPCMessage msg)
 	{
 		BasePlayer player = msg.player;
@@ -16501,9 +16567,9 @@ public class SlotMachine : BaseMountable, INotifyLOD
 		}
 	}
 
-	[RPC_Server]
-	[RPC_Server.MaxDistance(3f)]
 	[RPC_Server.CallsPerSecond(5uL)]
+	[RPC_Server.MaxDistance(3f)]
+	[RPC_Server]
 	private void Server_RequestMultiplierChange(RPCMessage msg)
 	{
 		if (!((Object)(object)msg.player != (Object)(object)GetMounted()) && !HasFlag(Flags.Reserved2))
@@ -16662,8 +16728,8 @@ public class SmallEngine : DecayEntity, IBoatBuildingPiece, IBoatPropulsion, IEn
 	[ReplicatedVar]
 	public static float MaxThrustMultiplier = 1f;
 
-	[SerializeField]
 	[Header("Small Engine")]
+	[SerializeField]
 	private float maxThrust = 1000f;
 
 	[SerializeField]
@@ -16679,7 +16745,7 @@ public class SmallEngine : DecayEntity, IBoatBuildingPiece, IBoatPropulsion, IEn
 
 	private IFuelSystem fuelSystem;
 
-	private const Flags Flag_HasFuel = Flags.Reserved2;
+	private const Flags Flag_HasFuel = Flags.Reserved4;
 
 	private const Flags Flag_InReverse = Flags.Reserved3;
 
@@ -16991,12 +17057,12 @@ public class SmallEngine : DecayEntity, IBoatBuildingPiece, IBoatPropulsion, IEn
 	private void FuelAddedRemovedCallback(bool added)
 	{
 		using FlagsUpdateScope flagsUpdateScope = StartSetFlags(FlagsUpdateMode.SendNetworkUpdate);
-		flagsUpdateScope.Set(Flags.Reserved2, fuelSystem.HasFuel());
+		flagsUpdateScope.Set(Flags.Reserved4, fuelSystem.HasFuel());
 	}
 
+	[RPC_Server.CallsPerSecond(5uL)]
 	[RPC_Server.IsVisible(3f)]
 	[RPC_Server]
-	[RPC_Server.CallsPerSecond(5uL)]
 	public void TurnOn(RPCMessage msg)
 	{
 		if (Interface.CallHook("OnEngineStart", (object)this, (object)msg.player) == null && fuelSystem.HasFuel() && PlayerBoat.IsPlayerAuthedOnChildEntity(this, msg.player, authedIfNoPrivOrLock: true))
@@ -17012,8 +17078,8 @@ public class SmallEngine : DecayEntity, IBoatBuildingPiece, IBoatPropulsion, IEn
 	}
 
 	[RPC_Server]
-	[RPC_Server.IsVisible(3f)]
 	[RPC_Server.CallsPerSecond(5uL)]
+	[RPC_Server.IsVisible(3f)]
 	public void TurnOff(RPCMessage msg)
 	{
 		if (Interface.CallHook("OnEngineStop", (object)this, (object)msg.player) == null && PlayerBoat.IsPlayerAuthedOnChildEntity(this, msg.player, authedIfNoPrivOrLock: true))
@@ -17028,8 +17094,8 @@ public class SmallEngine : DecayEntity, IBoatBuildingPiece, IBoatPropulsion, IEn
 		flagsUpdateScope.Set(Flags.On, b: false);
 	}
 
-	[RPC_Server.IsVisible(3f)]
 	[RPC_Server]
+	[RPC_Server.IsVisible(3f)]
 	[RPC_Server.CallsPerSecond(5uL)]
 	public void SV_ToggleReverse(RPCMessage msg)
 	{
@@ -17041,8 +17107,8 @@ public class SmallEngine : DecayEntity, IBoatBuildingPiece, IBoatPropulsion, IEn
 		flagsUpdateScope.Set(Flags.Reserved3, !InReverse);
 	}
 
-	[RPC_Server.IsVisible(3f)]
 	[RPC_Server]
+	[RPC_Server.IsVisible(3f)]
 	public void RPC_OpenFuel(RPCMessage msg)
 	{
 		BasePlayer player = msg.player;
@@ -17075,7 +17141,7 @@ public class SmallEngine : DecayEntity, IBoatBuildingPiece, IBoatPropulsion, IEn
 		{
 			using (FlagsUpdateScope flagsUpdateScope = StartSetFlags(FlagsUpdateMode.SendNetworkUpdate))
 			{
-				flagsUpdateScope.Set(Flags.Reserved2, b: true);
+				flagsUpdateScope.Set(Flags.Reserved4, b: true);
 			}
 			if (IsOn())
 			{
@@ -17361,8 +17427,8 @@ public class SmartAlarm : AppIOEntity, ISubscribable
 		}
 	}
 
-	[RPC_Server.IsVisible(3f)]
 	[RPC_Server.CallsPerSecond(5uL)]
+	[RPC_Server.IsVisible(3f)]
 	[RPC_Server]
 	private void StartSetupNotification(RPCMessage rpc)
 	{
@@ -17376,9 +17442,9 @@ public class SmartAlarm : AppIOEntity, ISubscribable
 		}
 	}
 
+	[RPC_Server]
 	[RPC_Server.CallsPerSecond(5uL)]
 	[RPC_Server.IsVisible(3f)]
-	[RPC_Server]
 	private void SetNotificationTextImpl(RPCMessage rpc)
 	{
 		if (!rpc.player.CanInteract())
@@ -17577,9 +17643,9 @@ public class SmartSwitch : AppIOEntity
 		}
 	}
 
-	[RPC_Server.IsVisible(3f)]
-	[RPC_Server]
 	[RPC_Server.CallsPerSecond(3uL)]
+	[RPC_Server]
+	[RPC_Server.IsVisible(3f)]
 	public void ToggleSwitch(RPCMessage msg)
 	{
 		if (PlayerCanToggle(msg.player))
@@ -19366,8 +19432,8 @@ public class SpookySpeaker : IOEntity
 		UpdateInvokes();
 	}
 
-	[RPC_Server]
 	[RPC_Server.IsVisible(3f)]
+	[RPC_Server]
 	public void SetWantsOn(RPCMessage msg)
 	{
 		bool targetState = msg.read.Bit();
@@ -19850,7 +19916,6 @@ public class SprayCan : HeldEntity
 		return base.OnRpcMessage(player, rpc, msg);
 	}
 
-	[RPC_Server.IsActiveItem]
 	[RPC_Server.InputValidation(new Type[]
 	{
 		typeof(Vector3),
@@ -19859,6 +19924,7 @@ public class SprayCan : HeldEntity
 		typeof(int)
 	})]
 	[RPC_Server]
+	[RPC_Server.IsActiveItem]
 	private void BeginFreehandSpray(RPCMessage msg)
 	{
 		//IL_001e: Unknown result type (might be due to invalid IL or missing references)
@@ -19927,8 +19993,8 @@ public class SprayCan : HeldEntity
 	}
 
 	[RPC_Server.CallsPerSecond(2uL)]
-	[RPC_Server.IsActiveItem]
 	[RPC_Server]
+	[RPC_Server.IsActiveItem]
 	private void ChangeItemSkin(RPCMessage msg)
 	{
 		//IL_0006: Unknown result type (might be due to invalid IL or missing references)
@@ -20259,8 +20325,6 @@ public class SprayCan : HeldEntity
 		return !triggerNoSpray.IsPositionValid(pos);
 	}
 
-	[RPC_Server.IsActiveItem]
-	[RPC_Server]
 	[RPC_Server.InputValidation(new Type[]
 	{
 		typeof(Vector3),
@@ -20268,6 +20332,8 @@ public class SprayCan : HeldEntity
 		typeof(Vector3),
 		typeof(int)
 	})]
+	[RPC_Server.IsActiveItem]
+	[RPC_Server]
 	private void CreateSpray(RPCMessage msg)
 	{
 		//IL_0059: Unknown result type (might be due to invalid IL or missing references)
@@ -20384,8 +20450,8 @@ public class SprayCan : HeldEntity
 	}
 
 	[RPC_Server]
-	[RPC_Server.IsActiveItem]
 	[RPC_Server.CallsPerSecond(3uL)]
+	[RPC_Server.IsActiveItem]
 	private void Server_SetEntityColour(RPCMessage msg)
 	{
 		//IL_0006: Unknown result type (might be due to invalid IL or missing references)
@@ -20964,13 +21030,13 @@ public class SprayCanSpray_Freehand : SprayCanSpray
 		}
 	}
 
-	[RPC_Server]
 	[RPC_Server.InputValidation(new Type[]
 	{
 		typeof(int),
 		typeof(SprayList)
 	})]
 	[RPC_Server.MaxRepeatedElements(60)]
+	[RPC_Server]
 	private void Server_FinishEditing(RPCMessage msg)
 	{
 		//IL_00c6: Unknown result type (might be due to invalid IL or missing references)
@@ -21148,156 +21214,6 @@ public class SprayCanSpray_Freehand : SprayCanSpray
 		base.ResetState();
 		editingPlayer.Set(null);
 	}
-}
-
-
-using System;
-using System.Collections.Generic;
-using Facepunch;
-using Network;
-using ProtoBuf;
-using UnityEngine;
-
-public class StagedResourceEntity : ResourceEntity
-{
-	[Serializable]
-	public class ResourceStage
-	{
-		public float health;
-
-		public GameObject instance;
-	}
-
-	public List<ResourceStage> stages = new List<ResourceStage>();
-
-	protected int stage;
-
-	public GameObjectRef changeStageEffect;
-
-	public MeshLOD ResourceMeshLod;
-
-	public MeshCollider ResourceMeshCollider;
-
-	private Action UpdateNetworkStageAction;
-
-	public GameObject gibSourceTest;
-
-	private StagedResourceEntityInfo cachedInfo;
-
-	public override bool OnRpcMessage(BasePlayer player, uint rpc, Message msg)
-	{
-		TimeWarning val = TimeWarning.New("StagedResourceEntity.OnRpcMessage", 0);
-		try
-		{
-		}
-		finally
-		{
-			((IDisposable)val)?.Dispose();
-		}
-		return base.OnRpcMessage(player, rpc, msg);
-	}
-
-	public int GetStage()
-	{
-		return stage;
-	}
-
-	public override void Load(LoadInfo info)
-	{
-		base.Load(info);
-		if (info.msg.resource != null)
-		{
-			int num = info.msg.resource.stage;
-			if (info.fromDisk && base.isServer)
-			{
-				health = startHealth;
-				num = 0;
-			}
-			if (num != stage)
-			{
-				stage = num;
-				UpdateStage();
-			}
-		}
-	}
-
-	public override void Save(SaveInfo info)
-	{
-		base.Save(info);
-		if (info.msg.resource == null)
-		{
-			info.msg.resource = Pool.Get<BaseResource>();
-		}
-		info.msg.resource.health = Health();
-		info.msg.resource.stage = stage;
-	}
-
-	protected override void OnHealthChanged()
-	{
-		if (UpdateNetworkStageAction == null)
-		{
-			UpdateNetworkStageAction = UpdateNetworkStage;
-		}
-		((FacepunchBehaviour)this).Invoke(UpdateNetworkStageAction, 0.1f);
-	}
-
-	public virtual void UpdateNetworkStage()
-	{
-		if (FindBestStage() != stage)
-		{
-			stage = FindBestStage();
-			SendNetworkUpdate();
-			UpdateStage();
-		}
-	}
-
-	private int FindBestStage()
-	{
-		float num = Mathf.InverseLerp(0f, MaxHealth(), Health());
-		StagedResourceEntityInfo.ResourceStage[] array = GetInfo().Stages;
-		for (int i = 0; i < array.Length; i++)
-		{
-			if (num >= array[i].Health)
-			{
-				return i;
-			}
-		}
-		return array.Length - 1;
-	}
-
-	private StagedResourceEntityInfo GetInfo()
-	{
-		if (cachedInfo != null)
-		{
-			return cachedInfo;
-		}
-		if (base.isServer)
-		{
-			cachedInfo = PrefabAttribute.server.Find<StagedResourceEntityInfo>(prefabID);
-		}
-		return cachedInfo;
-	}
-
-	private void UpdateStage()
-	{
-		if (GetInfo().Stages.Length != 0)
-		{
-			ResourceMeshCollider.sharedMesh = cachedInfo.GetCollisionMesh(stage);
-			GroundWatch.PhysicsChanged(((Component)this).gameObject);
-		}
-	}
-}
-
-
-using System;
-using UnityEngine;
-
-[Serializable]
-public class ResourceStage
-{
-	public float health;
-
-	public GameObject instance;
 }
 
 
@@ -21529,8 +21445,8 @@ public class StashContainer : StorageContainer
 		SetHidden(!IsHidden());
 	}
 
-	[RPC_Server.IsVisible(3f)]
 	[RPC_Server]
+	[RPC_Server.IsVisible(3f)]
 	public void RPC_HideStash(RPCMessage rpc)
 	{
 		if (Interface.CallHook("CanHideStash", (object)rpc.player, (object)this) == null)
@@ -21703,8 +21619,6 @@ public class StaticInstrument : BaseMountable
 		return base.OnRpcMessage(player, rpc, msg);
 	}
 
-	[RPC_Server]
-	[RPC_Server.FromMounted]
 	[RPC_Server.InputValidation(new Type[]
 	{
 		typeof(int),
@@ -21712,6 +21626,8 @@ public class StaticInstrument : BaseMountable
 		typeof(int),
 		typeof(float)
 	})]
+	[RPC_Server]
+	[RPC_Server.FromMounted]
 	private void Server_PlayNote(RPCMessage msg)
 	{
 		int arg = msg.read.Int32();
@@ -22546,9 +22462,9 @@ public class SteeringWheel : BaseMountable, IBoatBuildingPiece
 		flagsUpdateScope.Set(Flags.Locked, BoatLock.HasALock);
 	}
 
+	[RPC_Server]
 	[RPC_Server.MaxDistance(3f)]
 	[RPC_Server.IsVisible(3f)]
-	[RPC_Server]
 	public void RPC_RequestAddLock(RPCMessage msg)
 	{
 		if (BoatLock.HasALock)
@@ -22664,9 +22580,9 @@ public class SteeringWheel : BaseMountable, IBoatBuildingPiece
 		}
 	}
 
+	[RPC_Server]
 	[RPC_Server.IsVisible(3f)]
 	[RPC_Server.CallsPerSecond(3uL)]
-	[RPC_Server]
 	public void RequestFinishBuildingFromWheel(RPCMessage msg)
 	{
 		//IL_0017: Unknown result type (might be due to invalid IL or missing references)
@@ -22700,8 +22616,8 @@ public class SteeringWheel : BaseMountable, IBoatBuildingPiece
 	}
 
 	[RPC_Server]
-	[RPC_Server.IsVisible(3f)]
 	[RPC_Server.CallsPerSecond(3uL)]
+	[RPC_Server.IsVisible(3f)]
 	public void RequestEditBoat(RPCMessage msg)
 	{
 		//IL_0029: Unknown result type (might be due to invalid IL or missing references)
@@ -22721,9 +22637,9 @@ public class SteeringWheel : BaseMountable, IBoatBuildingPiece
 		}
 	}
 
-	[RPC_Server.CallsPerSecond(3uL)]
 	[RPC_Server]
 	[RPC_Server.IsVisible(3f)]
+	[RPC_Server.CallsPerSecond(3uL)]
 	public void RequestDeployAndEditBoat(RPCMessage msg)
 	{
 		//IL_0028: Unknown result type (might be due to invalid IL or missing references)
@@ -22752,9 +22668,9 @@ public class SteeringWheel : BaseMountable, IBoatBuildingPiece
 		}
 	}
 
-	[RPC_Server.InputValidation(new Type[] { typeof(float) })]
 	[RPC_Server.CallsPerSecond(15uL)]
 	[RPC_Server.IsVisible(3f)]
+	[RPC_Server.InputValidation(new Type[] { typeof(float) })]
 	[RPC_Server]
 	public void ReceiveClientRotation(RPCMessage msg)
 	{
@@ -23206,9 +23122,9 @@ public class StorageContainer : DecayEntity, IItemContainerEntity, IIdealSlotEnt
 	{
 	}
 
-	public virtual bool ItemFilter(Item item, int targetSlot)
+	public virtual bool ItemFilter(BasePlayer player, Item item, int targetSlot)
 	{
-		object obj = Interface.CallHook("OnItemFilter", (object)item, (object)this, (object)targetSlot);
+		object obj = Interface.CallHook("OnItemFilter", (object)item, (object)this, (object)targetSlot, (object)player);
 		if (obj is bool)
 		{
 			return (bool)obj;
@@ -23304,7 +23220,7 @@ public class StorageContainer : DecayEntity, IItemContainerEntity, IIdealSlotEnt
 		if (isLootable)
 		{
 			BasePlayer player = rpc.player;
-			if (Object.op_Implicit((Object)(object)player) && player.CanInteract())
+			if (Object.op_Implicit((Object)(object)player) && player.CanInteract() && !player.IsBlockedFromLootingByMountable())
 			{
 				PlayerOpenLoot(player);
 			}
@@ -23971,8 +23887,8 @@ public class StringLights : IOEntity
 		}
 	}
 
-	[RPC_Server.MaxDistance(3f)]
 	[RPC_Server]
+	[RPC_Server.MaxDistance(3f)]
 	public void SERVER_StartDeploying(RPCMessage msg)
 	{
 		BasePlayer player = msg.player;
@@ -24029,8 +23945,8 @@ public class StringLights : IOEntity
 		}
 	}
 
-	[RPC_Server]
 	[RPC_Server.CallsPerSecond(3uL)]
+	[RPC_Server]
 	public void SERVER_AddPoint(RPCMessage msg)
 	{
 		//IL_001c: Unknown result type (might be due to invalid IL or missing references)
@@ -24105,8 +24021,8 @@ public class StringLights : IOEntity
 		}
 	}
 
-	[RPC_Server.CallsPerSecond(3uL)]
 	[RPC_Server]
+	[RPC_Server.CallsPerSecond(3uL)]
 	public void SERVER_RemovePoint(RPCMessage msg)
 	{
 		//IL_004c: Unknown result type (might be due to invalid IL or missing references)
@@ -25195,7 +25111,7 @@ public class Telephone : ContainerIOEntity, ICassettePlayer
 		base.ServerInit();
 		Controller.ServerInit();
 		ItemContainer itemContainer = base.inventory;
-		itemContainer.canAcceptItem = (Func<Item, int, bool>)Delegate.Combine(itemContainer.canAcceptItem, new Func<Item, int, bool>(CanAcceptItem));
+		itemContainer.canAcceptItem = (Func<BasePlayer, Item, int, bool>)Delegate.Combine(itemContainer.canAcceptItem, new Func<BasePlayer, Item, int, bool>(CanAcceptItem));
 	}
 
 	public override void PostServerLoad()
@@ -25217,8 +25133,8 @@ public class Telephone : ContainerIOEntity, ICassettePlayer
 		Controller.ClearCurrentUser(msg);
 	}
 
-	[RPC_Server.MaxDistance(3f)]
 	[RPC_Server]
+	[RPC_Server.MaxDistance(3f)]
 	public void SetCurrentUser(RPCMessage msg)
 	{
 		Controller.SetCurrentUser(msg);
@@ -25231,8 +25147,8 @@ public class Telephone : ContainerIOEntity, ICassettePlayer
 		Controller.InitiateCall(msg);
 	}
 
-	[RPC_Server.MaxDistance(3f)]
 	[RPC_Server]
+	[RPC_Server.MaxDistance(3f)]
 	public void AnswerPhone(RPCMessage msg)
 	{
 		Controller.AnswerPhone(msg);
@@ -25260,7 +25176,7 @@ public class Telephone : ContainerIOEntity, ICassettePlayer
 		((BaseEntity)this).ClientRPC(RpcTarget.NetworkGroup("ClientOnCassetteChanged"), default(NetworkableId));
 	}
 
-	private bool CanAcceptItem(Item item, int targetSlot)
+	private bool CanAcceptItem(BasePlayer player, Item item, int targetSlot)
 	{
 		ItemDefinition[] validCassettes = ValidCassettes;
 		for (int i = 0; i < validCassettes.Length; i++)
@@ -25274,32 +25190,32 @@ public class Telephone : ContainerIOEntity, ICassettePlayer
 	}
 
 	[RPC_Server.CallsPerSecond(5uL)]
-	[RPC_Server]
 	[RPC_Server.MaxDistance(3f)]
+	[RPC_Server]
 	public void UpdatePhoneName(RPCMessage msg)
 	{
 		Controller.RPC_UpdatePhoneName(msg);
 	}
 
-	[RPC_Server]
-	[RPC_Server.MaxDistance(3f)]
 	[RPC_Server.CallsPerSecond(5uL)]
+	[RPC_Server.MaxDistance(3f)]
+	[RPC_Server]
 	public void Server_RequestPhoneDirectory(RPCMessage msg)
 	{
 		Controller.Server_RequestPhoneDirectory(msg);
 	}
 
-	[RPC_Server]
 	[RPC_Server.MaxDistance(3f)]
 	[RPC_Server.CallsPerSecond(5uL)]
+	[RPC_Server]
 	public void Server_AddSavedNumber(RPCMessage msg)
 	{
 		Controller.Server_AddSavedNumber(msg);
 	}
 
 	[RPC_Server.CallsPerSecond(5uL)]
-	[RPC_Server.MaxDistance(3f)]
 	[RPC_Server]
+	[RPC_Server.MaxDistance(3f)]
 	public void Server_RemoveSavedNumber(RPCMessage msg)
 	{
 		Controller.Server_RemoveSavedNumber(msg);
@@ -25312,25 +25228,25 @@ public class Telephone : ContainerIOEntity, ICassettePlayer
 		Controller.ServerSendVoicemail(msg);
 	}
 
+	[RPC_Server.IsVisible(3f)]
 	[RPC_Server.CallsPerSecond(5uL)]
 	[RPC_Server]
-	[RPC_Server.IsVisible(3f)]
 	public void ServerPlayVoicemail(RPCMessage msg)
 	{
 		Controller.ServerPlayVoicemail(msg);
 	}
 
-	[RPC_Server]
-	[RPC_Server.IsVisible(3f)]
 	[RPC_Server.CallsPerSecond(5uL)]
+	[RPC_Server.IsVisible(3f)]
+	[RPC_Server]
 	public void ServerStopVoicemail(RPCMessage msg)
 	{
 		Controller.ServerStopVoicemail(msg);
 	}
 
-	[RPC_Server]
 	[RPC_Server.CallsPerSecond(5uL)]
 	[RPC_Server.IsVisible(3f)]
+	[RPC_Server]
 	public void ServerDeleteVoicemail(RPCMessage msg)
 	{
 		Controller.ServerDeleteVoicemail(msg);
@@ -26510,8 +26426,8 @@ public class TimerSwitch : IOEntity
 		}
 	}
 
-	[RPC_Server.IsVisible(3f)]
 	[RPC_Server]
+	[RPC_Server.IsVisible(3f)]
 	public void SVSwitch(RPCMessage msg)
 	{
 		SwitchPressed();
@@ -27021,13 +26937,13 @@ public class TinCanAlarm : StorageContainer, IDetector
 		return null;
 	}
 
-	public override bool ItemFilter(Item item, int targetSlot)
+	public override bool ItemFilter(BasePlayer player, Item item, int targetSlot)
 	{
 		if ((Object)(object)TryGetHeldEntity(item) == (Object)null)
 		{
 			return false;
 		}
-		return base.ItemFilter(item, targetSlot);
+		return base.ItemFilter(player, item, targetSlot);
 	}
 
 	public override void OnItemAddedOrRemoved(Item item, bool added)
@@ -27245,6 +27161,168 @@ private struct Ammo
 
 
 using System;
+using ConVar;
+using Network;
+using UnityEngine;
+using UnityEngine.Assertions;
+
+public class ToggleableLightWeapon : BaseMelee
+{
+	[Header("ToggleableLightWeapon")]
+	public bool ExtinguishUnderwater;
+
+	public override bool OnRpcMessage(BasePlayer player, uint rpc, Message msg)
+	{
+		TimeWarning val = TimeWarning.New("ToggleableLightWeapon.OnRpcMessage", 0);
+		try
+		{
+			if (rpc == 2235491565u && (Object)(object)player != (Object)null)
+			{
+				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
+				if (Global.developer > 2)
+				{
+					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - Extinguish"));
+				}
+				TimeWarning val2 = TimeWarning.New("Extinguish", 0);
+				try
+				{
+					TimeWarning val3 = TimeWarning.New("Conditions", 0);
+					try
+					{
+						if (!RPC_Server.IsActiveItem.Test(2235491565u, "Extinguish", this, player))
+						{
+							return true;
+						}
+					}
+					finally
+					{
+						((IDisposable)val3)?.Dispose();
+					}
+					try
+					{
+						val3 = TimeWarning.New("Call", 0);
+						try
+						{
+							RPCMessage rPCMessage = default(RPCMessage);
+							rPCMessage.connection = msg.connection;
+							rPCMessage.player = player;
+							rPCMessage.read = msg.read;
+							RPCMessage msg2 = rPCMessage;
+							Extinguish(msg2);
+						}
+						finally
+						{
+							((IDisposable)val3)?.Dispose();
+						}
+					}
+					catch (Exception ex)
+					{
+						Debug.LogException(ex);
+						player.Kick("RPC Error in Extinguish");
+					}
+				}
+				finally
+				{
+					((IDisposable)val2)?.Dispose();
+				}
+				return true;
+			}
+			if (rpc == 3010584743u && (Object)(object)player != (Object)null)
+			{
+				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
+				if (Global.developer > 2)
+				{
+					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - Ignite"));
+				}
+				TimeWarning val2 = TimeWarning.New("Ignite", 0);
+				try
+				{
+					TimeWarning val3 = TimeWarning.New("Conditions", 0);
+					try
+					{
+						if (!RPC_Server.IsActiveItem.Test(3010584743u, "Ignite", this, player))
+						{
+							return true;
+						}
+					}
+					finally
+					{
+						((IDisposable)val3)?.Dispose();
+					}
+					try
+					{
+						val3 = TimeWarning.New("Call", 0);
+						try
+						{
+							RPCMessage rPCMessage = default(RPCMessage);
+							rPCMessage.connection = msg.connection;
+							rPCMessage.player = player;
+							rPCMessage.read = msg.read;
+							RPCMessage msg3 = rPCMessage;
+							Ignite(msg3);
+						}
+						finally
+						{
+							((IDisposable)val3)?.Dispose();
+						}
+					}
+					catch (Exception ex2)
+					{
+						Debug.LogException(ex2);
+						player.Kick("RPC Error in Ignite");
+					}
+				}
+				finally
+				{
+					((IDisposable)val2)?.Dispose();
+				}
+				return true;
+			}
+		}
+		finally
+		{
+			((IDisposable)val)?.Dispose();
+		}
+		return base.OnRpcMessage(player, rpc, msg);
+	}
+
+	public virtual void SetIsOn(bool isOn)
+	{
+		using FlagsUpdateScope flagsUpdateScope = StartSetFlags(FlagsUpdateMode.SendNetworkUpdate);
+		flagsUpdateScope.Set(Flags.On, isOn);
+	}
+
+	[RPC_Server]
+	[RPC_Server.IsActiveItem]
+	protected void Ignite(RPCMessage msg)
+	{
+		if (msg.player.CanInteract())
+		{
+			SetIsOn(isOn: true);
+		}
+	}
+
+	[RPC_Server.IsActiveItem]
+	[RPC_Server]
+	protected void Extinguish(RPCMessage msg)
+	{
+		if (msg.player.CanInteract())
+		{
+			SetIsOn(isOn: false);
+		}
+	}
+
+	public override void OnHeldChanged()
+	{
+		if (IsDisabled())
+		{
+			SetIsOn(isOn: false);
+		}
+	}
+}
+
+
+using System;
 using Network;
 using UnityEngine;
 
@@ -27315,7 +27393,7 @@ public class TorchDeployableLightSource : StorageContainer, ISplashable, IIgnite
 
 	public const Flags HasTorch = Flags.Reserved1;
 
-	public const Flags UseBuiltInFx = Flags.Reserved2;
+	public const Flags UseBuiltInFx = Flags.Reserved4;
 
 	public const Flags AlwaysOn = Flags.Reserved3;
 
@@ -27431,7 +27509,7 @@ public class TorchDeployableLightSource : StorageContainer, ISplashable, IIgnite
 		Sprinkler.SplashableGrid.DeregisterEntity(this);
 	}
 
-	public override bool ItemFilter(Item item, int targetSlot)
+	public override bool ItemFilter(BasePlayer player, Item item, int targetSlot)
 	{
 		AllowedTorch[] allowedTorches = AllowedTorches;
 		for (int i = 0; i < allowedTorches.Length; i++)
@@ -27504,7 +27582,7 @@ public class TorchDeployableLightSource : StorageContainer, ISplashable, IIgnite
 		if ((Object)(object)itemDefinition != (Object)(object)spawnedTorchDef)
 		{
 			spawnedTorchDef = itemDefinition;
-			flagsUpdateScope.Set(Flags.Reserved2, ShouldUseBuiltInFx(itemDefinition));
+			flagsUpdateScope.Set(Flags.Reserved4, ShouldUseBuiltInFx(itemDefinition));
 			TorchWeapon torchWeapon = spawnedTorch.Get(serverside: true);
 			if ((Object)(object)torchWeapon != (Object)null)
 			{
@@ -27550,8 +27628,8 @@ public class TorchDeployableLightSource : StorageContainer, ISplashable, IIgnite
 		UpdateTorch();
 	}
 
-	[RPC_Server]
 	[RPC_Server.IsVisible(3f)]
+	[RPC_Server]
 	private void RequestTurnOnOff(RPCMessage msg)
 	{
 		bool wantsOn = msg.read.Bit();
@@ -27672,232 +27750,6 @@ public struct AllowedTorch
 
 
 using System;
-using ConVar;
-using Network;
-using Rust;
-using UnityEngine;
-using UnityEngine.Assertions;
-
-public class TorchWeapon : BaseMelee
-{
-	[NonSerialized]
-	public const float FuelTickAmount = 1f / 12f;
-
-	[Header("TorchWeapon")]
-	public bool ExtinguishUnderwater = true;
-
-	public GameObjectRef litStrikeFX;
-
-	public const Flags IsInHolder = Flags.Reserved1;
-
-	public override bool OnRpcMessage(BasePlayer player, uint rpc, Message msg)
-	{
-		TimeWarning val = TimeWarning.New("TorchWeapon.OnRpcMessage", 0);
-		try
-		{
-			if (rpc == 2235491565u && (Object)(object)player != (Object)null)
-			{
-				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
-				if (Global.developer > 2)
-				{
-					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - Extinguish"));
-				}
-				TimeWarning val2 = TimeWarning.New("Extinguish", 0);
-				try
-				{
-					TimeWarning val3 = TimeWarning.New("Conditions", 0);
-					try
-					{
-						if (!RPC_Server.IsActiveItem.Test(2235491565u, "Extinguish", this, player))
-						{
-							return true;
-						}
-					}
-					finally
-					{
-						((IDisposable)val3)?.Dispose();
-					}
-					try
-					{
-						val3 = TimeWarning.New("Call", 0);
-						try
-						{
-							RPCMessage rPCMessage = default(RPCMessage);
-							rPCMessage.connection = msg.connection;
-							rPCMessage.player = player;
-							rPCMessage.read = msg.read;
-							RPCMessage msg2 = rPCMessage;
-							Extinguish(msg2);
-						}
-						finally
-						{
-							((IDisposable)val3)?.Dispose();
-						}
-					}
-					catch (Exception ex)
-					{
-						Debug.LogException(ex);
-						player.Kick("RPC Error in Extinguish");
-					}
-				}
-				finally
-				{
-					((IDisposable)val2)?.Dispose();
-				}
-				return true;
-			}
-			if (rpc == 3010584743u && (Object)(object)player != (Object)null)
-			{
-				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
-				if (Global.developer > 2)
-				{
-					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - Ignite"));
-				}
-				TimeWarning val2 = TimeWarning.New("Ignite", 0);
-				try
-				{
-					TimeWarning val3 = TimeWarning.New("Conditions", 0);
-					try
-					{
-						if (!RPC_Server.IsActiveItem.Test(3010584743u, "Ignite", this, player))
-						{
-							return true;
-						}
-					}
-					finally
-					{
-						((IDisposable)val3)?.Dispose();
-					}
-					try
-					{
-						val3 = TimeWarning.New("Call", 0);
-						try
-						{
-							RPCMessage rPCMessage = default(RPCMessage);
-							rPCMessage.connection = msg.connection;
-							rPCMessage.player = player;
-							rPCMessage.read = msg.read;
-							RPCMessage msg3 = rPCMessage;
-							Ignite(msg3);
-						}
-						finally
-						{
-							((IDisposable)val3)?.Dispose();
-						}
-					}
-					catch (Exception ex2)
-					{
-						Debug.LogException(ex2);
-						player.Kick("RPC Error in Ignite");
-					}
-				}
-				finally
-				{
-					((IDisposable)val2)?.Dispose();
-				}
-				return true;
-			}
-		}
-		finally
-		{
-			((IDisposable)val)?.Dispose();
-		}
-		return base.OnRpcMessage(player, rpc, msg);
-	}
-
-	public override void GetAttackStats(HitInfo info)
-	{
-		base.GetAttackStats(info);
-		if (HasFlag(Flags.On))
-		{
-			info.damageTypes.Add(DamageType.Heat, 1f);
-		}
-	}
-
-	public override float GetConditionLoss()
-	{
-		return base.GetConditionLoss() + (HasFlag(Flags.On) ? 6f : 0f);
-	}
-
-	public void SetIsOn(bool isOn)
-	{
-		if (isOn)
-		{
-			using (FlagsUpdateScope flagsUpdateScope = StartSetFlags(FlagsUpdateMode.SendNetworkUpdate))
-			{
-				flagsUpdateScope.Set(Flags.On, b: true);
-				flagsUpdateScope.Set(Flags.OnFire, b: true);
-			}
-			((FacepunchBehaviour)this).InvokeRepeating((Action)UseFuel, 1f, 1f);
-		}
-		else
-		{
-			using (FlagsUpdateScope flagsUpdateScope2 = StartSetFlags(FlagsUpdateMode.SendNetworkUpdate))
-			{
-				flagsUpdateScope2.Set(Flags.On, b: false);
-				flagsUpdateScope2.Set(Flags.OnFire, b: false);
-			}
-			((FacepunchBehaviour)this).CancelInvoke((Action)UseFuel);
-		}
-	}
-
-	[RPC_Server]
-	[RPC_Server.IsActiveItem]
-	private void Ignite(RPCMessage msg)
-	{
-		if (msg.player.CanInteract())
-		{
-			SetIsOn(isOn: true);
-		}
-	}
-
-	[RPC_Server.IsActiveItem]
-	[RPC_Server]
-	private void Extinguish(RPCMessage msg)
-	{
-		if (msg.player.CanInteract())
-		{
-			SetIsOn(isOn: false);
-		}
-	}
-
-	public void UseFuel()
-	{
-		Item ownerItem = GetOwnerItem();
-		if (ownerItem != null)
-		{
-			ownerItem.LoseCondition(1f / 12f);
-			SingletonComponent<NpcFireManager>.Instance.Move(this);
-		}
-	}
-
-	public override void OnHeldChanged()
-	{
-		if (IsDisabled())
-		{
-			SetIsOn(isOn: false);
-		}
-	}
-
-	public override string GetStrikeEffectPath(string materialName)
-	{
-		for (int i = 0; i < materialStrikeFX.Count; i++)
-		{
-			if (materialStrikeFX[i].materialName == materialName && materialStrikeFX[i].fx.isValid)
-			{
-				return materialStrikeFX[i].fx.resourcePath;
-			}
-		}
-		if (HasFlag(Flags.On) && litStrikeFX.isValid)
-		{
-			return litStrikeFX.resourcePath;
-		}
-		return strikeFX.resourcePath;
-	}
-}
-
-
-using System;
 using System.Collections.Generic;
 using ConVar;
 using Facepunch;
@@ -28000,8 +27852,8 @@ public class TrainCar : BaseVehicle, TriggerHurtNotChild.IHurtTriggerUser, Train
 	[SerializeField]
 	public float wheelRadius = 0.615f;
 
-	[FormerlySerializedAs("fxFinalExplosion")]
 	[SerializeField]
+	[FormerlySerializedAs("fxFinalExplosion")]
 	public GameObjectRef fxDestroyed;
 
 	[SerializeField]
@@ -28026,27 +27878,27 @@ public class TrainCar : BaseVehicle, TriggerHurtNotChild.IHurtTriggerUser, Train
 	[SerializeField]
 	private TrainCarAudio trainCarAudio;
 
-	[SerializeField]
 	[FormerlySerializedAs("frontCoupleFx")]
+	[SerializeField]
 	public ParticleSystem frontCouplingChangedFx;
 
-	[FormerlySerializedAs("rearCoupleFx")]
 	[SerializeField]
+	[FormerlySerializedAs("rearCoupleFx")]
 	public ParticleSystem rearCouplingChangedFx;
 
-	[FormerlySerializedAs("fxCoupling")]
 	[SerializeField]
+	[FormerlySerializedAs("fxCoupling")]
 	public ParticleSystem newCouplingFX;
 
 	[SerializeField]
 	private float decayTimeMultiplier = 1f;
 
-	[ReadOnly]
 	[SerializeField]
+	[ReadOnly]
 	public Vector3 frontBogieLocalOffset;
 
-	[ReadOnly]
 	[SerializeField]
+	[ReadOnly]
 	public Vector3 rearBogieLocalOffset;
 
 	[SerializeField]
@@ -28956,6 +28808,11 @@ public class TrainCar : BaseVehicle, TriggerHurtNotChild.IHurtTriggerUser, Train
 		}
 	}
 
+	public override void ResetState()
+	{
+		base.ResetState();
+	}
+
 	public override void PreProcess(IPrefabProcessor process, GameObject rootObj, string name, bool serverside, bool clientside, bool bundling)
 	{
 		//IL_0039: Unknown result type (might be due to invalid IL or missing references)
@@ -29084,8 +28941,8 @@ public class TrainCarUnloadable : TrainCar
 	[SerializeField]
 	private Transform orePlaneColliderWorld;
 
-	[Range(0f, 1f)]
 	[SerializeField]
+	[Range(0f, 1f)]
 	public float vacuumStretchPercent = 0.5f;
 
 	[SerializeField]
@@ -29186,14 +29043,14 @@ public class TrainCarUnloadable : TrainCar
 
 	protected override void OnChildAdded(BaseEntity child)
 	{
-		//IL_003d: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0045: Unknown result type (might be due to invalid IL or missing references)
 		base.OnChildAdded(child);
 		if (IsDead() || base.IsDestroyed)
 		{
 			return;
 		}
 		LootContainer lootContainer = default(LootContainer);
-		if (((Component)child).TryGetComponent<LootContainer>(ref lootContainer) && base.isServer && Application.isLoadingSave)
+		if (((Component)child).TryGetComponent<LootContainer>(ref lootContainer) && !(lootContainer is LockedByEntCrate) && base.isServer && Application.isLoadingSave)
 		{
 			lootContainers.Add(new EntityRef<LootContainer>(lootContainer.net.ID));
 		}
@@ -29662,8 +29519,8 @@ public class TrainEngine : TrainCar, IEngineControllerUser, IEntity
 	[SerializeField]
 	private ParticleSystemContainer[] sparks;
 
-	[SerializeField]
 	[FormerlySerializedAs("brakeSparkLights")]
+	[SerializeField]
 	private Light[] sparkLights;
 
 	[SerializeField]

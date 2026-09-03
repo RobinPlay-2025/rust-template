@@ -226,8 +226,8 @@ public class DecayEntity : BaseCombatEntity
 		return player.IsBuildingAuthed(((Component)this).transform.position, ((Component)this).transform.rotation, bounds);
 	}
 
-	[RPC_Server]
 	[RPC_Server.MaxDistance(3f)]
+	[RPC_Server]
 	public void DoDemolish(RPCMessage msg)
 	{
 		if (msg.player.CanInteract() && CanDemolish(msg.player) && Interface.CallHook("OnStructureDemolish", (object)this, (object)msg.player, (object)false) == null)
@@ -3227,6 +3227,22 @@ public class DeepSeaManager : PointEntity<DeepSeaManager>
 		((Renderer)component).shadowCastingMode = (ShadowCastingMode)0;
 	}
 
+	public static bool UseDeepSeaVisuals(Vector3 position)
+	{
+		//IL_0007: Unknown result type (might be due to invalid IL or missing references)
+		if (!DeepSea.terrain_everywhere)
+		{
+			return IsInsideDeepSea(position);
+		}
+		return true;
+	}
+
+	public static bool UseDeepSeaVisuals(BaseNetworkable entity)
+	{
+		//IL_0006: Unknown result type (might be due to invalid IL or missing references)
+		return UseDeepSeaVisuals(((Component)entity).transform.position);
+	}
+
 	public static bool IsInsideDeepSea(Vector3 position)
 	{
 		//IL_0005: Unknown result type (might be due to invalid IL or missing references)
@@ -3382,7 +3398,7 @@ public class DeepSeaManager : PointEntity<DeepSeaManager>
 		info.msg.deepSeaManager = Pool.Get<DeepSeaManager>();
 		if (info.forDisk)
 		{
-			info.msg.deepSeaManager.foodPaid = (List<ulong>)(object)Pool.Get<PooledList<ulong>>();
+			info.msg.deepSeaManager.foodPaid = Pool.Get<List<ulong>>();
 			info.msg.deepSeaManager.foodPaid.AddRange(foodTollPaid);
 			return;
 		}
@@ -3908,7 +3924,7 @@ public class DeployableBoomBox : ContainerIOEntity, ICassettePlayer, IAudioConne
 		ServerStaticInstances.Remove(this);
 	}
 
-	public bool ItemFilter(Item item, int count)
+	private bool ItemFilter(BasePlayer player, Item item, int count)
 	{
 		ItemDefinition[] validCassettes = BoxController.ValidCassettes;
 		for (int i = 0; i < validCassettes.Length; i++)
@@ -3940,16 +3956,16 @@ public class DeployableBoomBox : ContainerIOEntity, ICassettePlayer, IAudioConne
 	}
 
 	[RPC_Server.IsVisible(3f)]
-	[RPC_Server.CallsPerSecond(2uL)]
 	[RPC_Server]
+	[RPC_Server.CallsPerSecond(2uL)]
 	public void ServerTogglePlay(RPCMessage msg)
 	{
 		BoxController.ServerTogglePlay(msg);
 	}
 
-	[RPC_Server.IsVisible(3f)]
-	[RPC_Server.CallsPerSecond(2uL)]
 	[RPC_Server]
+	[RPC_Server.CallsPerSecond(2uL)]
+	[RPC_Server.IsVisible(3f)]
 	public void Server_UpdateRadioIP(RPCMessage msg)
 	{
 		BoxController.Server_UpdateRadioIP(msg);
@@ -4318,9 +4334,9 @@ public class DeployedRecorder : StorageContainer, ICassettePlayer
 		return base.OnRpcMessage(player, rpc, msg);
 	}
 
-	[RPC_Server.IsVisible(3f)]
 	[RPC_Server.CallsPerSecond(2uL)]
 	[RPC_Server]
+	[RPC_Server.IsVisible(3f)]
 	public void ServerTogglePlay(RPCMessage msg)
 	{
 		bool play = ((Stream)(object)msg.read).ReadByte() == 1;
@@ -4346,7 +4362,7 @@ public class DeployedRecorder : StorageContainer, ICassettePlayer
 		ServerTogglePlay(play: false);
 	}
 
-	public override bool ItemFilter(Item item, int targetSlot)
+	public override bool ItemFilter(BasePlayer player, Item item, int targetSlot)
 	{
 		ItemDefinition[] validCassettes = ValidCassettes;
 		for (int i = 0; i < validCassettes.Length; i++)
@@ -5559,11 +5575,11 @@ public class DigitalClock : IOEntity, INotifyLOD
 		}
 	}
 
+	[RPC_Server]
 	[RPC_Server.IsVisible(3f)]
 	[RPC_Server.CallsPerSecond(5uL)]
 	[RPC_Server.InputValidation(new Type[] { typeof(DigitalClockMessage) })]
 	[RPC_Server.MaxRepeatedElements(5)]
-	[RPC_Server]
 	public void RPC_SetAlarms(RPCMessage msg)
 	{
 		if (!CanPlayerAdmin(msg.player))
@@ -5797,9 +5813,9 @@ public class DigitSendCodeLock : CodeLock
 		return base.OnRpcMessage(player, rpc, msg);
 	}
 
-	[RPC_Server]
 	[RPC_Server.MaxDistance(3f)]
 	[RPC_Server.CallsPerSecond(4uL)]
+	[RPC_Server]
 	private void OnDigitEntered(RPCMessage rpc)
 	{
 		int num = rpc.read.Int16();
@@ -5893,6 +5909,7 @@ public class DigitSendCodeLock : CodeLock
 
 using System;
 using System.Collections.Generic;
+using System.Threading;
 using Facepunch;
 using Network;
 using ProtoBuf;
@@ -5942,8 +5959,8 @@ public class DisplayingBoxStorage : BoxStorage, IPrivilegeUpdateReceiver
 	[Header("WARNING: DO NOT REARRANGE, please only replace prefabs with upgraded versions if necessary, don't change the order of existing ones")]
 	public GameObjectRef[] itemDisplayPrefabs;
 
-	[Header("Okay you're good now. You can rearrange these.")]
 	[Tooltip("Overrides for specific items to display in certain categories.")]
+	[Header("Okay you're good now. You can rearrange these.")]
 	public List<DisplayItemOverride> displayItemOverrides;
 
 	[Tooltip("Anchors for displaying the conditional prefabs, add as many as you want.")]
@@ -5968,7 +5985,7 @@ public class DisplayingBoxStorage : BoxStorage, IPrivilegeUpdateReceiver
 
 	private HashSet<BasePlayer> openAccessPlayers = new HashSet<BasePlayer>();
 
-	private List<float> cachedResourceProportions;
+	private float[] cachedResourceProportions;
 
 	private bool dirtyCache = true;
 
@@ -6149,30 +6166,18 @@ public class DisplayingBoxStorage : BoxStorage, IPrivilegeUpdateReceiver
 				proportions.AddRange(cachedResourceProportions);
 				return true;
 			}
-			if (cachedResourceProportions == null)
+			if (Volatile.Read(in cachedResourceProportions) == null)
 			{
-				cachedResourceProportions = new List<float>();
+				float[] value = new float[17];
+				Interlocked.CompareExchange(ref cachedResourceProportions, value, null);
 			}
 			Dictionary<DisplayCategory, int> categorySlotCache = Pool.Get<Dictionary<DisplayCategory, int>>();
 			BuildCategorySlotCache(ref categorySlotCache);
-			cachedResourceProportions.Clear();
-			cachedResourceProportions.Add(GetResourceCategoryProportion(ref categorySlotCache, DisplayCategory.Charcoal));
-			cachedResourceProportions.Add(GetResourceCategoryProportion(ref categorySlotCache, DisplayCategory.Sulfur));
-			cachedResourceProportions.Add(GetResourceCategoryProportion(ref categorySlotCache, DisplayCategory.Ore));
-			cachedResourceProportions.Add(GetResourceCategoryProportion(ref categorySlotCache, DisplayCategory.Stone));
-			cachedResourceProportions.Add(GetResourceCategoryProportion(ref categorySlotCache, DisplayCategory.Wood));
-			cachedResourceProportions.Add(GetResourceCategoryProportion(ref categorySlotCache, DisplayCategory.Metal));
-			cachedResourceProportions.Add(GetResourceCategoryProportion(ref categorySlotCache, DisplayCategory.Components));
-			cachedResourceProportions.Add(GetResourceCategoryProportion(ref categorySlotCache, DisplayCategory.Scrap));
-			cachedResourceProportions.Add(GetResourceCategoryProportion(ref categorySlotCache, DisplayCategory.Explosives));
-			cachedResourceProportions.Add(GetResourceCategoryProportion(ref categorySlotCache, DisplayCategory.Ammo));
-			cachedResourceProportions.Add(GetResourceCategoryProportion(ref categorySlotCache, DisplayCategory.Clothing));
-			cachedResourceProportions.Add(GetResourceCategoryProportion(ref categorySlotCache, DisplayCategory.Armour));
-			cachedResourceProportions.Add(GetResourceCategoryProportion(ref categorySlotCache, DisplayCategory.Weapons));
-			cachedResourceProportions.Add(GetResourceCategoryProportion(ref categorySlotCache, DisplayCategory.Tools));
-			cachedResourceProportions.Add(GetResourceCategoryProportion(ref categorySlotCache, DisplayCategory.Medical));
-			cachedResourceProportions.Add(GetResourceCategoryProportion(ref categorySlotCache, DisplayCategory.Food));
-			cachedResourceProportions.Add(GetResourceCategoryProportion(ref categorySlotCache, DisplayCategory.Misc));
+			for (int i = 0; i < 17; i++)
+			{
+				DisplayCategory category = (DisplayCategory)i;
+				cachedResourceProportions[i] = GetResourceCategoryProportion(ref categorySlotCache, category);
+			}
 			Pool.FreeUnmanaged<DisplayCategory, int>(ref categorySlotCache);
 			dirtyCache = false;
 			proportions.AddRange(cachedResourceProportions);
@@ -6433,8 +6438,8 @@ public class DiverPropulsionVehicle : BaseMountable, IEngineControllerUser, IEnt
 	[SerializeField]
 	private float minWaterDepth = 0.75f;
 
-	[Header("DPV - Control stability")]
 	[SerializeField]
+	[Header("DPV - Control stability")]
 	private float rotStability = 0.05f;
 
 	[SerializeField]
@@ -7964,8 +7969,8 @@ public class Door : AnimatedBuildingBlock, INotifyTrigger, ISimpleUpgradable
 		}
 	}
 
-	[RPC_Server.MaxDistance(3f)]
 	[RPC_Server]
+	[RPC_Server.MaxDistance(3f)]
 	private void RPC_CloseDoor(RPCMessage rpc)
 	{
 		//IL_005f: Unknown result type (might be due to invalid IL or missing references)
@@ -8001,8 +8006,8 @@ public class Door : AnimatedBuildingBlock, INotifyTrigger, ISimpleUpgradable
 	{
 	}
 
-	[RPC_Server]
 	[RPC_Server.MaxDistance(3f)]
+	[RPC_Server]
 	private void RPC_KnockDoor(RPCMessage rpc)
 	{
 		//IL_0076: Unknown result type (might be due to invalid IL or missing references)
@@ -8026,8 +8031,8 @@ public class Door : AnimatedBuildingBlock, INotifyTrigger, ISimpleUpgradable
 		Interface.CallHook("OnDoorKnocked", (object)this, (object)rpc.player);
 	}
 
-	[RPC_Server]
 	[RPC_Server.MaxDistance(3f)]
+	[RPC_Server]
 	private void RPC_ToggleHatch(RPCMessage rpc)
 	{
 		if (!rpc.player.CanInteract(usableWhileCrawling: true) || !hasHatch)
@@ -8070,8 +8075,8 @@ public class Door : AnimatedBuildingBlock, INotifyTrigger, ISimpleUpgradable
 		}
 	}
 
-	[RPC_Server]
 	[RPC_Server.IsVisible(3f)]
+	[RPC_Server]
 	private void Server_NotifyWoundedOpen(RPCMessage msg)
 	{
 		//IL_0041: Unknown result type (might be due to invalid IL or missing references)
@@ -8446,8 +8451,8 @@ public class Door : AnimatedBuildingBlock, INotifyTrigger, ISimpleUpgradable
 	}
 
 	[RPC_Server]
-	[RPC_Server.IsVisible(3f)]
 	[RPC_Server.CallsPerSecond(5uL)]
+	[RPC_Server.IsVisible(3f)]
 	public void DoSimpleUpgrade(RPCMessage msg)
 	{
 		if (base.SecondsSinceAttacked < 30f)
@@ -8606,8 +8611,8 @@ public class DoorCloser : BaseEntity
 		}
 	}
 
-	[RPC_Server]
 	[RPC_Server.MaxDistance(3f)]
+	[RPC_Server]
 	public void RPC_Take(RPCMessage rpc)
 	{
 		if (Interface.CallHook("ICanPickupEntity", (object)rpc.player, (object)this) != null || !rpc.player.CanInteract() || !rpc.player.CanBuild())
@@ -8709,6 +8714,9 @@ public class Drone : RemoteControlEntity, IRemoteControllableClientCallbacks, IR
 
 	[ServerVar]
 	public static bool disableSamTargeting;
+
+	[ServerVar(Help = "Radius at which a SAM missile's proximity fuse detonates against drones, capped by the missile's 20m trigger sphere")]
+	public static float samProximityFuseRadius = 10f;
 
 	[ClientVar(ClientAdmin = true)]
 	public static float windTimeDivisor = 10f;
@@ -8859,7 +8867,7 @@ public class Drone : RemoteControlEntity, IRemoteControllableClientCallbacks, IR
 
 	public override bool CanAcceptInput => true;
 
-	public SamSite.SamTargetType SAMTargetType => SamSite.targetTypeVehicle;
+	public SamSite.SamTargetType SAMTargetType => SamSite.targetTypeDrone;
 
 	public override bool PositionTickFixedTime
 	{
@@ -9364,6 +9372,21 @@ public class Drone : RemoteControlEntity, IRemoteControllableClientCallbacks, IR
 		}
 	}
 
+	public void OnTriggerStay(Collider other)
+	{
+		//IL_002e: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0034: Unknown result type (might be due to invalid IL or missing references)
+		if (base.isServer && ((Component)other).CompareTag("MLRSRocketTrigger"))
+		{
+			TimedExplosive componentInParent = ((Component)other).GetComponentInParent<TimedExplosive>();
+			if (!((Object)(object)componentInParent == (Object)null) && !(Vector3.Distance(((Component)componentInParent).transform.position, CenterPoint()) > samProximityFuseRadius))
+			{
+				Hurt(base.health * 2f, DamageType.Explosion, componentInParent.creatorEntity, useProtection: false);
+				componentInParent.Explode();
+			}
+		}
+	}
+
 	public override void Hurt(HitInfo info)
 	{
 		base.Hurt(info);
@@ -9418,8 +9441,8 @@ public class Drone : RemoteControlEntity, IRemoteControllableClientCallbacks, IR
 		}
 	}
 
-	[RPC_Server.IsVisible(3f)]
 	[RPC_Server]
+	[RPC_Server.IsVisible(3f)]
 	public void SV_OpenStorage(RPCMessage msg)
 	{
 		if (CanBeLooted(msg.player))
@@ -9924,7 +9947,10 @@ public class DroppedItemContainer : BaseCombatEntity, LootPanel.IHasLootPanel, I
 		if (inventory != null)
 		{
 			BasePlayer player = rpc.player;
-			PlayerOpenLoot(player);
+			if (CanLoot(player))
+			{
+				PlayerOpenLoot(player);
+			}
 		}
 	}
 
@@ -10011,6 +10037,11 @@ public class DroppedItemContainer : BaseCombatEntity, LootPanel.IHasLootPanel, I
 				Debug.LogWarning((object)("Dropped item container without inventory: " + ((object)this).ToString()));
 			}
 		}
+	}
+
+	public bool CanLoot(BasePlayer player)
+	{
+		return !player.IsBlockedFromLootingByMountable();
 	}
 
 	public override bool ShouldInheritNetworkGroup()
@@ -10491,16 +10522,16 @@ public class EaselDeployable : DecorDeployable
 		base.OnDied(info);
 	}
 
+	[RPC_Server.MaxDistance(6f)]
 	[RPC_Server.CallsPerSecond(2uL)]
 	[RPC_Server]
-	[RPC_Server.MaxDistance(6f)]
 	public void Server_StartPainting(RPCMessage msg)
 	{
 	}
 
-	[RPC_Server]
-	[RPC_Server.CallsPerSecond(2uL)]
 	[RPC_Server.MaxDistance(6f)]
+	[RPC_Server.CallsPerSecond(2uL)]
+	[RPC_Server]
 	public void Server_StopPainting(RPCMessage msg)
 	{
 	}
@@ -11024,8 +11055,8 @@ public class ElectricSwitch : IOEntity
 		SetSwitch(!IsOn());
 	}
 
-	[RPC_Server.IsVisible(3f)]
 	[RPC_Server]
+	[RPC_Server.IsVisible(3f)]
 	public void RPC_Switch(RPCMessage msg)
 	{
 		if (Interface.CallHook("OnSwitchToggle", (object)this, (object)msg.player) == null)
@@ -11231,8 +11262,8 @@ public class ElevatorLift : BaseCombatEntity
 		}
 	}
 
-	[RPC_Server.IsVisible(3f)]
 	[RPC_Server]
+	[RPC_Server.IsVisible(3f)]
 	public void Server_RaiseLowerFloor(RPCMessage msg)
 	{
 		//IL_00cd: Unknown result type (might be due to invalid IL or missing references)
@@ -11461,8 +11492,8 @@ public class EngineSwitch : BaseEntity
 		return base.OnRpcMessage(player, rpc, msg);
 	}
 
-	[RPC_Server.MaxDistance(3f)]
 	[RPC_Server]
+	[RPC_Server.MaxDistance(3f)]
 	public void StopEngine(RPCMessage msg)
 	{
 		MiningQuarry miningQuarry = GetParentEntity() as MiningQuarry;
@@ -11705,8 +11736,8 @@ public class EntityPrivilege : SimplePrivilege
 		}
 	}
 
-	[RPC_Server.MaxDistance(3f)]
 	[RPC_Server]
+	[RPC_Server.MaxDistance(3f)]
 	private void ClearList(RPCMessage rpc)
 	{
 		if (CanAdministrate(rpc.player))
@@ -12023,8 +12054,8 @@ public class ExcavatorArm : BaseEntity
 		}
 	}
 
-	[RPC_Server.MaxDistance(3f)]
 	[RPC_Server]
+	[RPC_Server.MaxDistance(3f)]
 	public void RPC_SetResourceTarget(RPCMessage msg)
 	{
 		string text = msg.read.String(256, false);
@@ -12342,9 +12373,9 @@ public class ExcavatorSignalComputer : BaseCombatEntity
 		}
 	}
 
+	[RPC_Server]
 	[RPC_Server.CallsPerSecond(5uL)]
 	[RPC_Server.IsVisible(3f)]
-	[RPC_Server]
 	public void RequestSupplies(RPCMessage rpc)
 	{
 		//IL_005e: Unknown result type (might be due to invalid IL or missing references)
@@ -12952,8 +12983,8 @@ public class FarmableAnimal : BaseCombatEntity
 		data.animalName = AnimalName;
 	}
 
-	[RPC_Server]
 	[RPC_Server.MaxDistance(3f, CheckParent = true)]
+	[RPC_Server]
 	private void RequestNameChange(RPCMessage msg)
 	{
 		if (msg.player.CanBuild(cached: true))
@@ -13101,16 +13132,19 @@ public class FishMount : StorageContainer
 
 	public const Flags HasFish = Flags.Reserved1;
 
+	private int currentFishItemIndex = -1;
+
 	private int GetCurrentFishItemIndex
 	{
 		get
 		{
+			Item slot = base.inventory.GetSlot(0);
 			ItemModFishable itemModFishable = default(ItemModFishable);
-			if (base.inventory.GetSlot(0) == null || !((Component)base.inventory.GetSlot(0).info).TryGetComponent<ItemModFishable>(ref itemModFishable))
+			if (slot != null && ((Component)slot.info).TryGetComponent<ItemModFishable>(ref itemModFishable))
 			{
-				return -1;
+				return itemModFishable.FishMountIndex;
 			}
-			return itemModFishable.FishMountIndex;
+			return -1;
 		}
 	}
 
@@ -13185,10 +13219,10 @@ public class FishMount : StorageContainer
 		{
 			info.msg.simpleInt = Pool.Get<SimpleInt>();
 		}
-		info.msg.simpleInt.value = GetCurrentFishItemIndex;
+		info.msg.simpleInt.value = currentFishItemIndex;
 	}
 
-	public override bool ItemFilter(Item item, int targetSlot)
+	public override bool ItemFilter(BasePlayer player, Item item, int targetSlot)
 	{
 		ItemModFishable itemModFishable = default(ItemModFishable);
 		if (((Component)item.info).TryGetComponent<ItemModFishable>(ref itemModFishable) && itemModFishable.CanBeMounted)
@@ -13201,6 +13235,7 @@ public class FishMount : StorageContainer
 	public override void PostServerLoad()
 	{
 		base.PostServerLoad();
+		currentFishItemIndex = GetCurrentFishItemIndex;
 		using FlagsUpdateScope flagsUpdateScope = StartSetFlags(FlagsUpdateMode.SendNetworkUpdate);
 		flagsUpdateScope.Set(Flags.Busy, b: false);
 	}
@@ -13208,7 +13243,8 @@ public class FishMount : StorageContainer
 	public override void OnItemAddedOrRemoved(Item item, bool added)
 	{
 		base.OnItemAddedOrRemoved(item, added);
-		SetFlagLocal(Flags.Reserved1, GetCurrentFishItemIndex >= 0);
+		currentFishItemIndex = GetCurrentFishItemIndex;
+		SetFlagLocal(Flags.Reserved1, currentFishItemIndex >= 0);
 		SendNetworkUpdate();
 	}
 
@@ -13688,8 +13724,8 @@ public class FlameThrower : AttackEntity
 		}
 	}
 
-	[RPC_Server.IsActiveItem]
 	[RPC_Server]
+	[RPC_Server.IsActiveItem]
 	public void TogglePilotLight(RPCMessage msg)
 	{
 		PilotLightToggle_Shared();
@@ -13953,8 +13989,8 @@ public class Food : BaseMelee
 		return base.OnRpcMessage(player, rpc, msg);
 	}
 
-	[RPC_Server.CallsPerSecond(5uL)]
 	[RPC_Server]
+	[RPC_Server.CallsPerSecond(5uL)]
 	[RPC_Server.FromOwner]
 	public void Consume()
 	{
@@ -13992,8 +14028,8 @@ using UnityEngine;
 
 public class FrankensteinPet : BasePet, IAISenses, IAIAttack
 {
-	[Header("Frankenstein")]
 	[ServerVar(Help = "How long before a Frankenstein Pet dies un controlled and not asleep on table")]
+	[Header("Frankenstein")]
 	public static float decayminutes = 180f;
 
 	[Header("Audio")]
@@ -14506,7 +14542,7 @@ public class FrankensteinTable : StorageContainer
 	{
 		base.ServerInit();
 		ItemContainer itemContainer = base.inventory;
-		itemContainer.canAcceptItem = (Func<Item, int, bool>)Delegate.Combine(itemContainer.canAcceptItem, new Func<Item, int, bool>(CanAcceptItem));
+		itemContainer.canAcceptItem = (Func<BasePlayer, Item, int, bool>)Delegate.Combine(itemContainer.canAcceptItem, new Func<BasePlayer, Item, int, bool>(CanAcceptItem));
 		base.inventory.onItemAddedRemoved = OnItemAddedOrRemoved;
 	}
 
@@ -14516,7 +14552,7 @@ public class FrankensteinTable : StorageContainer
 		SendNetworkUpdateImmediate();
 	}
 
-	private bool CanAcceptItem(Item item, int targetSlot)
+	private bool CanAcceptItem(BasePlayer player, Item item, int targetSlot)
 	{
 		if (item == null)
 		{
@@ -14647,8 +14683,8 @@ public class FrankensteinTable : StorageContainer
 		ItemsToUse.Clear();
 	}
 
-	[RPC_Server]
 	[RPC_Server.MaxDistance(3f)]
+	[RPC_Server]
 	private void RequestSleepFrankenstein(RPCMessage msg)
 	{
 		SleepFrankenstein(msg.player);
@@ -15111,8 +15147,8 @@ public class FuelGenerator : ContainerIOEntity
 		return false;
 	}
 
-	[RPC_Server]
 	[RPC_Server.IsVisible(3f)]
+	[RPC_Server]
 	public void RPC_EngineSwitch(RPCMessage msg)
 	{
 		if (Interface.CallHook("OnSwitchToggle", (object)this, (object)msg.player) == null)
@@ -15346,9 +15382,9 @@ public class GasStationCarGarage : ModularCarGarage
 		LiftHeightState = VehicleLiftState.Up;
 	}
 
+	[RPC_Server]
 	[RPC_Server.IsVisible(3f)]
 	[RPC_Server.MaxDistance(3f)]
-	[RPC_Server]
 	public void RPC_ToggleLiftHeight(RPCMessage msg)
 	{
 		bool flag = msg.read.Bool();
@@ -15650,8 +15686,8 @@ public class GestureDoor : Door
 		return delay > 0f;
 	}
 
-	[RPC_Server.MaxDistance(3f)]
 	[RPC_Server]
+	[RPC_Server.MaxDistance(3f)]
 	private void ServerKick(RPCMessage msg)
 	{
 		wasKick = true;
@@ -15663,11 +15699,9 @@ public class GestureDoor : Door
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
-using System.IO;
 using System.Linq;
 using ConVar;
 using Facepunch;
-using Facepunch.Math;
 using Network;
 using ProtoBuf;
 using Rust;
@@ -15854,7 +15888,6 @@ public class GlobalNetworkHandler : PointEntity
 	{
 		//IL_002d: Unknown result type (might be due to invalid IL or missing references)
 		//IL_003d: Unknown result type (might be due to invalid IL or missing references)
-		//IL_004b: Unknown result type (might be due to invalid IL or missing references)
 		if (Net.globalNetworkedBases)
 		{
 			NetWrite val = ClientRPCStart("CLIENT_EntityDeletes");
@@ -15865,30 +15898,15 @@ public class GlobalNetworkHandler : PointEntity
 				val.EntityID(networkableId);
 			}
 			ClientRPCSend(val, info);
-			if (PacketProfiler.shouldCaptureDetailedProfiling)
-			{
-				PacketProfiler.LogDetailedOutbound((Type)6, networkableId, (string)null, (int)((Stream)(object)val).Length, (byte[])null, Epoch.Current, true, "GlobalNetwork Delete");
-			}
 		}
 	}
 
 	private void SendGlobalEntities(GlobalEntityCollection entities, SendInfo info)
 	{
 		//IL_000e: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0045: Unknown result type (might be due to invalid IL or missing references)
-		if (!Net.globalNetworkedBases)
+		if (Net.globalNetworkedBases)
 		{
-			return;
-		}
-		ClientRPC(RpcTarget.SendInfo("CLIENT_EntityUpdates", info), entities);
-		if (!PacketProfiler.shouldCaptureDetailedProfiling)
-		{
-			return;
-		}
-		foreach (GlobalEntityData entity in entities.entities)
-		{
-			string text = StringPool.Get(entity.prefabId);
-			PacketProfiler.LogDetailedOutbound((Type)5, entity.uid, text, -1, (byte[])null, Epoch.Current, true, "GlobalNetwork Update");
+			ClientRPC(RpcTarget.SendInfo("CLIENT_EntityUpdates", info), entities);
 		}
 	}
 
@@ -17286,24 +17304,24 @@ public class GrowableEntity : BaseCombatEntity, IInstanceDataReceiver, IHeatSour
 	}
 
 	[RPC_Server.MaxDistance(3f)]
-	[RPC_Server]
 	[RPC_Server.IsVisible(3f)]
+	[RPC_Server]
 	public void RPC_PickFruit(RPCMessage msg)
 	{
 		PickFruit(msg.player);
 	}
 
 	[RPC_Server]
-	[RPC_Server.MaxDistance(3f)]
 	[RPC_Server.IsVisible(3f)]
+	[RPC_Server.MaxDistance(3f)]
 	public void RPC_EatFruit(RPCMessage msg)
 	{
 		PickFruit(msg.player, eat: true);
 	}
 
-	[RPC_Server.MaxDistance(3f)]
 	[RPC_Server]
 	[RPC_Server.IsVisible(3f)]
+	[RPC_Server.MaxDistance(3f)]
 	public void RPC_PickFruitAll(RPCMessage msg)
 	{
 		if ((Object)(object)GetParentEntity() != (Object)null)
@@ -17325,15 +17343,15 @@ public class GrowableEntity : BaseCombatEntity, IInstanceDataReceiver, IHeatSour
 		PickFruit(msg.player);
 	}
 
-	[RPC_Server]
 	[RPC_Server.MaxDistance(3f)]
+	[RPC_Server]
 	public void RPC_RemoveDying(RPCMessage msg)
 	{
 		RemoveDying(msg.player);
 	}
 
-	[RPC_Server.MaxDistance(3f)]
 	[RPC_Server]
+	[RPC_Server.MaxDistance(3f)]
 	public void RPC_RemoveDyingAll(RPCMessage msg)
 	{
 		if ((Object)(object)GetParentEntity() != (Object)null)
@@ -18107,9 +18125,11 @@ public class GunTrapScanWorkQueue : PersistentObjectWorkQueue<GunTrap>
 
 using System;
 using ConVar;
+using Facepunch;
 using Facepunch.Rust;
 using Network;
 using Oxide.Core;
+using ProtoBuf;
 using Rust;
 using UnityEngine;
 using UnityEngine.Assertions;
@@ -18119,7 +18139,9 @@ public class HackableLockedCrate : LootContainer
 {
 	public const Flags Flag_Hacking = Flags.Reserved1;
 
-	public const Flags Flag_FullyHacked = Flags.Reserved2;
+	public const Flags Flag_FullyHacked = Flags.Reserved3;
+
+	public const Flags Flag_HasBeenLooted = Flags.Reserved4;
 
 	public Text timerText;
 
@@ -18145,11 +18167,7 @@ public class HackableLockedCrate : LootContainer
 
 	public string achievementStartHacking;
 
-	public BasePlayer originalHackerPlayer;
-
 	public ulong originalHackerPlayerId;
-
-	public bool hasBeenOpened;
 
 	public BaseEntity mapMarkerInstance;
 
@@ -18228,7 +18246,33 @@ public class HackableLockedCrate : LootContainer
 
 	public bool IsFullyHacked()
 	{
-		return HasFlag(Flags.Reserved2);
+		return HasFlag(Flags.Reserved3);
+	}
+
+	public new bool HasBeenLooted()
+	{
+		return HasFlag(Flags.Reserved4);
+	}
+
+	public override void Save(SaveInfo info)
+	{
+		base.Save(info);
+		if (base.isServer && info.forDisk)
+		{
+			info.msg.hackableLockedCrate = Pool.Get<HackableLockedCrate>();
+			info.msg.hackableLockedCrate.hackSeconds = hackSeconds;
+			info.msg.hackableLockedCrate.originalHackerPlayerId = originalHackerPlayerId;
+		}
+	}
+
+	public override void Load(LoadInfo info)
+	{
+		base.Load(info);
+		if (base.isServer && info.fromDisk && info.msg.hackableLockedCrate != null)
+		{
+			hackSeconds = info.msg.hackableLockedCrate.hackSeconds;
+			originalHackerPlayerId = info.msg.hackableLockedCrate.originalHackerPlayerId;
+		}
 	}
 
 	public override void DestroyShared()
@@ -18310,25 +18354,34 @@ public class HackableLockedCrate : LootContainer
 	public override void ServerInit()
 	{
 		base.ServerInit();
-		if (base.isClient)
+		if (base.isServer && !Application.isLoadingSave)
 		{
-			return;
+			Init();
 		}
-		if (!Application.isLoadingSave)
+	}
+
+	public override void PostServerLoad()
+	{
+		base.PostServerLoad();
+		Init();
+	}
+
+	public void Init()
+	{
+		if (wasDropped)
 		{
-			using (FlagsUpdateScope flagsUpdateScope = StartSetFlags(FlagsUpdateMode.SendNetworkUpdate))
-			{
-				flagsUpdateScope.Set(Flags.Reserved1, b: false);
-				flagsUpdateScope.Set(Flags.Reserved2, b: false);
-			}
-			if (wasDropped)
-			{
-				((FacepunchBehaviour)this).InvokeRepeating((Action)LandCheck, 0f, 0.015f);
-			}
+			((FacepunchBehaviour)this).InvokeRepeating((Action)LandCheck, 0f, 0.015f);
+		}
+		if (IsBeingHacked())
+		{
+			((FacepunchBehaviour)this).InvokeRepeating((Action)HackProgress, 1f, 1f);
+		}
+		if (!HasBeenLooted())
+		{
+			CreateMapMarker(120f);
 		}
 		RefreshDecay();
 		isLootable = IsFullyHacked();
-		CreateMapMarker(120f);
 		base.inventory.onItemAddedRemoved = OnItemAddedOrRemoved;
 	}
 
@@ -18337,6 +18390,8 @@ public class HackableLockedCrate : LootContainer
 		if (!added && (Object)(object)mapMarkerInstance != (Object)null)
 		{
 			mapMarkerInstance.Kill();
+			using FlagsUpdateScope flagsUpdateScope = StartSetFlags(FlagsUpdateMode.Local);
+			flagsUpdateScope.Set(Flags.Reserved4, b: true);
 		}
 		base.OnItemAddedOrRemoved(item, added);
 	}
@@ -18361,22 +18416,14 @@ public class HackableLockedCrate : LootContainer
 		}
 	}
 
-	public override void PostServerLoad()
-	{
-		base.PostServerLoad();
-		using FlagsUpdateScope flagsUpdateScope = StartSetFlags(FlagsUpdateMode.SendNetworkUpdate);
-		flagsUpdateScope.Set(Flags.Reserved1, b: false);
-	}
-
-	[RPC_Server]
 	[RPC_Server.IsVisible(3f)]
+	[RPC_Server]
 	public void RPC_Hack(RPCMessage msg)
 	{
 		if (!IsBeingHacked() && Interface.CallHook("CanHackCrate", (object)msg.player, (object)this) == null)
 		{
 			Analytics.Azure.OnLockedCrateStarted(msg.player, this);
 			originalHackerPlayerId = msg.player.userID;
-			originalHackerPlayer = msg.player;
 			if (!string.IsNullOrEmpty(achievementStartHacking))
 			{
 				msg.player?.GiveAchievement(achievementStartHacking);
@@ -18393,14 +18440,9 @@ public class HackableLockedCrate : LootContainer
 		{
 			flagsUpdateScope.Set(Flags.Reserved1, b: true);
 		}
-		OnStartHacking();
 		((FacepunchBehaviour)this).InvokeRepeating((Action)HackProgress, 1f, 1f);
 		ClientRPC(RpcTarget.NetworkGroup("UpdateHackProgress"), 0, (int)requiredHackSeconds);
 		RefreshDecay();
-	}
-
-	protected virtual void OnStartHacking()
-	{
 	}
 
 	public void HackProgress()
@@ -18410,14 +18452,16 @@ public class HackableLockedCrate : LootContainer
 		{
 			Interface.CallHook("OnCrateHackEnd", (object)this);
 			Analytics.Azure.OnLockedCrateFinished(originalHackerPlayerId, this);
-			if ((Object)(object)originalHackerPlayer != (Object)null && originalHackerPlayer.serverClan != null)
+			BasePlayer basePlayer = BasePlayer.FindByID(originalHackerPlayerId);
+			if ((Object)(object)basePlayer != (Object)null && basePlayer.serverClan != null)
 			{
-				originalHackerPlayer.AddClanScore((ClanScoreEventType)5);
+				basePlayer.AddClanScore((ClanScoreEventType)5);
 			}
 			RefreshDecay();
 			using (FlagsUpdateScope flagsUpdateScope = StartSetFlags(FlagsUpdateMode.SendNetworkUpdate))
 			{
-				flagsUpdateScope.Set(Flags.Reserved2, b: true);
+				flagsUpdateScope.Set(Flags.Reserved3, b: true);
+				flagsUpdateScope.Set(Flags.Reserved1, b: false);
 			}
 			isLootable = true;
 			((FacepunchBehaviour)this).CancelInvoke((Action)HackProgress);
@@ -18428,9 +18472,8 @@ public class HackableLockedCrate : LootContainer
 	public override bool OnStartBeingLooted(BasePlayer player)
 	{
 		bool num = base.OnStartBeingLooted(player);
-		if (num && !hasBeenOpened)
+		if (num && !HasBeenLooted())
 		{
-			hasBeenOpened = true;
 			player.AddClanScore((ClanScoreEventType)6);
 		}
 		return num;
@@ -18884,9 +18927,9 @@ public class Handcuffs : BaseMelee
 		}
 	}
 
+	[RPC_Server]
 	[RPC_Server.FromOwner]
 	[RPC_Server.CallsPerSecond(5uL)]
-	[RPC_Server]
 	private void RPC_ReqCancelUnlockMiniGame(RPCMessage rpc)
 	{
 		BasePlayer player = rpc.player;
@@ -18901,9 +18944,9 @@ public class Handcuffs : BaseMelee
 		InterruptUnlockMiniGame();
 	}
 
-	[RPC_Server]
 	[RPC_Server.FromOwner]
 	[RPC_Server.CallsPerSecond(5uL)]
+	[RPC_Server]
 	private void RPC_ReqCompleteUnlockMiniGame(RPCMessage rpc)
 	{
 		BasePlayer player = rpc.player;
@@ -18921,8 +18964,8 @@ public class Handcuffs : BaseMelee
 		Effect.server.Run(escapeEffect.resourcePath, player, 0u, Vector3.zero, Vector3.zero);
 	}
 
-	[RPC_Server]
 	[RPC_Server.FromOwner]
+	[RPC_Server]
 	[RPC_Server.CallsPerSecond(5uL)]
 	private void RPC_ReqLock(RPCMessage rpc)
 	{
@@ -19067,7 +19110,7 @@ public class HBHFSensor : BaseDetector
 
 	public GameObjectRef uiPanelPrefab;
 
-	public const Flags Flag_IncludeOthers = Flags.Reserved2;
+	public const Flags Flag_IncludeOthers = Flags.Reserved4;
 
 	public const Flags Flag_IncludeAuthed = Flags.Reserved3;
 
@@ -19285,9 +19328,9 @@ public class HBHFSensor : BaseDetector
 		return num;
 	}
 
+	[RPC_Server.CallsPerSecond(5uL)]
 	[RPC_Server.IsVisible(3f)]
 	[RPC_Server]
-	[RPC_Server.CallsPerSecond(5uL)]
 	public void SetConfig(RPCMessage msg)
 	{
 		BasePlayer player = msg.player;
@@ -19298,7 +19341,7 @@ public class HBHFSensor : BaseDetector
 			using (FlagsUpdateScope flagsUpdateScope = StartSetFlags(FlagsUpdateMode.SendNetworkUpdate))
 			{
 				flagsUpdateScope.Set(Flags.Reserved3, b);
-				flagsUpdateScope.Set(Flags.Reserved2, b2);
+				flagsUpdateScope.Set(Flags.Reserved4, b2);
 			}
 			int num = msg.read.Int32();
 			SetRange(num);
@@ -19407,7 +19450,7 @@ public class HBHFSensor : BaseDetector
 
 	public bool ShouldIncludeOthers()
 	{
-		return HasFlag(Flags.Reserved2);
+		return HasFlag(Flags.Reserved4);
 	}
 
 	public override void Save(SaveInfo info)
@@ -19578,9 +19621,9 @@ public class HeldBoomBox : HeldEntity, ICassettePlayer
 		BoxController.ServerTogglePlay(msg);
 	}
 
-	[RPC_Server.IsActiveItem]
-	[RPC_Server.CallsPerSecond(2uL)]
 	[RPC_Server]
+	[RPC_Server.CallsPerSecond(2uL)]
+	[RPC_Server.IsActiveItem]
 	private void Server_UpdateRadioIP(RPCMessage msg)
 	{
 		BoxController.Server_UpdateRadioIP(msg);
@@ -21061,6 +21104,17 @@ public class HotAirBalloon : BaseCombatEntity, VehicleSpawner.IVehicleSpawnUser,
 		return HasFlag(Flags.Locked);
 	}
 
+	private void UpdateEquipmentHealthToggles()
+	{
+		foreach (BaseEntity child in children)
+		{
+			if (child is HotAirBalloonEquipment hotAirBalloonEquipment && (Object)(object)hotAirBalloonEquipment.healthThresholdToggle != (Object)null)
+			{
+				hotAirBalloonEquipment.healthThresholdToggle.UpdateHealth(base.healthFraction);
+			}
+		}
+	}
+
 	public override void OnAttacked(HitInfo info)
 	{
 		if (IsSafe() && !info.damageTypes.Has(DamageType.Decay))
@@ -21068,6 +21122,12 @@ public class HotAirBalloon : BaseCombatEntity, VehicleSpawner.IVehicleSpawnUser,
 			info.damageTypes.ScaleAll(0f);
 		}
 		base.OnAttacked(info);
+	}
+
+	public override void OnHealthChanged(float oldvalue, float newvalue)
+	{
+		base.OnHealthChanged(oldvalue, newvalue);
+		UpdateEquipmentHealthToggles();
 	}
 
 	protected override void OnChildAdded(BaseEntity child)
@@ -21089,6 +21149,7 @@ public class HotAirBalloon : BaseCombatEntity, VehicleSpawner.IVehicleSpawnUser,
 			if ((Object)(object)hotAirBalloonEquipment != (Object)null)
 			{
 				hotAirBalloonEquipment.Added(this, isLoadingSave);
+				UpdateEquipmentHealthToggles();
 			}
 		}
 	}
@@ -21143,8 +21204,11 @@ public class HotAirBalloon : BaseCombatEntity, VehicleSpawner.IVehicleSpawnUser,
 		RebuildMaxHealthFromEquipment();
 		base.PostServerLoad();
 		ClearOwnerEntry();
-		using FlagsUpdateScope flagsUpdateScope = StartSetFlags(FlagsUpdateMode.SendNetworkUpdate);
-		flagsUpdateScope.Set(Flags.On, b: false);
+		using (FlagsUpdateScope flagsUpdateScope = StartSetFlags(FlagsUpdateMode.SendNetworkUpdate))
+		{
+			flagsUpdateScope.Set(Flags.On, b: false);
+		}
+		UpdateEquipmentHealthToggles();
 	}
 
 	private void RebuildMaxHealthFromEquipment()
@@ -21972,13 +22036,13 @@ public class HuntingTrophy : StorageContainer
 		return 0;
 	}
 
-	public override bool ItemFilter(Item item, int targetSlot)
+	public override bool ItemFilter(BasePlayer player, Item item, int targetSlot)
 	{
 		if ((Object)(object)ItemModAssociatedEntity<HeadEntity>.GetAssociatedEntity(item) == (Object)null)
 		{
 			return false;
 		}
-		return base.ItemFilter(item, targetSlot);
+		return base.ItemFilter(player, item, targetSlot);
 	}
 
 	[RPC_Server.IsVisible(3f)]
@@ -22020,8 +22084,8 @@ public class HuntingTrophy : StorageContainer
 		SendNetworkUpdate();
 	}
 
-	[RPC_Server]
 	[RPC_Server.IsVisible(3f)]
+	[RPC_Server]
 	private void ServerRequestClear(RPCMessage msg)
 	{
 		if (CurrentTrophyData != null)
@@ -23696,9 +23760,9 @@ public class IndustrialConveyor : IndustrialEntity
 		}
 	}
 
-	[RPC_Server.MaxDistance(3f)]
 	[RPC_Server.MaxRepeatedElements(30)]
 	[RPC_Server.CallsPerSecond(1uL)]
+	[RPC_Server.MaxDistance(3f)]
 	[RPC_Server]
 	private void RPC_ChangeFilters(RPCMessage msg)
 	{
@@ -23869,9 +23933,9 @@ public class IndustrialConveyor : IndustrialEntity
 		return inputIndex == 1;
 	}
 
-	[RPC_Server.CallsPerSecond(1uL)]
-	[RPC_Server.IsVisible(3f)]
 	[RPC_Server]
+	[RPC_Server.IsVisible(3f)]
+	[RPC_Server.CallsPerSecond(1uL)]
 	private void Server_RequestUpToDateFilters(RPCMessage msg)
 	{
 		if (!IsOn())
@@ -24062,7 +24126,7 @@ public class IndustrialCrafter : IndustrialEntity, IItemContainerEntity, IIdealS
 
 	public const Flags Crafting = Flags.Reserved1;
 
-	public const Flags FullOutput = Flags.Reserved2;
+	public const Flags FullOutput = Flags.Reserved3;
 
 	public Renderer MeshRenderer;
 
@@ -24275,8 +24339,8 @@ public class IndustrialCrafter : IndustrialEntity, IItemContainerEntity, IIdealS
 	{
 	}
 
-	[RPC_Server]
 	[RPC_Server.IsVisible(3f)]
+	[RPC_Server]
 	private void RPC_OpenLoot(RPCMessage rpc)
 	{
 		if (_inventory != null)
@@ -24347,7 +24411,7 @@ public class IndustrialCrafter : IndustrialEntity, IItemContainerEntity, IIdealS
 		}
 	}
 
-	private bool CanAcceptItem(Item item, int index)
+	private bool CanAcceptItem(BasePlayer player, Item item, int index)
 	{
 		if (index >= 0 && index <= 3 && !item.IsBlueprint())
 		{
@@ -24428,13 +24492,13 @@ public class IndustrialCrafter : IndustrialEntity, IItemContainerEntity, IIdealS
 			{
 				using (FlagsUpdateScope flagsUpdateScope = StartSetFlags(FlagsUpdateMode.SendNetworkUpdate))
 				{
-					flagsUpdateScope.Set(Flags.Reserved2, b: true);
+					flagsUpdateScope.Set(Flags.Reserved3, b: true);
 				}
 				continue;
 			}
 			using (FlagsUpdateScope flagsUpdateScope2 = StartSetFlags(FlagsUpdateMode.SendNetworkUpdate))
 			{
-				flagsUpdateScope2.Set(Flags.Reserved2, b: false);
+				flagsUpdateScope2.Set(Flags.Reserved3, b: false);
 			}
 			foreach (ItemAmount ingredient2 in blueprint.GetIngredients())
 			{
@@ -24741,7 +24805,7 @@ public class IndustrialCrafter : IndustrialEntity, IItemContainerEntity, IIdealS
 			flagsUpdateScope.Set(Flags.Busy, b: true);
 			if (!wantsOn)
 			{
-				flagsUpdateScope.Set(Flags.Reserved2, b: false);
+				flagsUpdateScope.Set(Flags.Reserved3, b: false);
 			}
 		}
 		((FacepunchBehaviour)this).Invoke((Action)Unbusy, 0.5f);
@@ -24755,9 +24819,9 @@ public class IndustrialCrafter : IndustrialEntity, IItemContainerEntity, IIdealS
 		flagsUpdateScope.Set(Flags.Busy, b: false);
 	}
 
-	[RPC_Server.CallsPerSecond(2uL)]
-	[RPC_Server.IsVisible(3f)]
 	[RPC_Server]
+	[RPC_Server.IsVisible(3f)]
+	[RPC_Server.CallsPerSecond(2uL)]
 	private void SvSwitch(RPCMessage msg)
 	{
 		SetSwitch(!IsOn());
@@ -25469,9 +25533,9 @@ public class IndustrialStorageAdaptor : IndustrialEntity, IIndustrialStorage
 		goto IL_006b;
 	}
 
-	[RPC_Server]
-	[RPC_Server.IsVisible(3f)]
 	[RPC_Server.MaxRepeatedElements(64)]
+	[RPC_Server.IsVisible(3f)]
+	[RPC_Server]
 	public void UpdatedStorageSettings(RPCMessage msg)
 	{
 		SortSettings val = msg.read.Proto<SortSettings>((SortSettings)null);
@@ -26113,9 +26177,9 @@ public class InstantCameraTool : HeldEntity
 		}
 	}
 
-	[RPC_Server.FromOwner]
-	[RPC_Server]
 	[RPC_Server.CallsPerSecond(3uL)]
+	[RPC_Server]
+	[RPC_Server.FromOwner]
 	private void TakePhoto(RPCMessage msg)
 	{
 		//IL_00be: Unknown result type (might be due to invalid IL or missing references)
@@ -26385,8 +26449,8 @@ public class InstrumentTool : HeldEntity
 		ClientRPC(RpcTarget.NetworkGroup("Client_PlayNote"), arg, arg2, arg3, arg4);
 	}
 
-	[RPC_Server]
 	[RPC_Server.IsActiveItem]
+	[RPC_Server]
 	private void Server_StopNote(RPCMessage msg)
 	{
 		int arg = msg.read.Int32();
@@ -26746,8 +26810,8 @@ public class IOEntity : DecayEntity
 	[ServerVar]
 	public static float frameBudgetElectricHighPriorityMs = 1f;
 
-	[ServerVar]
 	[Help("How many milliseconds to budget for processing low priority io entities per server frame (player placed)")]
+	[ServerVar]
 	public static float frameBudgetElectricLowPriorityMs = 0.5f;
 
 	[Help("How many milliseconds to budget for processing fluid io entities per server frame")]
@@ -27102,7 +27166,7 @@ public class IOEntity : DecayEntity
 			{
 				return false;
 			}
-			if ((Object)(object)BoatBuildingStation.GetStationOverlappingPosition(((Component)this).transform.position, base.isServer) != (Object)null)
+			if ((Object)(object)BoatBuildingStation.GetStationOverlappingPosition(((Component)this).transform.position, base.isServer, 1.5f) != (Object)null)
 			{
 				return false;
 			}
@@ -27346,8 +27410,8 @@ public class IOEntity : DecayEntity
 		return false;
 	}
 
-	[RPC_Server]
 	[RPC_Server.IsVisible(6f)]
+	[RPC_Server]
 	[RPC_Server.CallsPerSecond(10uL)]
 	private void Server_RequestData(RPCMessage msg)
 	{
@@ -29045,7 +29109,7 @@ public class ItemBasedFlowRestrictor : IOEntity, IContainerSounds, PlayerInvento
 {
 	public const Flags HasPassthrough = Flags.Reserved1;
 
-	public const Flags Sparks = Flags.Reserved2;
+	public const Flags Sparks = Flags.Reserved3;
 
 	[Header("Item Based Flow Restrictor")]
 	public ItemDefinition[] validPassthroughItems;
@@ -29180,7 +29244,7 @@ public class ItemBasedFlowRestrictor : IOEntity, IContainerSounds, PlayerInvento
 		using FlagsUpdateScope flagsUpdateScope = StartSetFlags(FlagsUpdateMode.SendNetworkUpdate);
 		flagsUpdateScope.Set(Flags.On, IsPowered());
 		flagsUpdateScope.Set(Flags.Reserved1, HasPassthroughItem());
-		flagsUpdateScope.Set(Flags.Reserved2, IsOn() && !HasFlag(Flags.Reserved1));
+		flagsUpdateScope.Set(Flags.Reserved3, IsOn() && !HasFlag(Flags.Reserved1));
 	}
 
 	public virtual bool HasPassthroughItem()
@@ -29373,8 +29437,8 @@ public class ItemBasedFlowRestrictor : IOEntity, IContainerSounds, PlayerInvento
 		MarkDirty();
 	}
 
-	[RPC_Server]
 	[RPC_Server.IsVisible(3f)]
+	[RPC_Server]
 	private void RPC_OpenLoot(RPCMessage rpc)
 	{
 		if (inventory != null)
@@ -29407,6 +29471,7 @@ using System;
 using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 using ConVar;
+using Facepunch.Rust;
 using Network;
 using UnityEngine;
 using UnityEngine.Assertions;
@@ -29626,8 +29691,8 @@ public class ItemRestrictedWheelSwitch : ItemBasedFlowRestrictor
 		CancelPlayerRotation();
 	}
 
-	[RPC_Server.IsVisible(3f)]
 	[RPC_Server]
+	[RPC_Server.IsVisible(3f)]
 	public void BeginRotate(RPCMessage msg)
 	{
 		if (!IsBeingRotated && IsPowered())
@@ -29729,6 +29794,7 @@ public class ItemRestrictedWheelSwitch : ItemBasedFlowRestrictor
 		if (!added && (Object)(object)rotatorPlayer != (Object)null)
 		{
 			rotatorPlayer.AddClanScore((ClanScoreEventType)15);
+			Analytics.Azure.OnWaterTreatmentPlantEnabled(rotatorPlayer, item);
 		}
 	}
 
@@ -30918,8 +30984,8 @@ public class KeyLock : BaseLock
 		}
 	}
 
-	[RPC_Server.MaxDistance(3f, CheckParent = true)]
 	[RPC_Server]
+	[RPC_Server.MaxDistance(3f, CheckParent = true)]
 	private void RPC_Lock(RPCMessage rpc)
 	{
 		Lock(rpc.player);
@@ -31189,8 +31255,8 @@ public class Landmine : BaseTrap
 		SendNetworkUpdate();
 	}
 
-	[RPC_Server]
 	[RPC_Server.MaxDistance(3f)]
+	[RPC_Server]
 	private void RPC_Disarm(RPCMessage rpc)
 	{
 		if ((ulong)rpc.player.userID == triggerPlayerID || !Armed() || Interface.CallHook("OnTrapDisarm", (object)this, (object)rpc.player) != null || !Triggered())
@@ -31292,8 +31358,8 @@ public class Lift : AnimatedBuildingBlock
 		return base.OnRpcMessage(player, rpc, msg);
 	}
 
-	[RPC_Server]
 	[RPC_Server.MaxDistance(3f)]
+	[RPC_Server]
 	private void RPC_UseLift(RPCMessage rpc)
 	{
 		if (rpc.player.CanInteract() && Interface.CallHook("OnLiftUse", (object)this, (object)rpc.player) == null)
@@ -31491,7 +31557,7 @@ public class LiquidContainer : ContainerIOEntity
 		return true;
 	}
 
-	private bool CanAcceptItem(Item item, int count)
+	private bool CanAcceptItem(BasePlayer player, Item item, int count)
 	{
 		if (ValidItems == null || ValidItems.Length == 0)
 		{
@@ -31524,7 +31590,7 @@ public class LiquidContainer : ContainerIOEntity
 			UpdatePushLiquidTargets();
 		}
 		ItemContainer itemContainer = base.inventory;
-		itemContainer.canAcceptItem = (Func<Item, int, bool>)Delegate.Combine(itemContainer.canAcceptItem, new Func<Item, int, bool>(CanAcceptItem));
+		itemContainer.canAcceptItem = (Func<BasePlayer, Item, int, bool>)Delegate.Combine(itemContainer.canAcceptItem, new Func<BasePlayer, Item, int, bool>(CanAcceptItem));
 	}
 
 	public override void OnCircuitChanged(bool forceUpdate)
@@ -31737,8 +31803,8 @@ public class LiquidContainer : ContainerIOEntity
 		return GetLiquidItem().amount;
 	}
 
-	[RPC_Server]
 	[RPC_Server.MaxDistance(3f)]
+	[RPC_Server]
 	public void SVDrink(RPCMessage rpc)
 	{
 		if (!rpc.player.metabolism.CanConsume() || Interface.CallHook("OnPlayerDrink", (object)rpc.player, (object)this) != null)
@@ -31829,7 +31895,7 @@ public class LiquidContainer : ContainerIOEntity
 						((FacepunchBehaviour)this).Invoke(updatePushLiquidTargetsAction, 0.1f);
 					}
 				}
-				else if (pushTarget.inventory.CanAcceptItem(liquidItem, 0) == ItemContainer.CanAcceptResult.CanAccept && (pushTarget.inventory.CanAccept(liquidItem) || pushTarget.inventory.FindItemByItemID(liquidItem.info.itemid) != null))
+				else if (pushTarget.inventory.CanAcceptItem(null, liquidItem, 0) == ItemContainer.CanAcceptResult.CanAccept && (pushTarget.inventory.CanAccept(liquidItem) || pushTarget.inventory.FindItemByItemID(liquidItem.info.itemid) != null))
 				{
 					int num3 = Mathf.Clamp(num2, 0, pushTarget.inventory.GetMaxTransferAmount(liquidItem.info));
 					pushTarget.inventory.AddItem(liquidItem.info, num3, 0uL);
@@ -31870,10 +31936,10 @@ public class LiquidContainer : ContainerIOEntity
 		//IL_000f: Unknown result type (might be due to invalid IL or missing references)
 		//IL_0014: Unknown result type (might be due to invalid IL or missing references)
 		//IL_0031: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00cb: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00d0: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00d5: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00da: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00cc: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00d1: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00d6: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00db: Unknown result type (might be due to invalid IL or missing references)
 		if (depth <= 0 || ourFuel.amount <= 0)
 		{
 			return;
@@ -31884,7 +31950,7 @@ public class LiquidContainer : ContainerIOEntity
 		{
 			return;
 		}
-		if (connected is ContainerIOEntity containerIOEntity && !pushTargets.Contains(containerIOEntity) && containerIOEntity.inventory.CanAcceptItem(ourFuel, 0) == ItemContainer.CanAcceptResult.CanAccept)
+		if (connected is ContainerIOEntity containerIOEntity && !pushTargets.Contains(containerIOEntity) && containerIOEntity.inventory.CanAcceptItem(null, ourFuel, 0) == ItemContainer.CanAcceptResult.CanAccept)
 		{
 			pushTargets.Add(containerIOEntity);
 			return;
@@ -31917,196 +31983,6 @@ public class LiquidContainer : ContainerIOEntity
 	protected override bool ConsiderConnectedTo(IOEntity entity)
 	{
 		return (Object)(object)entity == (Object)(object)considerConnectedTo;
-	}
-}
-
-
-using System;
-using System.Collections.Generic;
-using ConVar;
-using Network;
-using UnityEngine;
-using UnityEngine.Assertions;
-
-public class LiquidVessel : HeldEntity
-{
-	public override bool OnRpcMessage(BasePlayer player, uint rpc, Message msg)
-	{
-		TimeWarning val = TimeWarning.New("LiquidVessel.OnRpcMessage", 0);
-		try
-		{
-			if (rpc == 4034725537u && (Object)(object)player != (Object)null)
-			{
-				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
-				if (Global.developer > 2)
-				{
-					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - DoEmpty"));
-				}
-				TimeWarning val2 = TimeWarning.New("DoEmpty", 0);
-				try
-				{
-					TimeWarning val3 = TimeWarning.New("Conditions", 0);
-					try
-					{
-						if (!RPC_Server.IsActiveItem.Test(4034725537u, "DoEmpty", this, player))
-						{
-							return true;
-						}
-					}
-					finally
-					{
-						((IDisposable)val3)?.Dispose();
-					}
-					try
-					{
-						val3 = TimeWarning.New("Call", 0);
-						try
-						{
-							RPCMessage rPCMessage = default(RPCMessage);
-							rPCMessage.connection = msg.connection;
-							rPCMessage.player = player;
-							rPCMessage.read = msg.read;
-							RPCMessage msg2 = rPCMessage;
-							DoEmpty(msg2);
-						}
-						finally
-						{
-							((IDisposable)val3)?.Dispose();
-						}
-					}
-					catch (Exception ex)
-					{
-						Debug.LogException(ex);
-						player.Kick("RPC Error in DoEmpty");
-					}
-				}
-				finally
-				{
-					((IDisposable)val2)?.Dispose();
-				}
-				return true;
-			}
-		}
-		finally
-		{
-			((IDisposable)val)?.Dispose();
-		}
-		return base.OnRpcMessage(player, rpc, msg);
-	}
-
-	public bool CanDrink()
-	{
-		BasePlayer ownerPlayer = GetOwnerPlayer();
-		if (!Object.op_Implicit((Object)(object)ownerPlayer))
-		{
-			return false;
-		}
-		if (!ownerPlayer.metabolism.CanConsume())
-		{
-			return false;
-		}
-		Item item = GetItem();
-		if (item == null)
-		{
-			return false;
-		}
-		if (item.contents == null)
-		{
-			return false;
-		}
-		if (item.contents.itemList == null)
-		{
-			return false;
-		}
-		if (item.contents.itemList.Count == 0)
-		{
-			return false;
-		}
-		return true;
-	}
-
-	[RPC_Server]
-	[RPC_Server.IsActiveItem]
-	private void DoEmpty(RPCMessage msg)
-	{
-		if (!msg.player.CanInteract())
-		{
-			return;
-		}
-		Item item = GetItem();
-		if (item == null || item.contents == null || !msg.player.metabolism.CanConsume())
-		{
-			return;
-		}
-		using List<Item>.Enumerator enumerator = item.contents.itemList.GetEnumerator();
-		if (enumerator.MoveNext())
-		{
-			enumerator.Current.UseItem(50);
-		}
-	}
-
-	public void AddLiquid(ItemDefinition liquidType, int amount)
-	{
-		if (amount <= 0)
-		{
-			return;
-		}
-		Item item = GetItem();
-		Item item2 = item.contents.GetSlot(0);
-		ItemModContainer component = ((Component)item.info).GetComponent<ItemModContainer>();
-		if (item2 == null)
-		{
-			ItemManager.Create(liquidType, amount, 0uL, isServerSide: true, 0uL)?.MoveToContainer(item.contents);
-			return;
-		}
-		int num = Mathf.Clamp(item2.amount + amount, 0, component.maxStackSize);
-		ItemDefinition itemDefinition = WaterResource.Merge(item2.info, liquidType);
-		if ((Object)(object)itemDefinition != (Object)(object)item2.info)
-		{
-			item2.Remove();
-			item2 = ItemManager.Create(itemDefinition, num, 0uL, isServerSide: true, 0uL);
-			item2.MoveToContainer(item.contents);
-		}
-		else
-		{
-			item2.amount = num;
-		}
-		item2.MarkDirty();
-		SendNetworkUpdateImmediate();
-	}
-
-	public bool CanFillHere(Vector3 pos)
-	{
-		BasePlayer ownerPlayer = GetOwnerPlayer();
-		if (!Object.op_Implicit((Object)(object)ownerPlayer))
-		{
-			return false;
-		}
-		if ((double)ownerPlayer.WaterFactor() > 0.05)
-		{
-			return true;
-		}
-		return false;
-	}
-
-	public int AmountHeld()
-	{
-		return GetItem().contents.GetSlot(0)?.amount ?? 0;
-	}
-
-	public float HeldFraction()
-	{
-		return (float)AmountHeld() / (float)MaxHoldable();
-	}
-
-	public bool IsFull()
-	{
-		return HeldFraction() >= 1f;
-	}
-
-	public int MaxHoldable()
-	{
-		return ((Component)GetItem().info).GetComponent<ItemModContainer>().maxStackSize;
 	}
 }
 
@@ -32388,8 +32264,8 @@ public class LiquidWeapon : BaseLiquidVessel
 		}
 	}
 
-	[RPC_Server]
 	[RPC_Server.IsActiveItem]
+	[RPC_Server]
 	private void StopFiring()
 	{
 		((FacepunchBehaviour)this).CancelInvoke((Action)FireTick);
@@ -32447,8 +32323,8 @@ public class LiquidWeapon : BaseLiquidVessel
 		return true;
 	}
 
-	[RPC_Server.IsActiveItem]
 	[RPC_Server]
+	[RPC_Server.IsActiveItem]
 	public void PumpWater(RPCMessage msg)
 	{
 		PumpWater();
@@ -32687,14 +32563,14 @@ public class Locker : StorageContainer
 		flagsUpdateScope.Set(Flags.Reserved1, b: false);
 	}
 
-	public override bool ItemFilter(Item item, int targetSlot)
+	public override bool ItemFilter(BasePlayer player, Item item, int targetSlot)
 	{
-		object obj = Interface.CallHook("CanLockerAcceptItem", (object)this, (object)item, (object)targetSlot);
+		object obj = Interface.CallHook("CanLockerAcceptItem", (object)this, (object)item, (object)targetSlot, (object)player);
 		if (obj is bool)
 		{
 			return (bool)obj;
 		}
-		if (!base.ItemFilter(item, targetSlot))
+		if (!base.ItemFilter(player, item, targetSlot))
 		{
 			return false;
 		}
@@ -33198,11 +33074,6 @@ public class LootableCorpse : BaseCorpse, LootPanel.IHasLootPanel, IInventoryPro
 		return !IsOpen();
 	}
 
-	public virtual bool CanLoot()
-	{
-		return true;
-	}
-
 	public override bool OnStartBeingLooted(BasePlayer baseEntity)
 	{
 		if (!firstLooted)
@@ -33240,12 +33111,12 @@ public class LootableCorpse : BaseCorpse, LootPanel.IHasLootPanel, IInventoryPro
 		return num;
 	}
 
-	[RPC_Server]
 	[RPC_Server.IsVisible(3f)]
+	[RPC_Server]
 	private void RPC_LootCorpse(RPCMessage rpc)
 	{
 		BasePlayer player = rpc.player;
-		if (!Object.op_Implicit((Object)(object)player) || !player.CanInteract() || !CanLoot() || containers == null || Interface.CallHook("CanLootEntity", (object)player, (object)this) != null || !player.inventory.loot.StartLootingEntity(this))
+		if (!Object.op_Implicit((Object)(object)player) || !player.CanInteract() || !CanLoot(player) || containers == null || Interface.CallHook("CanLootEntity", (object)player, (object)this) != null || !player.inventory.loot.StartLootingEntity(this))
 		{
 			return;
 		}
@@ -33376,6 +33247,11 @@ public class LootableCorpse : BaseCorpse, LootPanel.IHasLootPanel, IInventoryPro
 				containers[i].Load(info.msg.lootableCorpse.privateData.container[i]);
 			}
 		}
+	}
+
+	public virtual bool CanLoot(BasePlayer player)
+	{
+		return !player.IsBlockedFromLootingByMountable();
 	}
 }
 
@@ -33530,7 +33406,7 @@ public class MagnetCrane : GroundVehicle, CarPhysics<MagnetCrane>.ICar
 
 	public static readonly Phrase ReturnMessage = new Phrase("junkyardcrane.return", "Return to the Junkyard. Excessive damage will occur.");
 
-	private const Flags Flag_ArmMovement = Flags.Reserved7;
+	private const Flags Flag_ArmMovement = Flags.Reserved8;
 
 	private const Flags Flag_BaseMovementInput = Flags.Reserved10;
 
@@ -33874,7 +33750,7 @@ public class MagnetCrane : GroundVehicle, CarPhysics<MagnetCrane>.ICar
 			yawMove = UpdateMoveInput(yawInput, yawMove, 3f, Time.fixedDeltaTime);
 			raiseArmMove = UpdateMoveInput(raiseArmInput, raiseArmMove, 3f, Time.fixedDeltaTime);
 			bool flag2 = extensionInput != 0f || raiseArmInput != 0f || yawInput != 0f;
-			flagsUpdateScope.Set(Flags.Reserved7, flag2);
+			flagsUpdateScope.Set(Flags.Reserved8, flag2);
 			magnetDamage.damageEnabled = IsOn() && flag2;
 			extensionArmState += extensionInput * arm1Speed * num;
 			raiseArmState += raiseArmInput * arm2Speed * num;
@@ -34317,11 +34193,11 @@ public class Mailbox : StorageContainer
 		flagsUpdateScope.Set(Flags.Reserved1, shouldMarkAsFull && full);
 	}
 
-	public override bool ItemFilter(Item item, int targetSlot)
+	public override bool ItemFilter(BasePlayer player, Item item, int targetSlot)
 	{
 		if (allowedItems == null || allowedItems.Length == 0)
 		{
-			return base.ItemFilter(item, targetSlot);
+			return base.ItemFilter(player, item, targetSlot);
 		}
 		ItemDefinition[] array = allowedItems;
 		foreach (ItemDefinition itemDefinition in array)
@@ -34366,7 +34242,7 @@ public class Mailbox : StorageContainer
 			InputContainer.onDirty += OnInventoryDirty;
 			InputContainer.onItemAddedRemoved = OnItemAddedOrRemoved;
 			ItemContainer inputContainer = InputContainer;
-			inputContainer.canAcceptItem = (Func<Item, int, bool>)Delegate.Combine(inputContainer.canAcceptItem, new Func<Item, int, bool>(ItemFilter));
+			inputContainer.canAcceptItem = (Func<BasePlayer, Item, int, bool>)Delegate.Combine(inputContainer.canAcceptItem, new Func<BasePlayer, Item, int, bool>(ItemFilter));
 			OnInventoryFirstCreated(InputContainer);
 		}
 	}
@@ -34376,6 +34252,548 @@ public class Mailbox : StorageContainer
 		base.GetAllInventories(list);
 		list.Add(InputContainer);
 	}
+}
+
+
+using System;
+using System.Collections.Generic;
+using System.Runtime.CompilerServices;
+using ConVar;
+using Facepunch;
+using Network;
+using Oxide.Core;
+using ProtoBuf;
+using UnityEngine;
+using UnityEngine.Assertions;
+
+public class Mannequin : StorageContainer
+{
+	public static class MannequinFlags
+	{
+		public const Flags IsEquipping = Flags.Reserved1;
+	}
+
+	[Header("Mannequin Settings")]
+	public GameObjectRef EquipSound;
+
+	public GameObjectRef ChangePoseSound;
+
+	public GameObject SupportRoot;
+
+	public Transform MannequinSpawnPoint;
+
+	public BaseCollision HitBoxCollision;
+
+	public PhysicsMaterial OverrideHitBoxMaterial;
+
+	[Range(0f, 1f)]
+	public float LodRange0 = 0.3f;
+
+	[Range(0f, 1f)]
+	public float LodRange1 = 0.15f;
+
+	[Range(0f, 1f)]
+	public float LodRange2 = 0.08f;
+
+	[Range(0f, 1f)]
+	public float LodRange3 = 0.02f;
+
+	private const int BACKPACK_SLOT_INDEX = 7;
+
+	protected static string headPartPath = "assets/prefabs/clothes/skin/mannequin/head.male.mannequin.prefab";
+
+	protected static string torsoPartPath = "assets/prefabs/clothes/skin/mannequin/torso.male.mannequin.prefab";
+
+	protected static string handsPartPath = "assets/prefabs/clothes/skin/mannequin/hands.male.mannequin.prefab";
+
+	protected static string legsPartPath = "assets/prefabs/clothes/skin/mannequin/legs.male.mannequin.prefab";
+
+	public static HumanBodyBones[] ValidBoneArray;
+
+	public MannequinPose[] AvailablePoses;
+
+	private static Item[] clothingBuffer;
+
+	private static Item[] lockerBuffer;
+
+	private int __sync_PoseIndex;
+
+	[Sync(Autosave = true)]
+	public int PoseIndex
+	{
+		[CompilerGenerated]
+		get
+		{
+			return __sync_PoseIndex;
+		}
+		[CompilerGenerated]
+		set
+		{
+			if (!IsSyncVarEqual(__sync_PoseIndex, value))
+			{
+				__sync_PoseIndex = value;
+				byte nameID = __GetWeaverID("PoseIndex");
+				QueueSyncVar(nameID);
+			}
+		}
+	}
+
+	public TimeSince LastPoseChange { get; set; }
+
+	public override bool OnRpcMessage(BasePlayer player, uint rpc, Message msg)
+	{
+		TimeWarning val = TimeWarning.New("Mannequin.OnRpcMessage", 0);
+		try
+		{
+			if (rpc == 1116452643 && (Object)(object)player != (Object)null)
+			{
+				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
+				if (Global.developer > 2)
+				{
+					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - Server_ChangePose"));
+				}
+				TimeWarning val2 = TimeWarning.New("Server_ChangePose", 0);
+				try
+				{
+					TimeWarning val3 = TimeWarning.New("Conditions", 0);
+					try
+					{
+						if (!RPC_Server.CallsPerSecond.Test(1116452643u, "Server_ChangePose", this, player, 5uL))
+						{
+							return true;
+						}
+						if (!RPC_Server.IsVisible.Test(1116452643u, "Server_ChangePose", this, player, 3f))
+						{
+							return true;
+						}
+					}
+					finally
+					{
+						((IDisposable)val3)?.Dispose();
+					}
+					try
+					{
+						val3 = TimeWarning.New("Call", 0);
+						try
+						{
+							RPCMessage rPCMessage = default(RPCMessage);
+							rPCMessage.connection = msg.connection;
+							rPCMessage.player = player;
+							rPCMessage.read = msg.read;
+							RPCMessage msg2 = rPCMessage;
+							Server_ChangePose(msg2);
+						}
+						finally
+						{
+							((IDisposable)val3)?.Dispose();
+						}
+					}
+					catch (Exception ex)
+					{
+						Debug.LogException(ex);
+						player.Kick("RPC Error in Server_ChangePose");
+					}
+				}
+				finally
+				{
+					((IDisposable)val2)?.Dispose();
+				}
+				return true;
+			}
+			if (rpc == 1422897100 && (Object)(object)player != (Object)null)
+			{
+				Assert.IsTrue(player.isServer, "SV_RPC Message is using a clientside player!");
+				if (Global.developer > 2)
+				{
+					Debug.Log((object)("SV_RPCMessage: " + ((object)player)?.ToString() + " - Server_RequestSwap"));
+				}
+				TimeWarning val2 = TimeWarning.New("Server_RequestSwap", 0);
+				try
+				{
+					TimeWarning val3 = TimeWarning.New("Conditions", 0);
+					try
+					{
+						if (!RPC_Server.CallsPerSecond.Test(1422897100u, "Server_RequestSwap", this, player, 1uL))
+						{
+							return true;
+						}
+						if (!RPC_Server.IsVisible.Test(1422897100u, "Server_RequestSwap", this, player, 3f))
+						{
+							return true;
+						}
+					}
+					finally
+					{
+						((IDisposable)val3)?.Dispose();
+					}
+					try
+					{
+						val3 = TimeWarning.New("Call", 0);
+						try
+						{
+							RPCMessage rPCMessage = default(RPCMessage);
+							rPCMessage.connection = msg.connection;
+							rPCMessage.player = player;
+							rPCMessage.read = msg.read;
+							RPCMessage msg3 = rPCMessage;
+							Server_RequestSwap(msg3);
+						}
+						finally
+						{
+							((IDisposable)val3)?.Dispose();
+						}
+					}
+					catch (Exception ex2)
+					{
+						Debug.LogException(ex2);
+						player.Kick("RPC Error in Server_RequestSwap");
+					}
+				}
+				finally
+				{
+					((IDisposable)val2)?.Dispose();
+				}
+				return true;
+			}
+		}
+		finally
+		{
+			((IDisposable)val)?.Dispose();
+		}
+		return base.OnRpcMessage(player, rpc, msg);
+	}
+
+	public bool IsEquipping()
+	{
+		return HasFlag(Flags.Reserved1);
+	}
+
+	public override void Load(LoadInfo info)
+	{
+		base.Load(info);
+	}
+
+	public override void Save(SaveInfo info)
+	{
+		//IL_006c: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0071: Unknown result type (might be due to invalid IL or missing references)
+		base.Save(info);
+		info.msg.mannequin = Pool.Get<Mannequin>();
+		info.msg.mannequin.clothingItems = Pool.Get<List<ClothingItem>>();
+		foreach (Item item in base.inventory.itemList)
+		{
+			ClothingItem val = Pool.Get<ClothingItem>();
+			val.itemId = item.info.itemid;
+			val.skin = item.skin;
+			val.uid = item.uid;
+			val.reserved_int_0 = item.instanceData?.dataInt ?? 0;
+			info.msg.mannequin.clothingItems.Add(val);
+		}
+	}
+
+	protected override void OnInventoryDirty()
+	{
+		base.OnInventoryDirty();
+		SendNetworkUpdate();
+	}
+
+	private bool IsBackpackSlot(int slot)
+	{
+		return (slot - 7) % 14 == 0;
+	}
+
+	public override bool ItemFilter(BasePlayer player, Item item, int targetSlot)
+	{
+		if (!base.ItemFilter(player, item, targetSlot))
+		{
+			return false;
+		}
+		bool num = item.IsBackpack();
+		bool flag = IsBackpackSlot(targetSlot);
+		if (num != flag)
+		{
+			return false;
+		}
+		if ((Object)(object)item.info.ItemModWearable != (Object)null && item.info.ItemModWearable.blockFromMannequin)
+		{
+			return false;
+		}
+		return CanAcceptItem(player, item, targetSlot);
+	}
+
+	private bool CanAcceptItem(BasePlayer player, Item newItem, int slot)
+	{
+		ItemModWearable itemModWearable = default(ItemModWearable);
+		if (!((Component)newItem.info).TryGetComponent<ItemModWearable>(ref itemModWearable))
+		{
+			return false;
+		}
+		ItemModWearable wearable = default(ItemModWearable);
+		for (int i = 0; i < base.inventory.capacity; i++)
+		{
+			Item slot2 = base.inventory.GetSlot(i);
+			if (slot2 != null && ((Component)slot2.info).TryGetComponent<ItemModWearable>(ref wearable) && !itemModWearable.CanExistWith(wearable) && slot != i)
+			{
+				return false;
+			}
+		}
+		return true;
+	}
+
+	public void ClearEquipping()
+	{
+		using FlagsUpdateScope flagsUpdateScope = StartSetFlags(FlagsUpdateMode.SendNetworkUpdate);
+		flagsUpdateScope.Set(Flags.Reserved1, b: false);
+	}
+
+	public override void OnInventoryFirstCreated(ItemContainer container)
+	{
+		base.OnInventoryFirstCreated(container);
+		container.flags = ItemContainer.Flag.Clothing;
+	}
+
+	[RPC_Server]
+	[RPC_Server.IsVisible(3f)]
+	[RPC_Server.CallsPerSecond(5uL)]
+	private void Server_ChangePose(RPCMessage msg)
+	{
+		//IL_0072: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0079: Unknown result type (might be due to invalid IL or missing references)
+		//IL_007f: Unknown result type (might be due to invalid IL or missing references)
+		if (!((Object)(object)msg.player == (Object)null) && msg.player.CanBuild(cached: true) && Interface.CallHook("CanMannequinChangePose", (object)this, (object)msg.player) == null)
+		{
+			int num = PoseIndex + 1;
+			if (num >= AvailablePoses.Length)
+			{
+				num = 0;
+			}
+			PoseIndex = num;
+			if (ChangePoseSound.isValid)
+			{
+				Effect.server.Run(ChangePoseSound.resourcePath, ((Component)this).transform.position);
+			}
+		}
+	}
+
+	[RPC_Server.CallsPerSecond(1uL)]
+	[RPC_Server]
+	[RPC_Server.IsVisible(3f)]
+	private void Server_RequestSwap(RPCMessage msg)
+	{
+		//IL_006b: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0071: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00a7: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00ac: Unknown result type (might be due to invalid IL or missing references)
+		if (IsEquipping())
+		{
+			return;
+		}
+		BasePlayer player = msg.player;
+		if (!CanBeLooted(player) || player.IsDead() || Interface.CallHook("CanMannequinSwap", (object)this, (object)player) != null)
+		{
+			return;
+		}
+		BaseLock @lock = GetLock();
+		if ((Object)(object)@lock != (Object)null && !@lock.OnTryToOpen(player))
+		{
+			player.ShowToast(GameTip.Styles.Error, PlayerInventoryErrors.ContainerLocked, false);
+		}
+		else if (SwapPlayerInventoryWithContainer(msg.player, base.inventory, GetDropPosition(), GetDropVelocity(), FilterItems))
+		{
+			if (EquipSound != null)
+			{
+				Effect.server.Run(EquipSound.resourcePath, player, StringPool.Get("spine3"), Vector3.zero, Vector3.zero);
+			}
+			using (FlagsUpdateScope flagsUpdateScope = StartSetFlags(FlagsUpdateMode.SendNetworkUpdate))
+			{
+				flagsUpdateScope.Set(Flags.Reserved1, b: true);
+			}
+			((FacepunchBehaviour)this).Invoke((Action)ClearEquipping, 1.5f);
+		}
+	}
+
+	private bool FilterItems(Item item)
+	{
+		if ((Object)(object)item.info.ItemModWearable != (Object)null && item.info.ItemModWearable.blockFromMannequin)
+		{
+			return false;
+		}
+		return true;
+	}
+
+	public static bool SwapPlayerInventoryWithContainer(BasePlayer player, ItemContainer inventory, Vector3 dropPosition, Vector3 dropVelocity, Func<Item, bool> filterItems = null)
+	{
+		//IL_00d0: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00d1: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00d4: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00da: Unknown result type (might be due to invalid IL or missing references)
+		//IL_012d: Unknown result type (might be due to invalid IL or missing references)
+		//IL_012e: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0131: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0137: Unknown result type (might be due to invalid IL or missing references)
+		bool result = false;
+		for (int i = 0; i < clothingBuffer.Length; i++)
+		{
+			Item slot = player.inventory.containerWear.GetSlot(i);
+			if (slot != null && (filterItems == null || filterItems(slot)))
+			{
+				slot.RemoveFromContainer();
+				clothingBuffer[i] = slot;
+			}
+		}
+		for (int j = 0; j < lockerBuffer.Length; j++)
+		{
+			Item slot2 = inventory.GetSlot(j);
+			if (slot2 != null && (filterItems == null || filterItems(slot2)))
+			{
+				slot2.RemoveFromContainer();
+				lockerBuffer[j] = slot2;
+			}
+		}
+		for (int k = 0; k < clothingBuffer.Length; k++)
+		{
+			Item item = lockerBuffer[k];
+			Item item2 = clothingBuffer[k];
+			if (item != null)
+			{
+				result = true;
+				if (item.info.category != ItemCategory.Attire || !item.MoveToContainer(player.inventory.containerWear, k))
+				{
+					item.Drop(dropPosition, dropVelocity);
+				}
+			}
+			if (item2 != null)
+			{
+				result = true;
+				if (!item2.MoveToContainer(inventory, k) && !item2.MoveToContainer(player.inventory.containerWear, k) && !item2.MoveToContainer(player.inventory.containerMain))
+				{
+					item2.Drop(dropPosition, dropVelocity);
+				}
+			}
+			clothingBuffer[k] = null;
+			lockerBuffer[k] = null;
+		}
+		return result;
+	}
+
+	protected override bool WriteSyncVar(byte id, NetWrite writer)
+	{
+		//IL_0017: Unknown result type (might be due to invalid IL or missing references)
+		//IL_001c: Unknown result type (might be due to invalid IL or missing references)
+		if (id == 0)
+		{
+			if (Global.developer > 2)
+			{
+				NetworkableId iD = net.ID;
+				Debug.Log((object)("SyncVar Writing: PoseIndex for " + ((object)(NetworkableId)(ref iD)/*cast due to .constrained prefix*/).ToString()));
+			}
+			SyncVarNetWrite(writer, __sync_PoseIndex);
+			return true;
+		}
+		return base.WriteSyncVar(id, writer);
+	}
+
+	protected override bool OnSyncVar(byte id, NetRead reader, bool fromAutoSave = false)
+	{
+		if (id == 0)
+		{
+			try
+			{
+				_ = __sync_PoseIndex;
+				int _sync_PoseIndex = reader.Int32();
+				__sync_PoseIndex = _sync_PoseIndex;
+			}
+			catch (Exception ex)
+			{
+				Debug.LogException(ex);
+			}
+			return true;
+		}
+		return base.OnSyncVar(id, reader, fromAutoSave);
+	}
+
+	private byte __GetWeaverID(string propertyName)
+	{
+		if (propertyName == "PoseIndex")
+		{
+			return 0;
+		}
+		return byte.MaxValue;
+	}
+
+	protected override void WriteAutoSaveSyncVars(NetWrite writer)
+	{
+		base.WriteAutoSaveSyncVars(writer);
+		WriteSyncVar(0, writer);
+	}
+
+	protected override void ReadAutoSaveSyncVars(NetRead reader)
+	{
+		base.ReadAutoSaveSyncVars(reader);
+		OnSyncVar(0, reader, fromAutoSave: true);
+	}
+
+	protected override bool AutoSaveSyncVars(SaveInfo save)
+	{
+		NetWrite val = ((BaseNetwork)Net.sv).StartWrite();
+		WriteAutoSaveSyncVars(val);
+		var (src, num) = val.GetBuffer();
+		if (_autosaveBuffer == null)
+		{
+			_autosaveBuffer = BaseEntity._autosaveBufferPool.Rent(num);
+		}
+		if (_autosaveBuffer.Length < num)
+		{
+			BaseEntity._autosaveBufferPool.Return(_autosaveBuffer);
+			_autosaveBuffer = BaseEntity._autosaveBufferPool.Rent(num);
+		}
+		Buffer.BlockCopy(src, 0, _autosaveBuffer, 0, num);
+		save.msg.baseEntity.syncVars = _autosaveBuffer;
+		Pool.Free<NetWrite>(ref val);
+		return true;
+	}
+
+	protected override bool AutoLoadSyncVars(LoadInfo load)
+	{
+		if (load.msg.baseEntity != null && load.msg.baseEntity.syncVars != null)
+		{
+			NetRead val = Pool.Get<NetRead>();
+			val.Init(load.msg.baseEntity.syncVars.AsSpan());
+			ReadAutoSaveSyncVars(val);
+			Pool.Free<NetRead>(ref val);
+		}
+		return true;
+	}
+
+	protected override void ResetSyncVars()
+	{
+		base.ResetSyncVars();
+		__sync_PoseIndex = 0;
+	}
+
+	protected override bool ShouldInvalidateCache(byte id)
+	{
+		if (id == 0)
+		{
+			return true;
+		}
+		return base.ShouldInvalidateCache(id);
+	}
+
+	static Mannequin()
+	{
+		HumanBodyBones[] array = new HumanBodyBones[49];
+		RuntimeHelpers.InitializeArray(array, (RuntimeFieldHandle)/*OpCode not supported: LdMemberToken*/);
+		ValidBoneArray = (HumanBodyBones[])(object)array;
+		clothingBuffer = new Item[8];
+		lockerBuffer = new Item[8];
+	}
+}
+
+
+public static class MannequinFlags
+{
+	public const Flags IsEquipping = Flags.Reserved1;
 }
 
 

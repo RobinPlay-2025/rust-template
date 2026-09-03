@@ -354,6 +354,24 @@ public static class Analytics
 			public const string ClanMemberRemoved = "clan_member_removed";
 
 			public const string ClanScoreEvent = "clan_score_event";
+
+			public const string PowerGridStageChanged = "power_grid_stage_changed";
+
+			public const string PowerGridFuseInserted = "power_grid_fuse_inserted";
+
+			public const string CarOpenEditing = "car_open_editing";
+
+			public const string AirfieldChinookCall = "airfield_chinook_call";
+
+			public const string SatelliteLockTrajectory = "satellite_lock_trajectory";
+
+			public const string SatelliteCrashed = "satellite_crashed";
+
+			public const string IOEntityConnected = "io_entity_connected";
+
+			public const string WaterTreatmentPlantEnabled = "water_treatment_plant_enabled";
+
+			public const string OilRigFuelSwitchStarted = "oil_rig_fuel_switch_started";
 		}
 
 		private struct SimpleItemAmount
@@ -418,6 +436,8 @@ public static class Analytics
 		}
 
 		private static Dictionary<int, string> geneCache = new Dictionary<int, string>();
+
+		private static readonly HashSet<string> RpcLoggingExclusions = new HashSet<string> { "performancereport", "broadcastsignalfromclient", "moveitem", "updatesteaminventory", "rpc_openloot", "receiveclientrotation", "rpc_opendoor", "rpc_closedoor" };
 
 		public static int MaxMSPerFrame = 5;
 
@@ -582,9 +602,18 @@ public static class Analytics
 			obj["changeset"] = ((current != null) ? current.Scm.ChangeId : null) ?? "editor";
 			BuildInfo current2 = BuildInfo.Current;
 			obj["branch"] = ((current2 != null) ? current2.Scm.Branch : null) ?? "editor";
-			obj["network_version"] = 2632.ToString();
+			obj["network_version"] = 2633.ToString();
 			obj["eos_sdk"] = ((object)VersionInterface.GetVersion())?.ToString() ?? "disabled";
 			return obj;
+		}
+
+		public static bool ShouldLogRPC(string rpc)
+		{
+			if (RpcLoggingExclusions.Contains(rpc))
+			{
+				return false;
+			}
+			return true;
 		}
 
 		private static IEnumerator AggregateLoop()
@@ -919,8 +948,8 @@ public static class Analytics
 					.AddField("ip_convar", Net.sv.ip)
 					.AddField("port_convar", Net.sv.port)
 					.AddField("net_protocol", Net.sv.ProtocolId)
-					.AddField("protocol_network", 2632)
-					.AddField("protocol_save", 287);
+					.AddField("protocol_network", 2633)
+					.AddField("protocol_save", 288);
 				BuildInfo current = BuildInfo.Current;
 				EventRecord eventRecord2 = eventRecord.AddField("changeset", ((current != null) ? current.Scm.ChangeId : null) ?? "0").AddField("unity_version", Application.unityVersion);
 				BuildInfo current2 = BuildInfo.Current;
@@ -976,7 +1005,8 @@ public static class Analytics
 							{
 								shortname = y.itemDef.shortname,
 								amount = (int)y.amount
-							})
+							}),
+						wm_tris = x.GetWorldModelTriCount()
 					}).AddField("changeset", BuildInfo.Current.Scm.ChangeId));
 			}
 			catch (Exception ex)
@@ -1452,7 +1482,6 @@ public static class Analytics
 
 		public static void OnFirstLooted(BaseEntity entity, BasePlayer player)
 		{
-			//IL_005d: Unknown result type (might be due to invalid IL or missing references)
 			if (!GameplayAnalytics)
 			{
 				return;
@@ -1461,10 +1490,11 @@ public static class Analytics
 			{
 				if (entity is LootContainer lootContainer)
 				{
-					LogItemsLooted(player, entity, lootContainer.inventory);
-					SubmitPoint(EventRecord.New("loot_entity").AddField("entity", (BaseNetworkable)entity).AddField("player", (BaseNetworkable)player)
-						.AddField("monument", GetMonument(entity))
-						.AddField("biome", GetBiome(((Component)entity).transform.position)));
+					LogContainerLooted(lootContainer.inventory, entity, player);
+				}
+				else if (entity is RespawnableLootFridge respawnableLootFridge)
+				{
+					LogContainerLooted(respawnableLootFridge.inventory, entity, player);
 				}
 				else if (entity is LootableCorpse { containers: var containers })
 				{
@@ -1473,6 +1503,26 @@ public static class Analytics
 						LogItemsLooted(player, entity, container);
 					}
 				}
+			}
+			catch (Exception ex)
+			{
+				Debug.LogException(ex);
+			}
+		}
+
+		private static void LogContainerLooted(ItemContainer container, BaseEntity entity, BasePlayer player)
+		{
+			//IL_004e: Unknown result type (might be due to invalid IL or missing references)
+			if (!GameplayAnalytics)
+			{
+				return;
+			}
+			try
+			{
+				LogItemsLooted(player, entity, container);
+				SubmitPoint(EventRecord.New("loot_entity").AddField("entity", (BaseNetworkable)entity).AddField("player", (BaseNetworkable)player)
+					.AddField("monument", GetMonument(entity))
+					.AddField("biome", GetBiome(((Component)entity).transform.position)));
 			}
 			catch (Exception ex)
 			{
@@ -1654,7 +1704,7 @@ public static class Analytics
 					.AddField("message", message);
 				if (BuildInfo.Current != null)
 				{
-					eventRecord.AddField("changeset", BuildInfo.Current.Scm.ChangeId).AddField("network", 2632);
+					eventRecord.AddField("changeset", BuildInfo.Current.Scm.ChangeId).AddField("network", 2633);
 				}
 				switch (type)
 				{
@@ -3353,6 +3403,154 @@ public static class Analytics
 				Debug.LogException(ex);
 			}
 		}
+
+		public static void OnPowerGridStageChanged(int prevStage, int newStage)
+		{
+			if (!GameplayAnalytics)
+			{
+				return;
+			}
+			try
+			{
+				SubmitPoint(EventRecord.New("power_grid_stage_changed").AddField("previous_stage", prevStage).AddField("new_stage", newStage));
+			}
+			catch (Exception ex)
+			{
+				Debug.LogException(ex);
+			}
+		}
+
+		public static void OnPowerGridFuseInserted(BasePlayer player, Item fuse, int fuses)
+		{
+			if (!GameplayAnalytics)
+			{
+				return;
+			}
+			try
+			{
+				SubmitPoint(EventRecord.New("power_grid_fuse_inserted").AddField("player_steamid", (BaseNetworkable)player).AddField("fuses_inserted", fuses));
+			}
+			catch (Exception ex)
+			{
+				Debug.LogException(ex);
+			}
+		}
+
+		public static void OnCarOpenEditing(BasePlayer player, ModularCarGarage garage)
+		{
+			if (!GameplayAnalytics)
+			{
+				return;
+			}
+			try
+			{
+				SubmitPoint(EventRecord.New("car_open_editing").AddField("player_steamid", player.UserIDString).AddField("garage", (BaseNetworkable)garage));
+			}
+			catch (Exception ex)
+			{
+				Debug.LogException(ex);
+			}
+		}
+
+		public static void OnAirfieldChinookCall()
+		{
+			if (!GameplayAnalytics)
+			{
+				return;
+			}
+			try
+			{
+				SubmitPoint(EventRecord.New("airfield_chinook_call"));
+			}
+			catch (Exception ex)
+			{
+				Debug.LogException(ex);
+			}
+		}
+
+		public static void OnSatelliteLockTrajectory(BasePlayer player, Vector3 targetPos)
+		{
+			//IL_0029: Unknown result type (might be due to invalid IL or missing references)
+			if (!GameplayAnalytics)
+			{
+				return;
+			}
+			try
+			{
+				SubmitPoint(EventRecord.New("satellite_lock_trajectory").AddField("player_steamid", player.UserIDString).AddField("target_position", targetPos));
+			}
+			catch (Exception ex)
+			{
+				Debug.LogException(ex);
+			}
+		}
+
+		public static void OnSatelliteCrashed(bool crashed, Vector3 crashPos)
+		{
+			//IL_0024: Unknown result type (might be due to invalid IL or missing references)
+			if (!GameplayAnalytics)
+			{
+				return;
+			}
+			try
+			{
+				SubmitPoint(EventRecord.New("satellite_crashed").AddField("crashed", crashed).AddField("crash_position", crashPos));
+			}
+			catch (Exception ex)
+			{
+				Debug.LogException(ex);
+			}
+		}
+
+		public static void OnIOEntityConnected(BasePlayer player, IOEntity inputIOEntity, IOEntity outputIOEntity, WireTool.WireColour wireColour)
+		{
+			if (!GameplayAnalytics)
+			{
+				return;
+			}
+			try
+			{
+				SubmitPoint(EventRecord.New("io_entity_connected").AddField("player", (BaseNetworkable)player).AddField("input_io_entity", (BaseNetworkable)inputIOEntity)
+					.AddField("output_io_entity", (BaseNetworkable)outputIOEntity)
+					.AddField("wire_colour", (int)wireColour));
+			}
+			catch (Exception ex)
+			{
+				Debug.LogException(ex);
+			}
+		}
+
+		public static void OnWaterTreatmentPlantEnabled(BasePlayer player, Item item)
+		{
+			if (!GameplayAnalytics)
+			{
+				return;
+			}
+			try
+			{
+				SubmitPoint(EventRecord.New("water_treatment_plant_enabled").AddField("player", (BaseNetworkable)player).AddField("item", item));
+			}
+			catch (Exception ex)
+			{
+				Debug.LogException(ex);
+			}
+		}
+
+		public static void OnOilRigFuelSwitchStarted(BasePlayer player)
+		{
+			if (!GameplayAnalytics)
+			{
+				return;
+			}
+			try
+			{
+				SubmitPoint(EventRecord.New("oil_rig_fuel_switch_started").AddField("player", (BaseNetworkable)player));
+			}
+			catch (Exception ex)
+			{
+				Debug.LogException(ex);
+			}
+		}
 	}
 
 	private const int ShutdownTimeoutMs = 10000;
@@ -3874,6 +4072,24 @@ public static class Azure
 		public const string ClanMemberRemoved = "clan_member_removed";
 
 		public const string ClanScoreEvent = "clan_score_event";
+
+		public const string PowerGridStageChanged = "power_grid_stage_changed";
+
+		public const string PowerGridFuseInserted = "power_grid_fuse_inserted";
+
+		public const string CarOpenEditing = "car_open_editing";
+
+		public const string AirfieldChinookCall = "airfield_chinook_call";
+
+		public const string SatelliteLockTrajectory = "satellite_lock_trajectory";
+
+		public const string SatelliteCrashed = "satellite_crashed";
+
+		public const string IOEntityConnected = "io_entity_connected";
+
+		public const string WaterTreatmentPlantEnabled = "water_treatment_plant_enabled";
+
+		public const string OilRigFuelSwitchStarted = "oil_rig_fuel_switch_started";
 	}
 
 	private struct SimpleItemAmount
@@ -3938,6 +4154,8 @@ public static class Azure
 	}
 
 	private static Dictionary<int, string> geneCache = new Dictionary<int, string>();
+
+	private static readonly HashSet<string> RpcLoggingExclusions = new HashSet<string> { "performancereport", "broadcastsignalfromclient", "moveitem", "updatesteaminventory", "rpc_openloot", "receiveclientrotation", "rpc_opendoor", "rpc_closedoor" };
 
 	public static int MaxMSPerFrame = 5;
 
@@ -4102,9 +4320,18 @@ public static class Azure
 		obj["changeset"] = ((current != null) ? current.Scm.ChangeId : null) ?? "editor";
 		BuildInfo current2 = BuildInfo.Current;
 		obj["branch"] = ((current2 != null) ? current2.Scm.Branch : null) ?? "editor";
-		obj["network_version"] = 2632.ToString();
+		obj["network_version"] = 2633.ToString();
 		obj["eos_sdk"] = ((object)VersionInterface.GetVersion())?.ToString() ?? "disabled";
 		return obj;
+	}
+
+	public static bool ShouldLogRPC(string rpc)
+	{
+		if (RpcLoggingExclusions.Contains(rpc))
+		{
+			return false;
+		}
+		return true;
 	}
 
 	private static IEnumerator AggregateLoop()
@@ -4439,8 +4666,8 @@ public static class Azure
 				.AddField("ip_convar", Net.sv.ip)
 				.AddField("port_convar", Net.sv.port)
 				.AddField("net_protocol", Net.sv.ProtocolId)
-				.AddField("protocol_network", 2632)
-				.AddField("protocol_save", 287);
+				.AddField("protocol_network", 2633)
+				.AddField("protocol_save", 288);
 			BuildInfo current = BuildInfo.Current;
 			EventRecord eventRecord2 = eventRecord.AddField("changeset", ((current != null) ? current.Scm.ChangeId : null) ?? "0").AddField("unity_version", Application.unityVersion);
 			BuildInfo current2 = BuildInfo.Current;
@@ -4496,7 +4723,8 @@ public static class Azure
 						{
 							shortname = y.itemDef.shortname,
 							amount = (int)y.amount
-						})
+						}),
+					wm_tris = x.GetWorldModelTriCount()
 				}).AddField("changeset", BuildInfo.Current.Scm.ChangeId));
 		}
 		catch (Exception ex)
@@ -4972,7 +5200,6 @@ public static class Azure
 
 	public static void OnFirstLooted(BaseEntity entity, BasePlayer player)
 	{
-		//IL_005d: Unknown result type (might be due to invalid IL or missing references)
 		if (!GameplayAnalytics)
 		{
 			return;
@@ -4981,10 +5208,11 @@ public static class Azure
 		{
 			if (entity is LootContainer lootContainer)
 			{
-				LogItemsLooted(player, entity, lootContainer.inventory);
-				SubmitPoint(EventRecord.New("loot_entity").AddField("entity", (BaseNetworkable)entity).AddField("player", (BaseNetworkable)player)
-					.AddField("monument", GetMonument(entity))
-					.AddField("biome", GetBiome(((Component)entity).transform.position)));
+				LogContainerLooted(lootContainer.inventory, entity, player);
+			}
+			else if (entity is RespawnableLootFridge respawnableLootFridge)
+			{
+				LogContainerLooted(respawnableLootFridge.inventory, entity, player);
 			}
 			else if (entity is LootableCorpse { containers: var containers })
 			{
@@ -4993,6 +5221,26 @@ public static class Azure
 					LogItemsLooted(player, entity, container);
 				}
 			}
+		}
+		catch (Exception ex)
+		{
+			Debug.LogException(ex);
+		}
+	}
+
+	private static void LogContainerLooted(ItemContainer container, BaseEntity entity, BasePlayer player)
+	{
+		//IL_004e: Unknown result type (might be due to invalid IL or missing references)
+		if (!GameplayAnalytics)
+		{
+			return;
+		}
+		try
+		{
+			LogItemsLooted(player, entity, container);
+			SubmitPoint(EventRecord.New("loot_entity").AddField("entity", (BaseNetworkable)entity).AddField("player", (BaseNetworkable)player)
+				.AddField("monument", GetMonument(entity))
+				.AddField("biome", GetBiome(((Component)entity).transform.position)));
 		}
 		catch (Exception ex)
 		{
@@ -5174,7 +5422,7 @@ public static class Azure
 				.AddField("message", message);
 			if (BuildInfo.Current != null)
 			{
-				eventRecord.AddField("changeset", BuildInfo.Current.Scm.ChangeId).AddField("network", 2632);
+				eventRecord.AddField("changeset", BuildInfo.Current.Scm.ChangeId).AddField("network", 2633);
 			}
 			switch (type)
 			{
@@ -6873,6 +7121,154 @@ public static class Azure
 			Debug.LogException(ex);
 		}
 	}
+
+	public static void OnPowerGridStageChanged(int prevStage, int newStage)
+	{
+		if (!GameplayAnalytics)
+		{
+			return;
+		}
+		try
+		{
+			SubmitPoint(EventRecord.New("power_grid_stage_changed").AddField("previous_stage", prevStage).AddField("new_stage", newStage));
+		}
+		catch (Exception ex)
+		{
+			Debug.LogException(ex);
+		}
+	}
+
+	public static void OnPowerGridFuseInserted(BasePlayer player, Item fuse, int fuses)
+	{
+		if (!GameplayAnalytics)
+		{
+			return;
+		}
+		try
+		{
+			SubmitPoint(EventRecord.New("power_grid_fuse_inserted").AddField("player_steamid", (BaseNetworkable)player).AddField("fuses_inserted", fuses));
+		}
+		catch (Exception ex)
+		{
+			Debug.LogException(ex);
+		}
+	}
+
+	public static void OnCarOpenEditing(BasePlayer player, ModularCarGarage garage)
+	{
+		if (!GameplayAnalytics)
+		{
+			return;
+		}
+		try
+		{
+			SubmitPoint(EventRecord.New("car_open_editing").AddField("player_steamid", player.UserIDString).AddField("garage", (BaseNetworkable)garage));
+		}
+		catch (Exception ex)
+		{
+			Debug.LogException(ex);
+		}
+	}
+
+	public static void OnAirfieldChinookCall()
+	{
+		if (!GameplayAnalytics)
+		{
+			return;
+		}
+		try
+		{
+			SubmitPoint(EventRecord.New("airfield_chinook_call"));
+		}
+		catch (Exception ex)
+		{
+			Debug.LogException(ex);
+		}
+	}
+
+	public static void OnSatelliteLockTrajectory(BasePlayer player, Vector3 targetPos)
+	{
+		//IL_0029: Unknown result type (might be due to invalid IL or missing references)
+		if (!GameplayAnalytics)
+		{
+			return;
+		}
+		try
+		{
+			SubmitPoint(EventRecord.New("satellite_lock_trajectory").AddField("player_steamid", player.UserIDString).AddField("target_position", targetPos));
+		}
+		catch (Exception ex)
+		{
+			Debug.LogException(ex);
+		}
+	}
+
+	public static void OnSatelliteCrashed(bool crashed, Vector3 crashPos)
+	{
+		//IL_0024: Unknown result type (might be due to invalid IL or missing references)
+		if (!GameplayAnalytics)
+		{
+			return;
+		}
+		try
+		{
+			SubmitPoint(EventRecord.New("satellite_crashed").AddField("crashed", crashed).AddField("crash_position", crashPos));
+		}
+		catch (Exception ex)
+		{
+			Debug.LogException(ex);
+		}
+	}
+
+	public static void OnIOEntityConnected(BasePlayer player, IOEntity inputIOEntity, IOEntity outputIOEntity, WireTool.WireColour wireColour)
+	{
+		if (!GameplayAnalytics)
+		{
+			return;
+		}
+		try
+		{
+			SubmitPoint(EventRecord.New("io_entity_connected").AddField("player", (BaseNetworkable)player).AddField("input_io_entity", (BaseNetworkable)inputIOEntity)
+				.AddField("output_io_entity", (BaseNetworkable)outputIOEntity)
+				.AddField("wire_colour", (int)wireColour));
+		}
+		catch (Exception ex)
+		{
+			Debug.LogException(ex);
+		}
+	}
+
+	public static void OnWaterTreatmentPlantEnabled(BasePlayer player, Item item)
+	{
+		if (!GameplayAnalytics)
+		{
+			return;
+		}
+		try
+		{
+			SubmitPoint(EventRecord.New("water_treatment_plant_enabled").AddField("player", (BaseNetworkable)player).AddField("item", item));
+		}
+		catch (Exception ex)
+		{
+			Debug.LogException(ex);
+		}
+	}
+
+	public static void OnOilRigFuelSwitchStarted(BasePlayer player)
+	{
+		if (!GameplayAnalytics)
+		{
+			return;
+		}
+		try
+		{
+			SubmitPoint(EventRecord.New("oil_rig_fuel_switch_started").AddField("player", (BaseNetworkable)player));
+		}
+		catch (Exception ex)
+		{
+			Debug.LogException(ex);
+		}
+	}
 }
 
 
@@ -7227,6 +7623,24 @@ private static class EventIds
 	public const string ClanMemberRemoved = "clan_member_removed";
 
 	public const string ClanScoreEvent = "clan_score_event";
+
+	public const string PowerGridStageChanged = "power_grid_stage_changed";
+
+	public const string PowerGridFuseInserted = "power_grid_fuse_inserted";
+
+	public const string CarOpenEditing = "car_open_editing";
+
+	public const string AirfieldChinookCall = "airfield_chinook_call";
+
+	public const string SatelliteLockTrajectory = "satellite_lock_trajectory";
+
+	public const string SatelliteCrashed = "satellite_crashed";
+
+	public const string IOEntityConnected = "io_entity_connected";
+
+	public const string WaterTreatmentPlantEnabled = "water_treatment_plant_enabled";
+
+	public const string OilRigFuelSwitchStarted = "oil_rig_fuel_switch_started";
 }
 
 
@@ -9936,10 +10350,10 @@ public class EventRecord : IPooled
 	{
 		//IL_009e: Unknown result type (might be due to invalid IL or missing references)
 		//IL_00b1: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0361: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0375: Unknown result type (might be due to invalid IL or missing references)
-		//IL_037a: Unknown result type (might be due to invalid IL or missing references)
-		//IL_037e: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0395: Unknown result type (might be due to invalid IL or missing references)
+		//IL_03a9: Unknown result type (might be due to invalid IL or missing references)
+		//IL_03ae: Unknown result type (might be due to invalid IL or missing references)
+		//IL_03b2: Unknown result type (might be due to invalid IL or missing references)
 		if ((Object)(object)entity == (Object)null || entity.net == null)
 		{
 			return this;
@@ -9997,6 +10411,11 @@ public class EventRecord : IPooled
 		{
 			AddField(key, "_grade", (int)buildingBlock.grade);
 			AddField(key, "_building_id", (int)buildingBlock.buildingID);
+		}
+		if (entity is IOEntity iOEntity)
+		{
+			AddField(key, "_io_type", (int)iOEntity.ioType);
+			AddField(key, "_current_energy", iOEntity.GetCurrentEnergy());
 		}
 		AddField(key, "_prefab", entity.ShortPrefabName);
 		Transform transform = ((Component)entity).transform;
@@ -10404,6 +10823,8 @@ using System.Reflection;
 using System.Threading.Tasks;
 using ConVar;
 using Facepunch;
+using Facepunch.Nexus;
+using Facepunch.Nexus.Models;
 using Facepunch.Ping;
 using Facepunch.Rust;
 using Network;
@@ -10748,6 +11169,25 @@ public class PerformanceLogging
 			IEnumerable<HarmonyModInfo> harmonyMods = HarmonyLoader.GetHarmonyMods();
 			record.AddObject("harmony_mods", harmonyMods);
 			record.AddField("harmony_mod_count", harmonyMods.Count());
+		}
+		if (!isClient && NexusServer.Started)
+		{
+			record.AddField("nexus_endpoint", Nexus.endpoint);
+			EventRecord eventRecord = record;
+			NexusZoneClient zoneClient = NexusServer.ZoneClient;
+			int? obj3;
+			if (zoneClient == null)
+			{
+				obj3 = null;
+			}
+			else
+			{
+				ZoneDetails zone = zoneClient.Zone;
+				obj3 = ((zone != null) ? new int?(zone.ZoneId) : ((int?)null));
+			}
+			eventRecord.AddField("nexus_zone_id", obj3 ?? (-1));
+			record.AddField("nexus_zone_key", NexusServer.ZoneKey ?? "");
+			record.AddField("nexus_controller", Nexus.zoneController);
 		}
 		record.AddObject("hardware", Analytics.Azure.GetHardwareData()).AddObject("application", Analytics.Azure.GetApplicationData());
 		stopwatch.Stop();
@@ -12377,8 +12817,8 @@ public class ModelViewer_RenderParameters
 	[Header("Anti Aliasing")]
 	public PostProcessLayer.Antialiasing antialiasing = PostProcessLayer.Antialiasing.TemporalAntialiasing;
 
-	[Range(1f, 4f)]
 	[Header("Shadows")]
+	[Range(1f, 4f)]
 	public int shadowCascades = 4;
 
 	[Range(1f, 3f)]
@@ -12426,8 +12866,8 @@ public class ModelViewer_RenderParameters
 	[Range(0f, 1f)]
 	public float traceBias = 0.03f;
 
-	[Header("Ambient Occlusion")]
 	[Header("                ")]
+	[Header("Ambient Occlusion")]
 	public bool enableAmbientOcclusion = true;
 
 	public SampleCountLevel SampleCount = SampleCountLevel.Medium;
@@ -12440,16 +12880,16 @@ public class ModelViewer_RenderParameters
 	[Tooltip("Radius spread of the occlusion.")]
 	public float Radius = 2f;
 
-	[Range(0f, 16f)]
 	[Tooltip("Power exponent attenuation of the occlusion.")]
+	[Range(0f, 16f)]
 	public float PowerExponent = 1.8f;
 
-	[Range(0f, 0.99f)]
 	[Tooltip("Controls the initial occlusion contribution offset.")]
+	[Range(0f, 0.99f)]
 	public float Bias = 0.05f;
 
-	[Range(0f, 1f)]
 	[Tooltip("Controls the thickness occlusion contribution.")]
+	[Range(0f, 1f)]
 	public float Thickness = 1f;
 
 	[Tooltip("Compute the Occlusion and Blur at half of the resolution.")]
@@ -12464,26 +12904,26 @@ public class ModelViewer_RenderParameters
 	[Tooltip("Length distance to performe the transition.")]
 	public float FadeLength = 50f;
 
-	[Range(0f, 1f)]
 	[Tooltip("Final Intensity parameter.")]
+	[Range(0f, 1f)]
 	public float FadeToIntensity;
 
 	public Color FadeToTint = Color.black;
 
-	[Range(0f, 32f)]
 	[Tooltip("Final Radius parameter.")]
+	[Range(0f, 32f)]
 	public float FadeToRadius = 2f;
 
-	[Range(0f, 16f)]
 	[Tooltip("Final PowerExponent parameter.")]
+	[Range(0f, 16f)]
 	public float FadeToPowerExponent = 1.8f;
 
 	[Tooltip("Final Thickness parameter.")]
 	[Range(0f, 1f)]
 	public float FadeToThickness = 1f;
 
-	[Header("Reflections")]
 	[Header("                ")]
+	[Header("Reflections")]
 	public ReflectionProbeMode Type = (ReflectionProbeMode)1;
 
 	public ReflectionProbeRefreshMode RefreshMode = (ReflectionProbeRefreshMode)1;
@@ -12561,9 +13001,9 @@ public class ModelViewer_MainCameraParameters
 
 	public float followLag;
 
-	[Range(0.01f, 360f)]
-	[Header("                ")]
 	[Header("Lens")]
+	[Header("                ")]
+	[Range(0.01f, 360f)]
 	public float fieldOfView = 15f;
 
 	public float nearPlane = 0.05f;
@@ -12578,8 +13018,8 @@ public class ModelViewer_MainCameraParameters
 	[Range(0.01f, 100f)]
 	public float Ratio = 3f;
 
-	[Header("Focus")]
 	[Header("                ")]
+	[Header("Focus")]
 	public bool depthOfField;
 
 	public float focalLength = 3f;
@@ -12605,8 +13045,8 @@ public class ModelViewer_MainCameraParameters
 	[Range(0f, 1f)]
 	public float chromaticAbberation;
 
-	[Header("Post Effects")]
 	[Header("                ")]
+	[Header("Post Effects")]
 	public TonemappingMode ToneMapping = TonemappingMode.Neutral;
 
 	public float Exposure = 2.34f;
@@ -12623,8 +13063,8 @@ public class ModelViewer_MainCameraParameters
 
 	public float limit;
 
-	[Header("                ")]
 	[Header("God Rays")]
+	[Header("                ")]
 	public bool GodRays = true;
 
 	[Header("Bloom")]
@@ -12646,14 +13086,14 @@ public class ModelViewer_MainCameraParameters
 
 	public Color Color = Color.white;
 
-	[Header("                ")]
 	[Header("Vignette")]
+	[Header("                ")]
 	public float Darkness;
 
 	public float Sharpness;
 
-	[Header("                ")]
 	[Header("Grain")]
+	[Header("                ")]
 	public bool Coloured = true;
 
 	[Range(0f, 1f)]
@@ -12692,8 +13132,8 @@ using UnityEngine;
 [Serializable]
 public class ModelViewer_SkyParameters
 {
-	[Header("Sky")]
 	[Range(0f, 1f)]
+	[Header("Sky")]
 	public float skyBrightness = 1f;
 
 	[Header("Time of Day")]
@@ -12711,8 +13151,8 @@ public class ModelViewer_SkyParameters
 	[TOD_Range(1f, 9999f)]
 	public int Year = 2000;
 
-	[Tooltip("Latitude of the current location in degrees.")]
 	[Range(-90f, 90f)]
+	[Tooltip("Latitude of the current location in degrees.")]
 	public float Latitude = -10f;
 
 	[Tooltip("Longitude of the current location in degrees.")]
@@ -12750,9 +13190,9 @@ public class modelviewer : MonoBehaviour, IEditorComponent
 
 	public ModelViewer_SkyParameters Sky;
 
-	[Header("                ")]
-	[Header("                ")]
 	[Header("Junk to clean up:")]
+	[Header("                ")]
+	[Header("                ")]
 	public GameObject ruleOfThirds;
 
 	public GameObject goldenRatio;
@@ -20323,8 +20763,8 @@ public class FimpIK_Limb : FIK_ProcessorBase
 	[Tooltip("3-Bones limb array")]
 	private IKBone[] IKBones;
 
-	[Space(4f)]
 	[Tooltip("Blend value for goal position")]
+	[Space(4f)]
 	[Range(0f, 1f)]
 	public float IKPositionWeight = 1f;
 
@@ -22934,8 +23374,8 @@ using UnityEngine;
 
 public class FBasic_FreeCameraBehaviour : MonoBehaviour
 {
-	[Tooltip("How fast camera should fly")]
 	[Header("> Hold right mouse button to rotate camera <")]
+	[Tooltip("How fast camera should fly")]
 	public float SpeedMultiplier = 10f;
 
 	[Tooltip("Value of acceleration smoothness")]
@@ -23087,12 +23527,12 @@ public class FBasic_TPPCameraBehaviour : MonoBehaviour
 	[Tooltip("Sensitivity value for rotating camera around following object")]
 	public float RotationSensitivity = 10f;
 
-	[Range(0.1f, 1f)]
 	[Header("If you want camera rotation to be smooth")]
+	[Range(0.1f, 1f)]
 	public float RotationSpeed = 1f;
 
-	[Range(0f, 1f)]
 	[Header("If you want camera to follow target with some smoothness")]
+	[Range(0f, 1f)]
 	public float HardFollowValue = 1f;
 
 	[Header("If you want to hold cursor (cursor switch on TAB)")]
@@ -23718,10 +24158,10 @@ using UnityEngine;
 
 public class FBasic_MaterialTiler : FBasic_MaterialScriptBase
 {
-	[Header("When you scale object change")]
-	[Header("something in script to apply")]
-	[Space(10f)]
 	[Tooltip("Texture identificator in shader")]
+	[Header("something in script to apply")]
+	[Header("When you scale object change")]
+	[Space(10f)]
 	public string TextureProperty = "_MainTex";
 
 	[Tooltip("How much tiles should be multiplied according to gameObject's scale")]

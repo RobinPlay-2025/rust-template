@@ -1,5 +1,1824 @@
 using System;
 using System.Collections.Generic;
+using UnityEngine;
+using UnityEngine.Serialization;
+
+public class PlayerHeliSounds : MonoBehaviour, IClientComponent
+{
+	[Serializable]
+	public class FlightSoundLayer
+	{
+		public SoundDefinition loopDefinition;
+
+		public SoundDefinition startDefinition;
+
+		public SoundDefinition stopDefinition;
+
+		public Transform targetParent;
+
+		public float fadeTime = 0.25f;
+
+		public float initialGain = 1f;
+
+		public float gainRateUp = 5f;
+
+		public float gainRateDown = 5f;
+
+		public float gainInterpRate = 0.5f;
+
+		public float initialPitch = 1f;
+
+		public float pitchRateUp = 5f;
+
+		public float pitchRateDown = 5f;
+
+		public float pitchInterpRate = 0.5f;
+
+		public bool returnToInitialWhenTurnedOff;
+
+		public bool useUpDotPitchCurve;
+
+		public AnimationCurve upDotPitchCurve;
+	}
+
+	[FormerlySerializedAs("miniCopter")]
+	public PlayerHelicopter miniCopter;
+
+	public GameObject soundAttachPoint;
+
+	public List<FlightSoundLayer> flightSoundLayers = new List<FlightSoundLayer>();
+
+	public SoundDefinition engineStartDef;
+
+	public SoundDefinition engineLoopDef;
+
+	public SoundDefinition engineStopDef;
+
+	public SoundDefinition rotorLoopDef;
+
+	public SoundDefinition radarWarningDef;
+
+	public SoundDefinition radarLockDef;
+
+	public SoundDefinition noAmmoDef;
+
+	public SoundDefinition noFlaresDef;
+
+	public SoundDefinition flaresReadyDef;
+
+	public SoundDefinition flightControlMovementSoundDef;
+
+	public GameObject flightControlSoundPosition;
+
+	public float engineStartFadeOutTime = 1f;
+
+	public float engineLoopFadeInTime = 0.7f;
+
+	public float engineLoopFadeOutTime = 0.25f;
+
+	public float engineStopFadeOutTime = 0.25f;
+
+	public float rotorLoopFadeInTime = 0.7f;
+
+	public float rotorLoopFadeOutTime = 0.25f;
+
+	public float enginePitchInterpRate = 0.5f;
+
+	public float rotorPitchInterpRate = 1f;
+
+	public float rotorGainInterpRate = 0.5f;
+
+	public float rotorStartStopPitchRateUp = 7f;
+
+	public float rotorStartStopPitchRateDown = 9f;
+
+	public float rotorStartStopGainRateUp = 5f;
+
+	public float rotorStartStopGainRateDown = 4f;
+
+	public AnimationCurve engineUpDotPitchCurve;
+
+	public AnimationCurve rotorUpDotPitchCurve;
+
+	public Animator animator;
+
+	public SoundDefinition reloadStartSoundDef;
+
+	public SoundDefinition reloadLoopSoundDef;
+
+	public SoundDefinition reloadFinishSoundDef;
+}
+
+
+using System;
+using UnityEngine;
+
+[Serializable]
+public class FlightSoundLayer
+{
+	public SoundDefinition loopDefinition;
+
+	public SoundDefinition startDefinition;
+
+	public SoundDefinition stopDefinition;
+
+	public Transform targetParent;
+
+	public float fadeTime = 0.25f;
+
+	public float initialGain = 1f;
+
+	public float gainRateUp = 5f;
+
+	public float gainRateDown = 5f;
+
+	public float gainInterpRate = 0.5f;
+
+	public float initialPitch = 1f;
+
+	public float pitchRateUp = 5f;
+
+	public float pitchRateDown = 5f;
+
+	public float pitchInterpRate = 0.5f;
+
+	public bool returnToInitialWhenTurnedOff;
+
+	public bool useUpDotPitchCurve;
+
+	public AnimationCurve upDotPitchCurve;
+}
+
+
+using System;
+using Rust;
+using UnityEngine;
+
+public class ScrapTransportHelicopter : PlayerHelicopterWithFlares, TriggerHurtNotChild.IHurtTriggerUser
+{
+	[SerializeField]
+	[Header("Scrap Transport Helicopter Specific")]
+	private Transform searchlightEye;
+
+	[SerializeField]
+	private BoxCollider parentTriggerCollider;
+
+	[Header("Damage Effects")]
+	[SerializeField]
+	private ParticleSystemContainer tailDamageLight;
+
+	[SerializeField]
+	private ParticleSystemContainer tailDamageHeavy;
+
+	[SerializeField]
+	private ParticleSystemContainer mainEngineDamageLight;
+
+	[SerializeField]
+	private ParticleSystemContainer mainEngineDamageHeavy;
+
+	[SerializeField]
+	private ParticleSystemContainer cockpitSparks;
+
+	[SerializeField]
+	private Transform tailDamageLightEffects;
+
+	[SerializeField]
+	private Transform mainEngineDamageLightEffects;
+
+	[SerializeField]
+	private SoundDefinition damagedFireSoundDef;
+
+	[SerializeField]
+	private SoundDefinition damagedFireTailSoundDef;
+
+	[SerializeField]
+	private SoundDefinition damagedSparksSoundDef;
+
+	[SerializeField]
+	private float pilotRotorScale = 1.5f;
+
+	[SerializeField]
+	private float compassOffset;
+
+	[ServerVar(Help = "Population active on the server", ShowInAdminUI = true)]
+	public static float population;
+
+	public const string PASSENGER_ACHIEVEMENT = "RUST_AIR";
+
+	public const int PASSENGER_ACHIEVEMENT_REQ_COUNT = 5;
+
+	public override void ServerInit()
+	{
+		//IL_001b: Unknown result type (might be due to invalid IL or missing references)
+		base.ServerInit();
+		rigidBody.inertiaTensor = new Vector3(19082f, 14356f, 7940f);
+	}
+
+	public override void OnHealthChanged(float oldvalue, float newvalue)
+	{
+		if (base.isServer)
+		{
+			((FacepunchBehaviour)this).Invoke((Action)DelayedNetworking, 0.15f);
+		}
+	}
+
+	public void DelayedNetworking()
+	{
+		SendNetworkUpdate();
+	}
+
+	public override void OnFlagsChanged(Flags old, Flags next)
+	{
+		base.OnFlagsChanged(old, next);
+		if (!GameInfo.HasAchievements || !base.isServer || (old & Flags.On) == Flags.On || (next & Flags.On) != Flags.On || !((Object)(object)GetDriver() != (Object)null))
+		{
+			return;
+		}
+		int num = 0;
+		foreach (BaseEntity child in children)
+		{
+			if ((Object)(object)child.ToPlayer() != (Object)null)
+			{
+				num++;
+			}
+			if (child is BaseVehicleSeat baseVehicleSeat && (Object)(object)baseVehicleSeat.GetMounted() != (Object)null && (Object)(object)baseVehicleSeat.GetMounted() != (Object)(object)GetDriver())
+			{
+				num++;
+			}
+		}
+		if (num >= 5)
+		{
+			GetDriver().GiveAchievement("RUST_AIR");
+		}
+	}
+
+	public float GetDamageMultiplier(BaseEntity ent)
+	{
+		return 1f;
+	}
+
+	public void OnHurtTriggerOccupant(BaseEntity hurtEntity, DamageType damageType, float damageTotal)
+	{
+	}
+
+	protected override bool CanPushNow(BasePlayer pusher)
+	{
+		return false;
+	}
+}
+
+
+using UnityEngine;
+
+public class ScrapTransportHelicopterWheelEffects : MonoBehaviour, IServerComponent
+{
+	public WheelCollider wheelCollider;
+
+	public GameObjectRef impactEffect;
+
+	public float minTimeBetweenEffects = 0.25f;
+
+	public float minDistBetweenEffects = 0.1f;
+
+	private bool wasGrounded;
+
+	private float lastEffectPlayed;
+
+	private Vector3 lastCollisionPos;
+
+	public void Update()
+	{
+		bool isGrounded = wheelCollider.isGrounded;
+		if (isGrounded && !wasGrounded)
+		{
+			DoImpactEffect();
+		}
+		wasGrounded = isGrounded;
+	}
+
+	private void DoImpactEffect()
+	{
+		//IL_0029: Unknown result type (might be due to invalid IL or missing references)
+		//IL_002f: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0060: Unknown result type (might be due to invalid IL or missing references)
+		//IL_006b: Unknown result type (might be due to invalid IL or missing references)
+		//IL_008c: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0091: Unknown result type (might be due to invalid IL or missing references)
+		if (impactEffect.isValid && !(Time.time < lastEffectPlayed + minTimeBetweenEffects) && (!(Vector3.Distance(((Component)this).transform.position, lastCollisionPos) < minDistBetweenEffects) || lastEffectPlayed == 0f))
+		{
+			Effect.server.Run(impactEffect.resourcePath, ((Component)this).transform.position, ((Component)this).transform.up);
+			lastEffectPlayed = Time.time;
+			lastCollisionPos = ((Component)this).transform.position;
+		}
+	}
+}
+
+
+using UnityEngine;
+
+public class AnimalRagdoll : Ragdoll
+{
+	public SkinnedMeshRenderer[] bodyRenderers;
+
+	public SkinnedMeshRenderer[] hairRenderers;
+}
+
+
+using System;
+using Facepunch;
+using ProtoBuf;
+using UnityEngine;
+
+public class BaseAnimalRagdoll : BaseCombatEntity
+{
+	[SerializeField]
+	private Ragdoll Ragdoll;
+
+	private EntityRef<BaseCombatEntity> linkedEntity;
+
+	public override float PositionTickRate
+	{
+		protected get
+		{
+			return 0.05f;
+		}
+	}
+
+	public override void Save(SaveInfo info)
+	{
+		//IL_003b: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0040: Unknown result type (might be due to invalid IL or missing references)
+		base.Save(info);
+		info.msg.temporaryRagdoll = Pool.Get<TemporaryRagdoll>();
+		if (linkedEntity.IsValid(base.isServer))
+		{
+			info.msg.temporaryRagdoll.parentID = linkedEntity.uid;
+		}
+	}
+
+	public override void Load(LoadInfo info)
+	{
+		base.Load(info);
+		if (info.msg.temporaryRagdoll != null)
+		{
+			Load(info.msg.temporaryRagdoll);
+		}
+	}
+
+	private void Load(TemporaryRagdoll tempRagdoll)
+	{
+	}
+
+	private void LateUpdate()
+	{
+		//IL_0040: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0056: Unknown result type (might be due to invalid IL or missing references)
+		BaseCombatEntity baseCombatEntity = linkedEntity.Get(base.isServer);
+		if (base.isServer)
+		{
+			if ((Object)(object)baseCombatEntity == (Object)null || baseCombatEntity.IsDead())
+			{
+				Kill();
+				return;
+			}
+			((Component)baseCombatEntity).transform.position = ((Component)this).transform.position;
+			((Component)baseCombatEntity).transform.rotation = ((Component)this).transform.rotation;
+			SendNetworkUpdateImmediate();
+		}
+	}
+
+	public override void ServerInit()
+	{
+		base.ServerInit();
+		Rigidbody val = ((Component)this).GetComponent<Rigidbody>();
+		if ((Object)(object)val == (Object)null)
+		{
+			val = ((Component)this).gameObject.AddComponent<Rigidbody>();
+			val.mass = 10f;
+			val.linearDamping = 0f;
+			val.angularDamping = 0f;
+		}
+		val.useGravity = true;
+		val.collisionDetectionMode = (CollisionDetectionMode)0;
+		val.sleepThreshold = Mathf.Max(0.05f, Physics.sleepThreshold);
+	}
+
+	public void InitFromEnt(BaseCombatEntity ent)
+	{
+		//IL_0033: Unknown result type (might be due to invalid IL or missing references)
+		//IL_003e: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0054: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0059: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0075: Unknown result type (might be due to invalid IL or missing references)
+		linkedEntity.Set(ent);
+		ent.model.skeleton.CopyTo(model.skeleton);
+		((Component)this).transform.SetPositionAndRotation(((Component)ent).transform.position, ((Component)ent).transform.rotation);
+		Ragdoll.ServerInit();
+		Vector3 worldVelocity = ent.GetWorldVelocity();
+		foreach (Rigidbody rigidbody in Ragdoll.rigidbodies)
+		{
+			rigidbody.AddForce(worldVelocity, (ForceMode)2);
+			rigidbody.linearDamping = 0f;
+		}
+		((FacepunchBehaviour)this).Invoke((Action)StopRagdolling, 5f);
+	}
+
+	private void StopRagdolling()
+	{
+		BaseCombatEntity baseCombatEntity = linkedEntity.Get(serverside: true);
+		if ((Object)(object)baseCombatEntity != (Object)null)
+		{
+			using FlagsUpdateScope flagsUpdateScope = baseCombatEntity.StartSetFlags(FlagsUpdateMode.SendNetworkUpdate);
+			flagsUpdateScope.Set(Flags.Reserved12, b: false);
+		}
+		Kill();
+	}
+
+	public override void OnCollision(Collision collision, BaseEntity hitEntity)
+	{
+		ProcessCollision(collision);
+	}
+
+	protected void OnCollisionEnter(Collision collision)
+	{
+		ProcessCollision(collision);
+	}
+
+	protected void ProcessCollision(Collision collision)
+	{
+		if (!base.isClient && collision != null && !((Object)(object)collision.gameObject == (Object)null) && !((Object)(object)collision.gameObject == (Object)null) && linkedEntity.Get(serverside: true) is IAnimalRagdollCollisionReceiver animalRagdollCollisionReceiver)
+		{
+			animalRagdollCollisionReceiver.OnRagdollCollisionEnter(collision);
+		}
+	}
+}
+
+
+using UnityEngine;
+
+public interface IAnimalRagdollCollisionReceiver
+{
+	void OnRagdollCollisionEnter(Collision collision);
+}
+
+
+using UnityEngine;
+
+[CreateAssetMenu(menuName = "Scriptable Object/Horse Breed", fileName = "newbreed.asset")]
+public class HorseBreed : ScriptableObject
+{
+	public Phrase breedName;
+
+	public Phrase breedDesc;
+
+	public Sprite trophyHeadSprite;
+
+	public Material[] materialOverrides;
+
+	public float maxHealth = 1f;
+
+	public float maxSpeed = 1f;
+
+	public float staminaDrain = 1f;
+
+	public float maxStamina = 1f;
+}
+
+
+using Facepunch;
+using ProtoBuf;
+
+public class HorseCorpse : LootableCorpse
+{
+	public int breedIndex;
+
+	public Phrase lootPanelTitle;
+
+	public override string playerName => lootPanelTitle.translated;
+
+	public override void Save(SaveInfo info)
+	{
+		base.Save(info);
+		info.msg.horse = Pool.Get<Horse>();
+		info.msg.horse.breedIndex = breedIndex;
+	}
+
+	public override void Load(LoadInfo info)
+	{
+		base.Load(info);
+		if (info.msg.horse != null)
+		{
+			breedIndex = info.msg.horse.breedIndex;
+		}
+	}
+}
+
+
+using UnityEngine;
+
+public class HorseLeadingRope : FakePhysicsRope
+{
+	public RidableHorse horse;
+
+	public Vector2 minMaxLength;
+
+	public Vector2 minMaxDistance;
+}
+
+
+using UnityEngine;
+
+public class HorseRagdoll : AnimalRagdoll
+{
+	public GameObject mane;
+
+	public GameObject woodArmor;
+
+	public GameObject roadsignArmor;
+
+	public GameObject lnyArmor;
+
+	public HorseBreed overrideBreed;
+
+	public GameObject singleSaddle;
+
+	public GameObject doubleSaddle;
+
+	public GameObjectRef breedSource;
+}
+
+
+using UnityEngine;
+
+public class HorseSaddle : BaseVehicleSeat
+{
+	[SerializeField]
+	private bool isDriver;
+
+	[SerializeField]
+	private Transform eyePosRef;
+
+	private RidableHorse _owner;
+
+	protected RidableHorse Owner
+	{
+		get
+		{
+			if ((Object)(object)_owner == (Object)null)
+			{
+				_owner = ((Component)this).GetComponentInParent<RidableHorse>();
+			}
+			return _owner;
+		}
+	}
+
+	public override void ResetState()
+	{
+		base.ResetState();
+	}
+
+	public override void VehicleFixedUpdate()
+	{
+	}
+
+	public override void OnPlayerMounted()
+	{
+		base.OnPlayerMounted();
+		BasePlayer mounted = GetMounted();
+		if ((Object)(object)mounted != (Object)null)
+		{
+			BaseVehicle baseVehicle = VehicleParent();
+			if ((Object)(object)baseVehicle != (Object)null)
+			{
+				baseVehicle.PlayerMounted(mounted, this);
+			}
+		}
+	}
+}
+
+
+public interface IHorseInputProvider
+{
+	float GetMoveInput();
+
+	float GetSteerInput();
+}
+
+
+using UnityEngine;
+
+public class AIHorseInputProvider : IHorseInputProvider
+{
+	private Transform playerTransform;
+
+	private RidableHorse horse;
+
+	private float followSpeed;
+
+	private float stoppingDistance;
+
+	private float turnChangeCooldown = 0.3f;
+
+	private float turnCooldownTimer;
+
+	private float currentSteerInput;
+
+	public AIHorseInputProvider(RidableHorse horse, Transform playerTransform, float stoppingDistance)
+	{
+		this.horse = horse;
+		this.playerTransform = playerTransform;
+		this.stoppingDistance = stoppingDistance;
+	}
+
+	public float GetMoveInput()
+	{
+		//IL_0006: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0016: Unknown result type (might be due to invalid IL or missing references)
+		//IL_001b: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0020: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0063: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0068: Unknown result type (might be due to invalid IL or missing references)
+		Vector3 val = playerTransform.position - ((Component)horse).transform.position;
+		val.y = 0f;
+		float magnitude = ((Vector3)(ref val)).magnitude;
+		if (horse.GetSpeed() > 2f)
+		{
+			return -1f;
+		}
+		if (magnitude > stoppingDistance)
+		{
+			return Mathf.Clamp(((Component)horse).transform.InverseTransformDirection(((Vector3)(ref val)).normalized).z, 0f, 1f);
+		}
+		return 0f;
+	}
+
+	public float GetSteerInput()
+	{
+		//IL_0006: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0016: Unknown result type (might be due to invalid IL or missing references)
+		//IL_001b: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0020: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0050: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0057: Unknown result type (might be due to invalid IL or missing references)
+		//IL_005c: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0061: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0064: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0075: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0084: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0085: Unknown result type (might be due to invalid IL or missing references)
+		//IL_008a: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0096: Unknown result type (might be due to invalid IL or missing references)
+		//IL_009b: Unknown result type (might be due to invalid IL or missing references)
+		Vector3 val = playerTransform.position - ((Component)horse).transform.position;
+		val.y = 0f;
+		if (((Vector3)(ref val)).magnitude > stoppingDistance - 2f)
+		{
+			Vector3 val2 = Vector3.Cross(((Component)horse).transform.forward, ((Vector3)(ref val)).normalized);
+			int num = 0;
+			if (val2.y > 0.4f)
+			{
+				num = 1;
+			}
+			else if (val2.y < -0.4f)
+			{
+				num = -1;
+			}
+			Quaternion val3 = Quaternion.LookRotation(val);
+			float num2 = Quaternion.Angle(((Component)horse).transform.rotation, val3);
+			if (num2 > 160f && num2 < 180f)
+			{
+				num = -1;
+			}
+			if ((float)num != currentSteerInput && turnCooldownTimer <= 0f)
+			{
+				currentSteerInput = num;
+				turnCooldownTimer = turnChangeCooldown;
+			}
+		}
+		else if (currentSteerInput != 0f && turnCooldownTimer <= 0f)
+		{
+			currentSteerInput = 0f;
+			turnCooldownTimer = turnChangeCooldown;
+		}
+		if (turnCooldownTimer > 0f)
+		{
+			turnCooldownTimer -= Time.fixedDeltaTime;
+		}
+		return currentSteerInput;
+	}
+}
+
+
+public class PlayerHorseInputProvider : IHorseInputProvider
+{
+	public BasePlayer player;
+
+	public PlayerHorseInputProvider(BasePlayer player)
+	{
+		this.player = player;
+	}
+
+	public float GetMoveInput()
+	{
+		float result = 0f;
+		if (player.serverInput.IsDown(BUTTON.FORWARD))
+		{
+			result = 1f;
+		}
+		else if (player.serverInput.IsDown(BUTTON.BACKWARD))
+		{
+			result = -1f;
+		}
+		return result;
+	}
+
+	public float GetSteerInput()
+	{
+		float result = 0f;
+		if (player.serverInput.IsDown(BUTTON.LEFT))
+		{
+			result = -1f;
+		}
+		else if (player.serverInput.IsDown(BUTTON.RIGHT))
+		{
+			result = 1f;
+		}
+		return result;
+	}
+}
+
+
+using FIMSpace.FProceduralAnimation;
+using UnityEngine;
+
+[DefaultExecutionOrder(-1302)]
+public class RidableHorseAnimation : EntityComponent<RidableHorse>, IClientComponent
+{
+	[SerializeField]
+	private RidableHorse horse;
+
+	[SerializeField]
+	private Animator animator;
+
+	[SerializeField]
+	public LegsAnimator legsAnimator;
+
+	[Space]
+	[SerializeField]
+	private Transform backHipTransform;
+
+	[SerializeField]
+	private Vector3 skiddingHipPosition;
+
+	[SerializeField]
+	private Vector3 skiddingHipRotation;
+
+	[SerializeField]
+	[Range(0f, 1f)]
+	[Header("Head")]
+	private float headBlend = 1f;
+
+	[ReadOnly]
+	public float headSecondaryBlend = 1f;
+
+	public Transform[] neckBones;
+
+	public AnimationCurve rotationResponsivenessCurve;
+
+	public float yawInertiaFactor = 15f;
+
+	public float maxYawAngle = 10f;
+
+	public Vector2 minMaxStiffness;
+
+	public Vector2 minMaxDamping;
+
+	public float headTurnSpeed = 3.5f;
+
+	public Vector3 headLookOffset = Vector3.zero;
+
+	[SerializeField]
+	[Range(0f, 1f)]
+	[Header("Spine")]
+	private float spineBlend = 0.5f;
+
+	[ReadOnly]
+	public float spineSecondaryBlend = 1f;
+
+	public Transform[] spineBones;
+
+	public float spineTurnSpeed = 3.5f;
+
+	public float spineYawInertiaFactor = 150f;
+
+	[SerializeField]
+	[ReadOnly]
+	private Quaternion[] targetNeckRotations;
+
+	[SerializeField]
+	[ReadOnly]
+	private Quaternion[] targetSpineRotations;
+
+	[SerializeField]
+	[ReadOnly]
+	private Vector3[] localSpinePositions;
+
+	[ReadOnly]
+	[SerializeField]
+	private Vector3 originalHipPosition;
+
+	[SerializeField]
+	[ReadOnly]
+	private Quaternion originalHipRotation;
+
+	public Vector3 spineOffset;
+
+	private float HeadBlend => headBlend * headSecondaryBlend;
+
+	private float SpineBlend => spineBlend * spineSecondaryBlend;
+}
+
+
+using UnityEngine;
+
+public class RidableHorseAudio : FacepunchBehaviour, IClientComponent
+{
+	[SerializeField]
+	private RidableHorse horse;
+
+	[SerializeField]
+	private Animator animator;
+
+	[SerializeField]
+	[Space]
+	public SoundPlayer breathingSound;
+
+	[SerializeField]
+	private SoundDefinition saddleMovementSoundDef;
+
+	[SerializeField]
+	private SoundDefinition saddleMovementSoundDefWood;
+
+	[SerializeField]
+	private SoundDefinition saddleMovementSoundDefRoadsign;
+
+	[SerializeField]
+	private SoundDefinition saddleMovementSoundDefLNY;
+
+	[SerializeField]
+	private AnimationCurve saddleMovementGainCurve;
+
+	[Space]
+	[SerializeField]
+	private MaterialEffect footstepEffects;
+
+	[SerializeField]
+	private Transform[] feet;
+
+	[Space]
+	[SerializeField]
+	private GameObjectRef swimmingSloshEffect;
+
+	[SerializeField]
+	private string BaseFolder;
+
+	[Space]
+	[SerializeField]
+	private SoundDefinition skidLoopSoundDef;
+
+	[SerializeField]
+	private AnimationCurve skidLoopGainCurve;
+}
+
+
+using UnityEngine;
+
+[DefaultExecutionOrder(-1300)]
+public class RidableHorseSiegeHarness : EntityComponent<RidableHorse>, IClientComponent
+{
+	[SerializeField]
+	private Transform[] targetBone;
+
+	[SerializeField]
+	private Transform[] constrainedBone;
+
+	[SerializeField]
+	private Vector3 rotationOffset;
+
+	private void LookAtBone(int index)
+	{
+		//IL_0019: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0026: Unknown result type (might be due to invalid IL or missing references)
+		//IL_002b: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0030: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0031: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0032: Unknown result type (might be due to invalid IL or missing references)
+		//IL_003f: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0040: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0046: Unknown result type (might be due to invalid IL or missing references)
+		//IL_004b: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0050: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0051: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0052: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0057: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0060: Unknown result type (might be due to invalid IL or missing references)
+		if (targetBone != null && constrainedBone != null)
+		{
+			Vector3 val = targetBone[index].position - constrainedBone[index].position;
+			if (!(val == Vector3.zero))
+			{
+				Quaternion val2 = Quaternion.LookRotation(val);
+				Quaternion val3 = Quaternion.Euler(rotationOffset);
+				Quaternion rotation = val2 * val3;
+				constrainedBone[index].rotation = rotation;
+			}
+		}
+	}
+
+	private void LateUpdate()
+	{
+		LookAtBone(0);
+		LookAtBone(1);
+	}
+}
+
+
+using System;
+using UnityEngine;
+
+public class SM_DisableHorseProceduralMotion : StateMachineBehaviour
+{
+	[Flags]
+	public enum ProceduralMotionParts
+	{
+		None = 0,
+		LegsAnimatorGlueing = 1,
+		Head = 2,
+		Spine = 4
+	}
+
+	public ProceduralMotionParts AffectedParts = ProceduralMotionParts.LegsAnimatorGlueing;
+
+	[Min(0f)]
+	public float fadeInDuration = 0.3f;
+
+	[Min(0f)]
+	public float fadeOutDuration = 0.3f;
+
+	[Space]
+	public bool waitForEndOfAnimation = true;
+
+	[Min(0f)]
+	public float enableBackAfter = 0.9f;
+}
+
+
+using System;
+
+[Flags]
+public enum ProceduralMotionParts
+{
+	None = 0,
+	LegsAnimatorGlueing = 1,
+	Head = 2,
+	Spine = 4
+}
+
+
+using UnityEngine;
+
+public class HumanFuelSystem : IFuelSystem
+{
+	private readonly bool isServer;
+
+	private float percentFood;
+
+	private EntityRef<BaseVehicle> vehilceRef;
+
+	private float pendingFuel;
+
+	public HumanFuelSystem(bool isServer, BaseVehicle owner, float percentFood)
+	{
+		this.isServer = isServer;
+		this.percentFood = Mathf.Clamp01(percentFood);
+		vehilceRef.Set(owner);
+	}
+
+	public bool HasValidInstance(bool isServer)
+	{
+		return vehilceRef.IsValid(isServer);
+	}
+
+	public NetworkableId GetInstanceID()
+	{
+		//IL_0006: Unknown result type (might be due to invalid IL or missing references)
+		return vehilceRef.uid;
+	}
+
+	public void SetInstanceID(NetworkableId uid)
+	{
+		//IL_0006: Unknown result type (might be due to invalid IL or missing references)
+		vehilceRef.uid = uid;
+	}
+
+	private BaseVehicle GetVehilce()
+	{
+		BaseVehicle baseVehicle = vehilceRef.Get(isServer);
+		if (baseVehicle.IsValid())
+		{
+			return baseVehicle;
+		}
+		return null;
+	}
+
+	public int GetFuelCapacity()
+	{
+		return 0;
+	}
+
+	public bool CheckNewChild(BaseEntity child)
+	{
+		return false;
+	}
+
+	public int GetFuelAmount()
+	{
+		if (TryGetHuman(out var driver))
+		{
+			float value = driver.metabolism.calories.value;
+			float value2 = driver.metabolism.hydration.value;
+			return Mathf.FloorToInt(value + value2);
+		}
+		return 0;
+	}
+
+	public float GetFuelFraction()
+	{
+		if (TryGetHuman(out var driver))
+		{
+			float num = driver.metabolism.calories.Fraction() * percentFood;
+			float num2 = driver.metabolism.hydration.Fraction() * (1f - percentFood);
+			return num + num2;
+		}
+		return 0f;
+	}
+
+	public bool HasFuel(bool forceCheck = false)
+	{
+		if (!TryGetHuman(out var driver))
+		{
+			return false;
+		}
+		if (percentFood == 0f)
+		{
+			return driver.metabolism.hydration.Fraction() > 0f;
+		}
+		if (percentFood == 1f)
+		{
+			return driver.metabolism.calories.Fraction() > 0f;
+		}
+		if (!(driver.metabolism.hydration.Fraction() > 0f))
+		{
+			return driver.metabolism.calories.Fraction() > 0f;
+		}
+		return true;
+	}
+
+	public int TryUseFuel(float seconds, float fuelUsedPerSecond)
+	{
+		if (!TryGetHuman(out var driver))
+		{
+			return 0;
+		}
+		pendingFuel += seconds + fuelUsedPerSecond;
+		if (pendingFuel >= 1f)
+		{
+			MetabolismAttribute calories = driver.metabolism.calories;
+			MetabolismAttribute hydration = driver.metabolism.hydration;
+			float val = fuelUsedPerSecond * percentFood;
+			float val2 = fuelUsedPerSecond * (1f - percentFood);
+			float value = calories.value;
+			calories.Subtract(val);
+			pendingFuel -= Mathf.RoundToInt(value - calories.value);
+			float value2 = hydration.value;
+			hydration.Subtract(val2);
+			pendingFuel -= Mathf.RoundToInt(value2 - hydration.value);
+		}
+		return 0;
+	}
+
+	public void LootFuel(BasePlayer player)
+	{
+	}
+
+	public void AddFuel(int amount)
+	{
+	}
+
+	public void RemoveFuel(int amount)
+	{
+	}
+
+	public void FillFuel()
+	{
+	}
+
+	private bool TryGetHuman(out BasePlayer driver)
+	{
+		driver = null;
+		BaseVehicle vehilce = GetVehilce();
+		if ((Object)(object)vehilce != (Object)null)
+		{
+			driver = vehilce.GetDriver();
+		}
+		return (Object)(object)driver != (Object)null;
+	}
+}
+
+
+public interface IFuelSystem
+{
+	bool HasValidInstance(bool isServer);
+
+	NetworkableId GetInstanceID();
+
+	void SetInstanceID(NetworkableId uid);
+
+	bool CheckNewChild(BaseEntity child);
+
+	int GetFuelAmount();
+
+	float GetFuelFraction();
+
+	bool HasFuel(bool forceCheck = false);
+
+	int TryUseFuel(float seconds, float fuelUsedPerSecond);
+
+	int GetFuelCapacity();
+
+	void LootFuel(BasePlayer player);
+
+	void AddFuel(int amount);
+
+	void RemoveFuel(int amount);
+
+	void FillFuel();
+}
+
+
+public interface IMountable
+{
+}
+
+
+using UnityEngine;
+
+public class MLRSAmmoIcon : MonoBehaviour
+{
+	[SerializeField]
+	private GameObject fill;
+
+	protected void Awake()
+	{
+		SetState(filled: false);
+	}
+
+	public void SetState(bool filled)
+	{
+		fill.SetActive(filled);
+	}
+}
+
+
+using Rust.UI;
+using UnityEngine;
+
+public class MLRSAmmoUI : MonoBehaviour
+{
+	[SerializeField]
+	private RustText ammoText;
+
+	[SerializeField]
+	private MLRSAmmoIcon[] ammoIcons;
+}
+
+
+using UnityEngine;
+
+public class MLRSAudio : MonoBehaviour
+{
+	[SerializeField]
+	private MLRS mlrs;
+
+	[SerializeField]
+	private Transform pitchTransform;
+
+	[SerializeField]
+	private Transform yawTransform;
+
+	[SerializeField]
+	private float pitchDeltaSmoothRate = 5f;
+
+	[SerializeField]
+	private float yawDeltaSmoothRate = 5f;
+
+	[SerializeField]
+	private float pitchDeltaThreshold = 0.5f;
+
+	[SerializeField]
+	private float yawDeltaThreshold = 0.5f;
+
+	private float lastPitch;
+
+	private float lastYaw;
+
+	private float pitchDelta;
+
+	private float yawDelta;
+
+	public SoundDefinition turretMovementStartDef;
+
+	public SoundDefinition turretMovementLoopDef;
+
+	public SoundDefinition turretMovementStopDef;
+
+	private Sound turretMovementLoop;
+}
+
+
+using Rust.UI;
+using UnityEngine;
+using UnityEngine.UI;
+using UnityEngine.UI.Extensions;
+
+public class MLRSMainUI : MonoBehaviour
+{
+	[SerializeField]
+	private bool isFullscreen;
+
+	[SerializeField]
+	private GameObject noAimingModuleModeGO;
+
+	[SerializeField]
+	private GameObject activeModeGO;
+
+	[SerializeField]
+	private MLRSAmmoUI noAimingModuleAmmoUI;
+
+	[SerializeField]
+	private MLRSAmmoUI activeAmmoUI;
+
+	[SerializeField]
+	private MLRSVelocityUI velocityUI;
+
+	[SerializeField]
+	private RustText titleText;
+
+	[SerializeField]
+	private RustText usernameText;
+
+	[SerializeField]
+	private TokenisedPhrase readyStatus;
+
+	[SerializeField]
+	private TokenisedPhrase realigningStatus;
+
+	[SerializeField]
+	private TokenisedPhrase firingStatus;
+
+	[SerializeField]
+	private RustText statusText;
+
+	[SerializeField]
+	private MapView mapView;
+
+	[SerializeField]
+	private ScrollRectEx mapScrollRect;
+
+	[SerializeField]
+	private ScrollRectZoom mapScrollRectZoom;
+
+	[SerializeField]
+	private RectTransform mapBaseRect;
+
+	[SerializeField]
+	private RectTransform minRangeCircle;
+
+	[SerializeField]
+	private RectTransform targetAimRect;
+
+	[SerializeField]
+	private RectTransform trueAimRect;
+
+	[SerializeField]
+	private UILineRenderer connectingLine;
+
+	[SerializeField]
+	private GameObject noTargetCirclePrefab;
+
+	[SerializeField]
+	private Transform noTargetCircleParent;
+
+	[SerializeField]
+	private SoundDefinition changeTargetSoundDef;
+
+	[SerializeField]
+	private SoundDefinition readyToFireSoundDef;
+}
+
+
+using System.Collections.Generic;
+using Rust;
+using UnityEngine;
+
+public class MLRSRocket : TimedExplosive, SamSite.ISamSiteTarget
+{
+	[SerializeField]
+	private GameObjectRef mapMarkerPrefab;
+
+	[SerializeField]
+	private GameObjectRef launchBlastFXPrefab;
+
+	[SerializeField]
+	private GameObjectRef explosionGroundFXPrefab;
+
+	[SerializeField]
+	private ServerProjectile serverProjectile;
+
+	private EntityRef mapMarkerInstanceRef;
+
+	public static List<MLRSRocket> serverList = new List<MLRSRocket>();
+
+	public SamSite.SamTargetType SAMTargetType => SamSite.targetTypeMissile;
+
+	public override void ServerInit()
+	{
+		//IL_0023: Unknown result type (might be due to invalid IL or missing references)
+		//IL_002e: Unknown result type (might be due to invalid IL or missing references)
+		base.ServerInit();
+		serverList.Add(this);
+		CreateMapMarker();
+		Effect.server.Run(launchBlastFXPrefab.resourcePath, PivotPoint(), ((Component)this).transform.up, null, broadcast: true);
+	}
+
+	internal override void DoServerDestroy()
+	{
+		serverList.Remove(this);
+		base.DoServerDestroy();
+	}
+
+	public override void ProjectileImpact(RaycastHit info, Vector3 rayOrigin)
+	{
+		//IL_0001: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0009: Unknown result type (might be due to invalid IL or missing references)
+		//IL_000e: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0013: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0018: Unknown result type (might be due to invalid IL or missing references)
+		//IL_003c: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0041: Unknown result type (might be due to invalid IL or missing references)
+		Explode(rayOrigin);
+		if (Physics.Raycast(((RaycastHit)(ref info)).point + Vector3.up, Vector3.down, 4f, 1084293393, (QueryTriggerInteraction)1))
+		{
+			Effect.server.Run(explosionGroundFXPrefab.resourcePath, ((RaycastHit)(ref info)).point, Vector3.up, null, broadcast: true);
+		}
+	}
+
+	private void CreateMapMarker()
+	{
+		//IL_003f: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0044: Unknown result type (might be due to invalid IL or missing references)
+		BaseEntity baseEntity = mapMarkerInstanceRef.Get(base.isServer);
+		if (baseEntity.IsValid())
+		{
+			baseEntity.Kill();
+		}
+		BaseEntity baseEntity2 = GameManager.server.CreateEntity(mapMarkerPrefab?.resourcePath, ((Component)this).transform.position, Quaternion.identity);
+		baseEntity2.OwnerID = base.OwnerID;
+		baseEntity2.Spawn();
+		baseEntity2.SetParent(this, worldPositionStays: true);
+		mapMarkerInstanceRef.Set(baseEntity2);
+	}
+
+	public bool IsValidSAMTarget(bool staticRespawn)
+	{
+		return !staticRespawn;
+	}
+
+	public override Vector3 GetLocalVelocityServer()
+	{
+		//IL_0006: Unknown result type (might be due to invalid IL or missing references)
+		return serverProjectile.CurrentVelocity;
+	}
+
+	private void OnTriggerEnter(Collider other)
+	{
+		if (!other.IsOnLayer((Layer)18))
+		{
+			return;
+		}
+		if (((Component)other).CompareTag("MLRSRocketTrigger"))
+		{
+			Explode();
+			TimedExplosive componentInParent = ((Component)other).GetComponentInParent<TimedExplosive>();
+			if ((Object)(object)componentInParent != (Object)null)
+			{
+				componentInParent.Explode();
+			}
+		}
+		else if ((Object)(object)((Component)other).GetComponent<TriggerSafeZone>() != (Object)null)
+		{
+			Kill();
+		}
+	}
+}
+
+
+public class MLRSServerProjectile : ServerProjectile
+{
+	public override bool HasRangeLimit => false;
+
+	protected override int mask => 1235954449;
+
+	protected override bool IsAValidHit(BaseEntity hitEnt)
+	{
+		if (!base.IsAValidHit(hitEnt))
+		{
+			return false;
+		}
+		if (hitEnt.IsValid())
+		{
+			return !(hitEnt is MLRS);
+		}
+		return true;
+	}
+}
+
+
+using UnityEngine;
+
+public class MLRSUIDialog : UIDialog
+{
+	[SerializeField]
+	private MLRSMainUI mainUI;
+
+	[SerializeField]
+	private TokenisedPhrase howToUsePhrase;
+
+	[SerializeField]
+	private float titleChangeInterval = 2f;
+}
+
+
+using Rust.UI;
+using UnityEngine;
+
+public class MLRSVelocityUI : MonoBehaviour
+{
+	[SerializeField]
+	private RustText percentText;
+
+	[SerializeField]
+	private HudElement percentBar;
+}
+
+
+using UnityEngine;
+
+public class MapMarkerMLRSRocket : MapMarker
+{
+	public RectTransform uiMarkerTransform;
+
+	public override void ServerInit()
+	{
+		base.ServerInit();
+		base.limitNetworking = true;
+	}
+
+	public override bool ShouldNetworkTo(BasePlayer player)
+	{
+		return (ulong)player.userID == base.OwnerID;
+	}
+}
+
+
+using UnityEngine;
+
+public class BaseMagnet : MonoBehaviour
+{
+	public BaseEntity entityOwner;
+
+	public BaseEntity.Flags magnetFlag = BaseEntity.Flags.Reserved6;
+
+	public TriggerMagnet magnetTrigger;
+
+	public FixedJoint fixedJoint;
+
+	public Rigidbody kinematicAttachmentBody;
+
+	public float magnetForce;
+
+	public Transform attachDepthPoint;
+
+	public GameObjectRef attachEffect;
+
+	public bool isMagnetOn;
+
+	public GameObject colliderSource;
+
+	private BasePlayer associatedPlayer;
+
+	public bool HasConnectedObject()
+	{
+		if ((Object)(object)((Joint)fixedJoint).connectedBody != (Object)null)
+		{
+			return isMagnetOn;
+		}
+		return false;
+	}
+
+	public OBB GetConnectedOBB(float scale = 1f)
+	{
+		//IL_0049: Unknown result type (might be due to invalid IL or missing references)
+		//IL_004e: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0053: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0059: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0069: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0074: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0079: Unknown result type (might be due to invalid IL or missing references)
+		//IL_007a: Unknown result type (might be due to invalid IL or missing references)
+		//IL_001d: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0022: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0027: Unknown result type (might be due to invalid IL or missing references)
+		//IL_002c: Unknown result type (might be due to invalid IL or missing references)
+		if ((Object)(object)((Joint)fixedJoint).connectedBody == (Object)null)
+		{
+			Debug.LogError((object)"BaseMagnet returning fake OBB because no connected body!");
+			return new OBB(Vector3.zero, Vector3.one, Quaternion.identity);
+		}
+		BaseEntity component = ((Component)((Joint)fixedJoint).connectedBody).gameObject.GetComponent<BaseEntity>();
+		Bounds bounds = component.bounds;
+		((Bounds)(ref bounds)).extents = ((Bounds)(ref bounds)).extents * scale;
+		return new OBB(((Component)component).transform.position, ((Component)component).transform.rotation, bounds);
+	}
+
+	public void SetCollisionsEnabled(GameObject other, bool wants)
+	{
+		Collider[] componentsInChildren = other.GetComponentsInChildren<Collider>();
+		Collider[] componentsInChildren2 = colliderSource.GetComponentsInChildren<Collider>();
+		Collider[] array = componentsInChildren;
+		foreach (Collider val in array)
+		{
+			Collider[] array2 = componentsInChildren2;
+			foreach (Collider val2 in array2)
+			{
+				Physics.IgnoreCollision(val, val2, !wants);
+			}
+		}
+	}
+
+	public virtual void SetMagnetEnabled(bool wantsOn, BasePlayer forPlayer)
+	{
+		if (isMagnetOn == wantsOn)
+		{
+			return;
+		}
+		associatedPlayer = forPlayer;
+		isMagnetOn = wantsOn;
+		if (isMagnetOn)
+		{
+			OnMagnetEnabled();
+		}
+		else
+		{
+			OnMagnetDisabled();
+		}
+		if (!((Object)(object)entityOwner != (Object)null))
+		{
+			return;
+		}
+		using BaseEntity.FlagsUpdateScope flagsUpdateScope = entityOwner.StartSetFlags(BaseEntity.FlagsUpdateMode.SendNetworkUpdate);
+		flagsUpdateScope.Set(magnetFlag, isMagnetOn);
+	}
+
+	public virtual void OnMagnetEnabled()
+	{
+	}
+
+	public virtual void OnMagnetDisabled()
+	{
+		if (Object.op_Implicit((Object)(object)((Joint)fixedJoint).connectedBody))
+		{
+			SetCollisionsEnabled(((Component)((Joint)fixedJoint).connectedBody).gameObject, wants: true);
+			Rigidbody connectedBody = ((Joint)fixedJoint).connectedBody;
+			((Joint)fixedJoint).connectedBody = null;
+			connectedBody.WakeUp();
+		}
+	}
+
+	public bool IsMagnetOn()
+	{
+		return isMagnetOn;
+	}
+
+	public void MagnetThink(float delta)
+	{
+		//IL_0014: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0019: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0090: Unknown result type (might be due to invalid IL or missing references)
+		//IL_009b: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00a1: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00b3: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0171: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0176: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0178: Unknown result type (might be due to invalid IL or missing references)
+		//IL_017a: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0182: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0183: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0185: Unknown result type (might be due to invalid IL or missing references)
+		//IL_018a: Unknown result type (might be due to invalid IL or missing references)
+		//IL_01a1: Unknown result type (might be due to invalid IL or missing references)
+		//IL_01a9: Unknown result type (might be due to invalid IL or missing references)
+		//IL_01b0: Unknown result type (might be due to invalid IL or missing references)
+		//IL_011e: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0129: Unknown result type (might be due to invalid IL or missing references)
+		//IL_012e: Unknown result type (might be due to invalid IL or missing references)
+		if (!isMagnetOn)
+		{
+			return;
+		}
+		Vector3 position = ((Component)magnetTrigger).transform.position;
+		if (magnetTrigger.entityContents == null)
+		{
+			return;
+		}
+		OBB val = default(OBB);
+		foreach (BaseEntity entityContent in magnetTrigger.entityContents)
+		{
+			if ((Object)(object)entityContent == (Object)null || !entityContent.syncPosition)
+			{
+				continue;
+			}
+			Rigidbody component = ((Component)entityContent).GetComponent<Rigidbody>();
+			if ((Object)(object)component == (Object)null || component.isKinematic || entityContent.isClient)
+			{
+				continue;
+			}
+			((OBB)(ref val))..ctor(((Component)entityContent).transform.position, ((Component)entityContent).transform.rotation, entityContent.bounds);
+			if (((OBB)(ref val)).Contains(attachDepthPoint.position))
+			{
+				MagnetLiftable component2 = ((Component)entityContent).GetComponent<MagnetLiftable>();
+				if ((Object)(object)component2 != (Object)null)
+				{
+					if (component2.requireObjectOff && entityContent.IsOn())
+					{
+						continue;
+					}
+					component2.SetMagnetized(wantsOn: true, this, associatedPlayer);
+					if ((Object)(object)((Joint)fixedJoint).connectedBody == (Object)null)
+					{
+						Effect.server.Run(attachEffect.resourcePath, attachDepthPoint.position, -attachDepthPoint.up);
+						((Joint)fixedJoint).connectedBody = component;
+						SetCollisionsEnabled(((Component)component).gameObject, wants: false);
+						continue;
+					}
+				}
+			}
+			if ((Object)(object)((Joint)fixedJoint).connectedBody == (Object)null)
+			{
+				Vector3 position2 = ((Component)entityContent).transform.position;
+				float num = Vector3.Distance(position2, position);
+				Vector3 val2 = Vector3Ex.Direction(position, position2);
+				float num2 = 1f / Mathf.Max(1f, num);
+				component.AddForce(val2 * magnetForce * num2, (ForceMode)5);
+			}
+		}
+	}
+}
+
+
+using UnityEngine;
+
+public class IMagnetLiftable : MonoBehaviour
+{
+	private void Start()
+	{
+	}
+
+	private void Update()
+	{
+	}
+}
+
+
+using UnityEngine;
+
+public class MagnetCraneAudio : MonoBehaviour
+{
+	public MagnetCrane crane;
+
+	[Header("Sound defs")]
+	public SoundDefinition engineStartSoundDef;
+
+	public SoundDefinition engineStopSoundDef;
+
+	public BlendedLoopEngineSound engineLoops;
+
+	public SoundDefinition cabinRotationStartDef;
+
+	public SoundDefinition cabinRotationStopDef;
+
+	public SoundDefinition cabinRotationLoopDef;
+
+	private Sound cabinRotationLoop;
+
+	public SoundDefinition turningLoopDef;
+
+	private Sound turningLoop;
+
+	public SoundDefinition trackMovementLoopDef;
+
+	private Sound trackMovementLoop;
+
+	private SoundModulation.Modulator trackGainMod;
+
+	private SoundModulation.Modulator trackPitchMod;
+
+	public SoundDefinition armMovementLoopDef;
+
+	public SoundDefinition armMovementStartDef;
+
+	public SoundDefinition armMovementStopDef;
+
+	private Sound armMovementLoop01;
+
+	private SoundModulation.Modulator armMovementLoop01PitchMod;
+
+	public GameObject arm01SoundPosition;
+
+	public GameObject arm02SoundPosition;
+
+	private Sound armMovementLoop02;
+
+	private SoundModulation.Modulator armMovementLoop02PitchMod;
+}
+
+
+using UnityEngine;
+
+public class MagnetLiftable : EntityComponent<BaseEntity>
+{
+	public ItemAmount[] shredResources;
+
+	public bool scaleScrapResourcesByHealth;
+
+	public Vector3 shredDirection = Vector3.forward;
+
+	public bool requireObjectOff;
+
+	public BasePlayer associatedPlayer { get; private set; }
+
+	public virtual void SetMagnetized(bool wantsOn, BaseMagnet magnetSource, BasePlayer player)
+	{
+		associatedPlayer = player;
+	}
+}
+
+
+using UnityEngine;
+
+public class TriggerMagnet : TriggerBase
+{
+	internal override GameObject InterestedInObject(GameObject obj)
+	{
+		obj = base.InterestedInObject(obj);
+		if ((Object)(object)obj == (Object)null)
+		{
+			return null;
+		}
+		BaseEntity baseEntity = obj.ToBaseEntity();
+		if ((Object)(object)baseEntity == (Object)null)
+		{
+			return null;
+		}
+		if (baseEntity.isClient)
+		{
+			return null;
+		}
+		if (!baseEntity.syncPosition)
+		{
+			return null;
+		}
+		if (!Object.op_Implicit((Object)(object)((Component)baseEntity).GetComponent<MagnetLiftable>()))
+		{
+			return null;
+		}
+		return ((Component)baseEntity).gameObject;
+	}
+}
+
+
+using System;
+using System.Collections.Generic;
 using Facepunch;
 using Oxide.Core;
 using ProtoBuf;
@@ -396,6 +2215,11 @@ public abstract class BaseModularVehicle : GroundVehicle, PlayerInventory.ICanMo
 		//IL_0019: Unknown result type (might be due to invalid IL or missing references)
 		realLocalCOM = com;
 		rigidBody.centerOfMass = Vector3.Scale(realLocalCOM, GetCOMMultiplier());
+	}
+
+	public override void ResetState()
+	{
+		base.ResetState();
 	}
 
 	public override void InitShared()
@@ -1552,6 +3376,11 @@ public class VehicleModuleEngine : VehicleModuleStorage
 		RefreshPerformanceStats(GetContainer() as EngineStorage);
 	}
 
+	public override void ResetState()
+	{
+		base.ResetState();
+	}
+
 	public override void OnEngineStateChanged(VehicleEngineController<GroundVehicle>.EngineState oldState, VehicleEngineController<GroundVehicle>.EngineState newState)
 	{
 		base.OnEngineStateChanged(oldState, newState);
@@ -2381,8 +4210,8 @@ public class SnowmobileAudio : GroundVehicleAudio
 	[SerializeField]
 	private SoundDefinition skiSlideWaterSoundDef;
 
-	[SerializeField]
 	[Header("Movement")]
+	[SerializeField]
 	private AnimationCurve movementGainCurve;
 
 	[SerializeField]
@@ -2830,8 +4659,8 @@ public class SubmarineAudio : MonoBehaviour
 	[SerializeField]
 	private SoundDefinition waterSubmergeSoundDef;
 
-	[Header("Interior")]
 	[SerializeField]
+	[Header("Interior")]
 	private SoundDefinition activeLoopDef;
 
 	[SerializeField]
@@ -3065,7 +4894,8 @@ public class SwingSeat : BaseVehicleSeat
 
 	private void UpdateSwingingFlag()
 	{
-		SetFlag(Flags.Reserved1, Mathf.Abs(velocity) > 5f || Mathf.Abs(SwingAngle) > 5f);
+		using FlagsUpdateScope flagsUpdateScope = StartSetFlags(FlagsUpdateMode.SendNetworkUpdate);
+		flagsUpdateScope.Set(Flags.Reserved1, Mathf.Abs(velocity) > 5f || Mathf.Abs(SwingAngle) > 5f);
 	}
 
 	public override void OnPlayerDismounted(BasePlayer player)
@@ -5078,6 +6908,12 @@ public class HittableByTrains : EntityComponent<BaseCombatEntity>, ITrainCollida
 		}
 	}
 
+	public override void InitShared()
+	{
+		base.InitShared();
+		UpdateBaseEntity();
+	}
+
 	public override void SaveComponent(BaseNetworkable.SaveInfo info)
 	{
 		bool flag = base.baseEntity.lastAttacker is TrainCar;
@@ -5099,8 +6935,8 @@ using UnityEngine;
 
 public class LocomotiveExtraVisuals : MonoBehaviour
 {
-	[SerializeField]
 	[Header("Gauges")]
+	[SerializeField]
 	private TrainEngine trainEngine;
 
 	[SerializeField]
@@ -5130,8 +6966,8 @@ public class LocomotiveExtraVisuals : MonoBehaviour
 	[SerializeField]
 	private float speedoMax = 80f;
 
-	[SerializeField]
 	[Header("Fans")]
+	[SerializeField]
 	private Transform[] engineFans;
 }
 
@@ -5160,8 +6996,8 @@ using UnityEngine;
 
 public class TrainCarAudio : MonoBehaviour
 {
-	[SerializeField]
 	[Header("Train Car Audio")]
+	[SerializeField]
 	private TrainCar trainCar;
 
 	[SerializeField]
@@ -5746,8 +7582,8 @@ public class TrainEngineAudio : TrainCarAudio
 	[SerializeField]
 	private float reflectionRayOffset = 0.5f;
 
-	[SerializeField]
 	[Header("Horn")]
+	[SerializeField]
 	private SoundDefinition hornLoop;
 
 	[SerializeField]
@@ -6831,7 +8667,7 @@ public class TrainWagonLootData : ScriptableObject
 		if (sc.IsValid())
 		{
 			int maxLootAmount = lootOption.maxLootAmount;
-			result = (((float)maxLootAmount != 0f) ? Mathf.Clamp01((float)sc.inventory.GetAmount(lootOption.lootItem.itemid, onlyUsableAmounts: false) / (float)maxLootAmount) : 0f);
+			result = (((float)maxLootAmount != 0f) ? Mathf.Clamp01((float)sc.inventory.GetAmount(lootOption.lootItem.itemid) / (float)maxLootAmount) : 0f);
 		}
 		return result;
 	}
@@ -8765,8 +10601,8 @@ using UnityEngine;
 
 public class ChargeUpIOEntity : IOEntity
 {
-	[Tooltip("This amount will be added to the charge meter every second.")]
 	[Header("ChargeUp IO")]
+	[Tooltip("This amount will be added to the charge meter every second.")]
 	public int powerConsumptionWhileCharging = 1;
 
 	public float chargeRequiredToBecomeActive = 10f;
@@ -9485,6 +11321,8 @@ public class ElectricGenerator : IOEntity, IPowergridEntity
 
 	private int currentPowergridStage;
 
+	private PuzzleReset cachedPuzzleReset;
+
 	public override bool IsRootEntity()
 	{
 		return true;
@@ -9584,84 +11422,49 @@ public class ElectricGenerator : IOEntity, IPowergridEntity
 		((FacepunchBehaviour)this).Invoke((Action)ForcePuzzleReset, 4f);
 	}
 
+	public override void ServerInit()
+	{
+		base.ServerInit();
+		cachedPuzzleReset = ((Component)this).GetComponent<PuzzleReset>();
+		if (!enableSaving)
+		{
+			((FacepunchBehaviour)this).Invoke((Action)ForcePuzzleReset, 4f);
+		}
+	}
+
 	private void ForcePuzzleReset()
 	{
 		PuzzleReset component = ((Component)this).GetComponent<PuzzleReset>();
 		if ((Object)(object)component != (Object)null)
 		{
-			component.DoReset();
-			component.ResetTimer();
+			component.TryForceReset();
 		}
 	}
 
 	public override void Save(SaveInfo info)
 	{
-		//IL_0064: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0069: Unknown result type (might be due to invalid IL or missing references)
 		base.Save(info);
-		if (!info.forDisk)
+		if (info.forDisk)
 		{
-			return;
-		}
-		PuzzleReset puzzleReset = default(PuzzleReset);
-		if (((Component)this).TryGetComponent<PuzzleReset>(ref puzzleReset))
-		{
-			info.msg.puzzleReset = Pool.Get<PuzzleReset>();
-			info.msg.puzzleReset.playerBlocksReset = puzzleReset.playersBlockReset;
-			if ((Object)(object)puzzleReset.playerDetectionOrigin != (Object)null)
+			if ((Object)(object)cachedPuzzleReset != (Object)null)
 			{
-				info.msg.puzzleReset.playerDetectionOrigin = puzzleReset.playerDetectionOrigin.position;
+				cachedPuzzleReset.Save(info);
 			}
-			info.msg.puzzleReset.playerDetectionRadius = puzzleReset.playerDetectionRadius;
-			info.msg.puzzleReset.scaleWithServerPopulation = puzzleReset.scaleWithServerPopulation;
-			info.msg.puzzleReset.timeBetweenResets = puzzleReset.timeBetweenResets;
-			info.msg.puzzleReset.checkSleepingAIZForPlayers = puzzleReset.CheckSleepingAIZForPlayers;
-			info.msg.puzzleReset.ignoreAboveGroundPlayers = puzzleReset.ignoreAboveGroundPlayers;
-			info.msg.puzzleReset.broadcastResetMessage = puzzleReset.broadcastResetMessage;
-			info.msg.puzzleReset.resetPhrase = puzzleReset.resetPhrase?.token ?? "";
-			info.msg.puzzleReset.radiationReset = puzzleReset.radiationReset;
-			info.msg.puzzleReset.pauseUntilLooted = puzzleReset.pauseUntilLooted;
+			info.msg.electricGenerator = Pool.Get<ElectricGenerator>();
+			info.msg.electricGenerator.requiredPowergridStage = requiredPowergridStage;
 		}
-		info.msg.electricGenerator = Pool.Get<ElectricGenerator>();
-		info.msg.electricGenerator.requiredPowergridStage = requiredPowergridStage;
 	}
 
 	public override void Load(LoadInfo info)
 	{
-		//IL_006a: Unknown result type (might be due to invalid IL or missing references)
 		base.Load(info);
 		if (!info.fromDisk)
 		{
 			return;
 		}
-		if (info.msg.puzzleReset != null)
+		if (info.msg.puzzleReset != null && (Object)(object)cachedPuzzleReset != (Object)null)
 		{
-			PuzzleReset component = ((Component)this).GetComponent<PuzzleReset>();
-			if ((Object)(object)component != (Object)null)
-			{
-				component.playersBlockReset = info.msg.puzzleReset.playerBlocksReset;
-				if ((Object)(object)component.playerDetectionOrigin != (Object)null)
-				{
-					component.playerDetectionOrigin.position = info.msg.puzzleReset.playerDetectionOrigin;
-				}
-				component.playerDetectionRadius = info.msg.puzzleReset.playerDetectionRadius;
-				component.scaleWithServerPopulation = info.msg.puzzleReset.scaleWithServerPopulation;
-				component.timeBetweenResets = info.msg.puzzleReset.timeBetweenResets;
-				component.CheckSleepingAIZForPlayers = info.msg.puzzleReset.checkSleepingAIZForPlayers;
-				component.ignoreAboveGroundPlayers = info.msg.puzzleReset.ignoreAboveGroundPlayers;
-				component.broadcastResetMessage = info.msg.puzzleReset.broadcastResetMessage;
-				if (!string.IsNullOrEmpty(info.msg.puzzleReset.resetPhrase))
-				{
-					Phrase phrase = Translate.GetPhrase(info.msg.puzzleReset.resetPhrase);
-					if (phrase != null)
-					{
-						component.resetPhrase = phrase;
-					}
-				}
-				component.radiationReset = info.msg.puzzleReset.radiationReset;
-				component.pauseUntilLooted = info.msg.puzzleReset.pauseUntilLooted;
-				component.ResetTimer();
-			}
+			cachedPuzzleReset.Load(info);
 		}
 		if (info.msg.electricGenerator != null)
 		{
@@ -9806,7 +11609,7 @@ public class Fridge : ContainerIOEntity, IFoodSpoilModifier
 		base.inventory.canAcceptItem = CanAcceptItem;
 	}
 
-	private bool CanAcceptItem(Item item, int targetSlot)
+	private bool CanAcceptItem(BasePlayer player, Item item, int targetSlot)
 	{
 		if (OnlyAcceptCategory == ItemCategory.All)
 		{
@@ -9967,6 +11770,7 @@ public class ORSwitch : IOEntity
 
 using System;
 using Facepunch;
+using Facepunch.Rust;
 using ProtoBuf;
 using UnityEngine;
 
@@ -10035,6 +11839,7 @@ public class OilSwitchBroadcast : IOEntity
 			if (hasPower && inputs.Length != 0 && inputs[0].IsConnected() && inputs[0].connectedTo.Get(base.isServer) is TimerSwitch timerSwitch && (Object)(object)timerSwitch.lastUsedPlayer != (Object)null)
 			{
 				timerSwitch.lastUsedPlayer.AddClanScore((ClanScoreEventType)17);
+				Analytics.Azure.OnOilRigFuelSwitchStarted(timerSwitch.lastUsedPlayer);
 			}
 		}
 		return hasPower;
@@ -10348,15 +12153,14 @@ public class PowergridIOAccessPoint : IOEntity, IPowergridEntity
 		{
 			return 0;
 		}
-		if (currentPowergridStage < 1)
+		int num = PointEntity<PowergridManager>.ServerInstance.Server_GetPowerPlantInsertedFuses();
+		if (num <= 0)
 		{
 			return 0;
 		}
-		if (!PowergridStageConfig.instance.TryGetStageDataForStage(currentPowergridStage, out var stageData))
-		{
-			return 0;
-		}
-		return stageData.powerlineAvailablePower;
+		int num2 = PointEntity<PowergridManager>.ServerInstance.Server_GetFuseSocketsCount();
+		float num3 = ((num2 > 1) ? Mathf.Clamp01((float)(num - 1) / (float)(num2 - 1)) : 0f);
+		return (int)Mathf.Lerp((float)Powergrid.powerlineBasePowerOutput, (float)Powergrid.powerlineMaxPowerOutput, num3);
 	}
 
 	public override bool GetHasPower(int inputAmount, int inputSlot)
@@ -10375,7 +12179,9 @@ using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 using ConVar;
 using Facepunch;
+using Facepunch.Rust;
 using Network;
+using Oxide.Core;
 using ProtoBuf;
 using Rust;
 using UnityEngine;
@@ -10417,6 +12223,8 @@ public class PowergridManager : PointEntity<PowergridManager>
 	private static List<InsertedFuseEntry> insertedFuses = new List<InsertedFuseEntry>();
 
 	private static int currentInsertedFusesCount;
+
+	private static int fuseSocketsCount;
 
 	private List<ItemId> loadedFuseInsertionOrder;
 
@@ -10616,12 +12424,22 @@ public class PowergridManager : PointEntity<PowergridManager>
 
 	public static void Server_AddPowergridFuseBox(PowergridFuseBox fuseBox)
 	{
-		fuseBoxes.TryAdd(fuseBox);
+		if (fuseBoxes.TryAdd(fuseBox))
+		{
+			fuseSocketsCount += fuseBox.GetMaxNoOfFuses();
+		}
 	}
 
 	public static void Server_RemovePowergridFuseBox(PowergridFuseBox fuseBox)
 	{
-		fuseBoxes.Remove(fuseBox);
+		if (fuseBoxes.Remove(fuseBox))
+		{
+			fuseSocketsCount -= fuseBox.GetMaxNoOfFuses();
+			if (fuseSocketsCount < 0)
+			{
+				fuseSocketsCount = 0;
+			}
+		}
 		for (int num = insertedFuses.Count - 1; num >= 0; num--)
 		{
 			if ((Object)(object)insertedFuses[num].FuseBox == (Object)(object)fuseBox)
@@ -10639,7 +12457,10 @@ public class PowergridManager : PointEntity<PowergridManager>
 		InsertedFuseEntry item = insertedFuseEntry;
 		insertedFuses.Add(item);
 		currentInsertedFusesCount++;
-		_ = Application.isServerStarted;
+		if (Application.isServerStarted)
+		{
+			Analytics.Azure.OnPowerGridFuseInserted(byPlayer, fuse, currentInsertedFusesCount);
+		}
 	}
 
 	public static void Server_OnFuseRemovedFromFuseBox(Item fuse)
@@ -10809,14 +12630,7 @@ public class PowergridManager : PointEntity<PowergridManager>
 
 	public int Server_GetFuseSocketsCount()
 	{
-		int num = 0;
-		int i = 0;
-		for (int count = fuseBoxes.Count; i < count; i++)
-		{
-			PowergridFuseBox powergridFuseBox = fuseBoxes[i];
-			num += powergridFuseBox.GetMaxNoOfFuses();
-		}
-		return num;
+		return fuseSocketsCount;
 	}
 
 	public int Server_GetPowerPlantInsertedFuses()
@@ -10854,12 +12668,18 @@ public class PowergridManager : PointEntity<PowergridManager>
 				int num2 = CalculateCurrentStage();
 				if (CurrentStage != num2 || !hasTickedOnce)
 				{
+					if (Interface.CallHook("OnPowergridStageChange", (object)this, (object)num2) != null)
+					{
+						return;
+					}
+					Analytics.Azure.OnPowerGridStageChanged(CurrentStage, num2);
 					CurrentStage = num2;
 					bool b = num2 > 0;
 					using (FlagsUpdateScope flagsUpdateScope = StartSetFlags(FlagsUpdateMode.SendNetworkUpdate_Flags))
 					{
 						flagsUpdateScope.Set(Flags.On, b);
 					}
+					Interface.CallHook("OnPowergridStageChanged", (object)this, (object)num2);
 					stageChangeWorkQueue.RestartWorkQueue();
 					int i = 0;
 					for (int count = fuseBoxes.Count; i < count; i++)
@@ -11404,8 +13224,6 @@ public class PowergridStageConfig : BaseScriptableObject
 	public class StageData
 	{
 		public int requiredFuses;
-
-		public int powerlineAvailablePower;
 	}
 
 	private static PowergridStageConfig _instance;
@@ -11468,8 +13286,6 @@ using System;
 public class StageData
 {
 	public int requiredFuses;
-
-	public int powerlineAvailablePower;
 }
 
 
@@ -11497,8 +13313,8 @@ using UnityEngine;
 
 public class Powergrid : ConsoleSystem
 {
-	[Help("If disabled power grid functionality will be disabled.")]
 	[ReplicatedVar]
+	[Help("If disabled power grid functionality will be disabled.")]
 	public static bool enabled = true;
 
 	[ReplicatedVar]
@@ -11529,6 +13345,27 @@ public class Powergrid : ConsoleSystem
 
 	private const float defaultFuseSlowDecayFractionMax = 0.12f;
 
+	[ServerVar(Help = "Starting power output of powerline poles when 1 heavy fuse is inserted at the power plant.", Saved = true)]
+	public static int powerlineBasePowerOutput = 5;
+
+	[ServerVar(Help = "Power output of powerline poles when all possible heavy fuses are inserted at the power plant.", Saved = true)]
+	public static int powerlineMaxPowerOutput = 50;
+
+	[ServerVar(Help = "Charge capacity of a drone marketplace's power buffer. A marketplace charges this up from the power plant and bleeds it back out whenever the plant stops carrying it.", Saved = true)]
+	public static float marketplaceChargeCapacity = 100f;
+
+	[ServerVar(Help = "Fraction (0-1) of its capacity a drone marketplace needs charged to accept orders. Sets both how long a cold marketplace takes to come online and how long a full one keeps running after the power plant drops out.", Saved = true)]
+	public static float marketplaceRequiredChargeFraction = 0.5f;
+
+	[ServerVar(Help = "Heavy fuses that have to be inserted at the power plant before a drone marketplace starts charging. Below this it holds whatever charge it has without building any more.", Saved = true)]
+	public static int marketplaceMinimumFusesToCharge = 4;
+
+	[ServerVar(Help = "Charge a drone marketplace gains every second for each heavy fuse inserted at the power plant, once there are at least marketplaceMinimumFusesToCharge of them.", Saved = true)]
+	public static float marketplaceChargePerFuse = 0.01f;
+
+	[ServerVar(Help = "Charge a drone marketplace loses every second while there are no heavy fuses inserted at the power plant. A single fuse is enough to stop the bleed.", Saved = true)]
+	public static float marketplaceDrainRate = 0.05f;
+
 	[ServerVar(Help = "Max time per frame (ms) to spend notifying powergrid entities of a stage change.", Saved = true)]
 	public static float stageChangeWorkQueueBudget = 0.1f;
 
@@ -11543,6 +13380,7 @@ public class Powergrid : ConsoleSystem
 	[ServerVar]
 	public static void status(Arg arg)
 	{
+		//IL_034a: Unknown result type (might be due to invalid IL or missing references)
 		PowergridManager serverInstance = PointEntity<PowergridManager>.ServerInstance;
 		if ((Object)(object)serverInstance == (Object)null)
 		{
@@ -11556,10 +13394,17 @@ public class Powergrid : ConsoleSystem
 		stringBuilder.AppendLine(string.Format("{0}: {1}", "fuseFullDecayCount", fuseFullDecayCount));
 		stringBuilder.AppendLine(string.Format("{0}: {1}", "fuseSlowDecayFractionMin", fuseSlowDecayFractionMin));
 		stringBuilder.AppendLine(string.Format("{0}: {1}", "fuseSlowDecayFractionMax", fuseSlowDecayFractionMax));
+		stringBuilder.AppendLine(string.Format("{0}: {1}", "powerlineBasePowerOutput", powerlineBasePowerOutput));
+		stringBuilder.AppendLine(string.Format("{0}: {1}", "powerlineMaxPowerOutput", powerlineMaxPowerOutput));
 		stringBuilder.AppendLine(string.Format("{0}: {1}", "greenRecyclerFullEfficiencyStage", greenRecyclerFullEfficiencyStage));
 		stringBuilder.AppendLine(string.Format("{0}: {1}", "stageChangeWorkQueueBudget", stageChangeWorkQueueBudget));
 		stringBuilder.AppendLine(string.Format("{0}: {1}", "stageChangeWorkQueueDelayBetweenJobs", stageChangeWorkQueueDelayBetweenJobs));
 		stringBuilder.AppendLine(string.Format("{0}: {1}", "stageChangeWorkQueueGroupJobsDistance", stageChangeWorkQueueGroupJobsDistance));
+		stringBuilder.AppendLine(string.Format("{0}: {1}", "marketplaceChargeCapacity", marketplaceChargeCapacity));
+		stringBuilder.AppendLine(string.Format("{0}: {1}", "marketplaceRequiredChargeFraction", marketplaceRequiredChargeFraction));
+		stringBuilder.AppendLine(string.Format("{0}: {1}", "marketplaceMinimumFusesToCharge", marketplaceMinimumFusesToCharge));
+		stringBuilder.AppendLine(string.Format("{0}: {1}", "marketplaceChargePerFuse", marketplaceChargePerFuse));
+		stringBuilder.AppendLine(string.Format("{0}: {1}", "marketplaceDrainRate", marketplaceDrainRate));
 		stringBuilder.AppendLine();
 		stringBuilder.AppendLine($"Current stage: {serverInstance.CurrentStage}");
 		int numberOfStages = PowergridStageConfig.instance.GetNumberOfStages();
@@ -11574,6 +13419,12 @@ public class Powergrid : ConsoleSystem
 		stringBuilder.AppendLine($"Number of PowerPlant fuse sockets: {serverInstance.Server_GetFuseSocketsCount()}");
 		stringBuilder.AppendLine($"Number of Powergrid access points: {PowergridManager.GetNoOfPowergridAccessPoints()}");
 		stringBuilder.AppendLine($"Number of Powergrid connected entities: {PowergridManager.GetNoOfPowergridEntities()}");
+		int j = 0;
+		for (int count = Marketplace.serverMarketplaces.Count; j < count; j++)
+		{
+			Marketplace marketplace = Marketplace.serverMarketplaces[j];
+			stringBuilder.AppendLine($"Marketplace {marketplace.net.ID}: charge {marketplace.Server_GetCurrentCharge():0.#}/{marketplaceChargeCapacity:0.#} " + $"({marketplace.ChargeFraction:P0}) at {marketplace.Server_GetChargeRate():+0.###;-0.###;0}/s, " + $"accepting orders: {marketplace.Server_CanAcceptOrder()}");
+		}
 		arg.ReplyWith(stringBuilder.ToString());
 		Pool.FreeUnmanaged(ref stringBuilder);
 	}
@@ -11905,7 +13756,7 @@ public class RespawnableLootFridge : Fridge, ILootContainer
 	{
 		if (base.inventory != null)
 		{
-			Func<Item, int, bool> canAcceptItem = base.inventory.canAcceptItem;
+			Func<BasePlayer, Item, int, bool> canAcceptItem = base.inventory.canAcceptItem;
 			base.inventory.canAcceptItem = null;
 			if (fullSpawn)
 			{
@@ -12091,118 +13942,6 @@ public class Splitter : IOEntity
 	{
 		MarkDirtyForceUpdateOutputs();
 	}
-}
-
-
-using System;
-
-public class WaterTreatmentSwitchBroadcast : IOEntity
-{
-	public static bool WaterTreatmentSwitchEnabled;
-
-	private static ListHashSet<IWaterTreatmentSwitchReceiver> receivers = new ListHashSet<IWaterTreatmentSwitchReceiver>();
-
-	private static ListHashSet<WaterTreatmentSwitchBroadcast> activeSwitches = new ListHashSet<WaterTreatmentSwitchBroadcast>();
-
-	private static bool? debugForcedState;
-
-	public override void ResetIOState()
-	{
-		base.ResetIOState();
-		SetActive(active: false);
-	}
-
-	[ServerVar(Help = "Force the water treatment switch broadcast on/off for testing. Pass no argument (or 'clear') to release the override and return to power-derived state.")]
-	public static void SendDebugBroadcast(Arg arg)
-	{
-		if (!arg.HasArgs(1) || arg.GetString(0, "") == "clear")
-		{
-			debugForcedState = null;
-			RefreshEnabledState();
-			arg.ReplyWith($"Cleared water treatment switch debug override. Enabled: {WaterTreatmentSwitchEnabled}");
-		}
-		else
-		{
-			debugForcedState = arg.GetBool(0, true);
-			RefreshEnabledState();
-			arg.ReplyWith($"Forced water treatment switch broadcast to: {WaterTreatmentSwitchEnabled} (override active)");
-		}
-	}
-
-	[ServerVar]
-	public static void get_num_listeners(Arg arg)
-	{
-		arg.ReplyWith($"Number of listeners: {receivers.Count}");
-	}
-
-	public static void RegisterReceiver(IWaterTreatmentSwitchReceiver r)
-	{
-		receivers.TryAdd(r);
-	}
-
-	public static void DeregisterReceiver(IWaterTreatmentSwitchReceiver r)
-	{
-		receivers.Remove(r);
-	}
-
-	public override bool GetHasPower(int inputAmount, int inputSlot)
-	{
-		if (inputSlot != 0)
-		{
-			return false;
-		}
-		bool hasPower = base.GetHasPower(inputAmount, inputSlot);
-		SetActive(hasPower);
-		return hasPower;
-	}
-
-	internal override void DoServerDestroy()
-	{
-		base.DoServerDestroy();
-		SetActive(active: false);
-	}
-
-	private void SetActive(bool active)
-	{
-		if (active ? activeSwitches.TryAdd(this) : activeSwitches.Remove(this))
-		{
-			RefreshEnabledState();
-		}
-	}
-
-	private static void RefreshEnabledState()
-	{
-		bool flag = debugForcedState ?? (activeSwitches.Count > 0);
-		if (flag != WaterTreatmentSwitchEnabled)
-		{
-			WaterTreatmentSwitchEnabled = flag;
-			SendBroadcast(flag);
-		}
-	}
-
-	private static void SendBroadcast(bool toggle)
-	{
-		//IL_0005: Unknown result type (might be due to invalid IL or missing references)
-		//IL_000a: Unknown result type (might be due to invalid IL or missing references)
-		Enumerator<IWaterTreatmentSwitchReceiver> enumerator = receivers.GetEnumerator();
-		try
-		{
-			while (enumerator.MoveNext())
-			{
-				enumerator.Current.OnWaterTreatmentSwitchToggled(toggle);
-			}
-		}
-		finally
-		{
-			((IDisposable)enumerator/*cast due to .constrained prefix*/).Dispose();
-		}
-	}
-}
-
-
-public interface IWaterTreatmentSwitchReceiver
-{
-	void OnWaterTreatmentSwitchToggled(bool state);
 }
 
 
@@ -12513,7 +14252,7 @@ public class Hopper : IndustrialEntity, IIndustrialStorage
 
 	public const Flags MovingItems = Flags.Reserved1;
 
-	public const Flags StandardMount = Flags.Reserved2;
+	public const Flags StandardMount = Flags.Reserved4;
 
 	public const Flags BarrelMount = Flags.Reserved3;
 
@@ -12801,7 +14540,7 @@ public class Hopper : IndustrialEntity, IIndustrialStorage
 		}
 		using FlagsUpdateScope flagsUpdateScope = StartSetFlags(FlagsUpdateMode.SendNetworkUpdate);
 		flagsUpdateScope.Set(Flags.Reserved3, mountType == MountType.Barrel);
-		flagsUpdateScope.Set(Flags.Reserved2, mountType == MountType.Flat);
+		flagsUpdateScope.Set(Flags.Reserved4, mountType == MountType.Flat);
 	}
 
 	private void QueueScan()
@@ -13441,7 +15180,9 @@ using System;
 using System.Collections.Generic;
 using ConVar;
 using Facepunch;
+using Facepunch.Extend;
 using Facepunch.Rust;
+using ProtoBuf;
 using Rust;
 using UnityEngine;
 
@@ -13472,8 +15213,6 @@ public class PuzzleReset : FacepunchBehaviour
 	[Tooltip("Ignore players below this height")]
 	public float minimumHeightOffset;
 
-	private float timeSpentBlocked;
-
 	[HideInInspector]
 	public Vector3[] resetPositions;
 
@@ -13481,17 +15220,19 @@ public class PuzzleReset : FacepunchBehaviour
 
 	public Phrase resetPhrase;
 
+	public bool radiationReset;
+
+	public static ListHashSet<PuzzleReset> AllResets = new ListHashSet<PuzzleReset>();
+
 	private List<SpawnGroup> _cachedSpawnGroups;
 
-	public bool radiationReset;
+	private List<GameObject> _cachedResetObjects;
 
 	public static Phrase BlockedWarningPhrase = new Phrase("monument.blocked.warning", "This monument is resetting, please leave the area!");
 
 	private AIInformationZone zone;
 
 	private TwoTierRadiationZone radiationZone;
-
-	public static ListHashSet<PuzzleReset> AllResets = new ListHashSet<PuzzleReset>();
 
 	private float currentResetTotalTime;
 
@@ -13509,11 +15250,15 @@ public class PuzzleReset : FacepunchBehaviour
 
 	private bool hasPlayerEnteredRange;
 
+	private float timeSpentBlocked;
+
 	private string lootedSpawnGroupName;
 
 	private static string TwoTierRadSpherePath = "assets/prefabs/io/electric/generators/twotierradiationsphere.prefab";
 
 	private static string TwoTierRadBoxPath = "assets/prefabs/io/electric/generators/twotierradiationbox.prefab";
+
+	private List<NetworkableId> danglingSpawnedInstances;
 
 	private bool canUseRadiationReset
 	{
@@ -13528,6 +15273,97 @@ public class PuzzleReset : FacepunchBehaviour
 	}
 
 	public float lastNormalizedRadiation { get; private set; }
+
+	public void Save(BaseNetworkable.SaveInfo info)
+	{
+		//IL_0045: Unknown result type (might be due to invalid IL or missing references)
+		//IL_004a: Unknown result type (might be due to invalid IL or missing references)
+		//IL_023a: Unknown result type (might be due to invalid IL or missing references)
+		//IL_01b8: Unknown result type (might be due to invalid IL or missing references)
+		info.msg.puzzleReset = Pool.Get<PuzzleReset>();
+		info.msg.puzzleReset.playerBlocksReset = playersBlockReset;
+		if ((Object)(object)playerDetectionOrigin != (Object)null)
+		{
+			info.msg.puzzleReset.playerDetectionOrigin = playerDetectionOrigin.position;
+		}
+		info.msg.puzzleReset.playerDetectionRadius = playerDetectionRadius;
+		info.msg.puzzleReset.scaleWithServerPopulation = scaleWithServerPopulation;
+		info.msg.puzzleReset.timeBetweenResets = timeBetweenResets;
+		info.msg.puzzleReset.checkSleepingAIZForPlayers = CheckSleepingAIZForPlayers;
+		info.msg.puzzleReset.ignoreAboveGroundPlayers = ignoreAboveGroundPlayers;
+		info.msg.puzzleReset.broadcastResetMessage = broadcastResetMessage;
+		info.msg.puzzleReset.resetPhrase = resetPhrase?.token ?? "";
+		info.msg.puzzleReset.radiationReset = radiationReset;
+		info.msg.puzzleReset.pauseUntilLooted = pauseUntilLooted;
+		foreach (SpawnGroup spawnGroup in GetSpawnGroups())
+		{
+			if (spawnGroup.shouldBlockSpawnedEntitySaving)
+			{
+				continue;
+			}
+			PuzzleReset puzzleReset = info.msg.puzzleReset;
+			if (puzzleReset.danglingSpawnedInstances == null)
+			{
+				puzzleReset.danglingSpawnedInstances = Pool.Get<List<NetworkableId>>();
+			}
+			foreach (SpawnPointInstance spawnInstance in spawnGroup.SpawnInstances)
+			{
+				if ((Object)(object)spawnInstance != (Object)null && spawnInstance.Entity.IsValid())
+				{
+					info.msg.puzzleReset.danglingSpawnedInstances.Add(spawnInstance.Entity.net.ID);
+				}
+			}
+		}
+		if (resetPositions != null && resetPositions.Length != 0)
+		{
+			info.msg.puzzleReset.resetPositions = Pool.Get<List<Vector3>>();
+			for (int i = 0; i < resetPositions.Length; i++)
+			{
+				info.msg.puzzleReset.resetPositions.Add(resetPositions[i]);
+			}
+		}
+	}
+
+	public void Load(BaseNetworkable.LoadInfo info)
+	{
+		//IL_0035: Unknown result type (might be due to invalid IL or missing references)
+		//IL_018d: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0192: Unknown result type (might be due to invalid IL or missing references)
+		playersBlockReset = info.msg.puzzleReset.playerBlocksReset;
+		if ((Object)(object)playerDetectionOrigin != (Object)null)
+		{
+			playerDetectionOrigin.position = info.msg.puzzleReset.playerDetectionOrigin;
+		}
+		playerDetectionRadius = info.msg.puzzleReset.playerDetectionRadius;
+		scaleWithServerPopulation = info.msg.puzzleReset.scaleWithServerPopulation;
+		timeBetweenResets = info.msg.puzzleReset.timeBetweenResets;
+		CheckSleepingAIZForPlayers = info.msg.puzzleReset.checkSleepingAIZForPlayers;
+		ignoreAboveGroundPlayers = info.msg.puzzleReset.ignoreAboveGroundPlayers;
+		broadcastResetMessage = info.msg.puzzleReset.broadcastResetMessage;
+		if (!string.IsNullOrEmpty(info.msg.puzzleReset.resetPhrase))
+		{
+			Phrase phrase = Translate.GetPhrase(info.msg.puzzleReset.resetPhrase);
+			if (phrase != null)
+			{
+				resetPhrase = phrase;
+			}
+		}
+		if (info.msg.puzzleReset.danglingSpawnedInstances != null)
+		{
+			danglingSpawnedInstances = List.ShallowClonePooled<NetworkableId>(info.msg.puzzleReset.danglingSpawnedInstances);
+		}
+		if (info.msg.puzzleReset.resetPositions != null && info.msg.puzzleReset.resetPositions.Count > 0)
+		{
+			resetPositions = (Vector3[])(object)new Vector3[info.msg.puzzleReset.resetPositions.Count];
+			for (int i = 0; i < info.msg.puzzleReset.resetPositions.Count; i++)
+			{
+				resetPositions[i] = info.msg.puzzleReset.resetPositions[i];
+			}
+		}
+		radiationReset = info.msg.puzzleReset.radiationReset;
+		pauseUntilLooted = info.msg.puzzleReset.pauseUntilLooted;
+		ResetTimer();
+	}
 
 	public float GetResetSpacing()
 	{
@@ -13721,6 +15557,24 @@ public class PuzzleReset : FacepunchBehaviour
 		return _cachedSpawnGroups;
 	}
 
+	public List<GameObject> GetResetObjects()
+	{
+		//IL_0026: Unknown result type (might be due to invalid IL or missing references)
+		if (_cachedResetObjects != null)
+		{
+			return _cachedResetObjects;
+		}
+		_cachedResetObjects = new List<GameObject>();
+		List<PuzzleResetObject> list = Pool.Get<List<PuzzleResetObject>>();
+		Vis.Components<PuzzleResetObject>(((Component)this).transform.position, 1f, list, 262144, (QueryTriggerInteraction)2);
+		foreach (PuzzleResetObject item in list)
+		{
+			_cachedResetObjects.Add(((Component)((Component)item).gameObject.transform.parent).gameObject);
+		}
+		Pool.FreeUnmanaged<PuzzleResetObject>(ref list);
+		return _cachedResetObjects;
+	}
+
 	private bool AIZSleeping()
 	{
 		AIInformationZone aIZone = GetAIZone();
@@ -13731,78 +15585,76 @@ public class PuzzleReset : FacepunchBehaviour
 		return aIZone.Sleeping;
 	}
 
-	private bool PlayersWithinDistance()
+	private bool PlayersWithinDistance(bool includeSleepers = false)
 	{
-		return AnyPlayersWithinDistance(playerDetectionOrigin, playerDetectionRadius, minimumHeightOffset, ignoreAboveGroundPlayers);
+		return AnyPlayersWithinDistance(playerDetectionOrigin, playerDetectionRadius, minimumHeightOffset, ignoreAboveGroundPlayers, includeSleepers);
 	}
 
-	public static bool AnyPlayersWithinDistance(Transform origin, float radius, float heightOffset, bool ignoreAboveGroundPlayers = false)
+	public static bool AnyPlayersWithinDistance(Transform origin, float radius, float heightOffset, bool ignoreAboveGroundPlayers = false, bool includeSleepers = false)
 	{
 		//IL_0001: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0015: Unknown result type (might be due to invalid IL or missing references)
-		//IL_001a: Unknown result type (might be due to invalid IL or missing references)
-		//IL_004f: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0065: Unknown result type (might be due to invalid IL or missing references)
-		//IL_006b: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00a7: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00ad: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00b7: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00bd: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00d1: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00d7: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00e6: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00ec: Unknown result type (might be due to invalid IL or missing references)
-		//IL_010a: Unknown result type (might be due to invalid IL or missing references)
-		//IL_011d: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0122: Unknown result type (might be due to invalid IL or missing references)
+		//IL_005f: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0075: Unknown result type (might be due to invalid IL or missing references)
+		//IL_007b: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00bc: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00c6: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00d0: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00d6: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00ea: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00f4: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0103: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0109: Unknown result type (might be due to invalid IL or missing references)
 		//IL_0127: Unknown result type (might be due to invalid IL or missing references)
-		//IL_012a: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0137: Unknown result type (might be due to invalid IL or missing references)
-		//IL_013c: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0141: Unknown result type (might be due to invalid IL or missing references)
-		//IL_014e: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0153: Unknown result type (might be due to invalid IL or missing references)
+		//IL_013a: Unknown result type (might be due to invalid IL or missing references)
+		//IL_013f: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0144: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0147: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0154: Unknown result type (might be due to invalid IL or missing references)
 		//IL_0159: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0162: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0168: Unknown result type (might be due to invalid IL or missing references)
-		//IL_017b: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0188: Unknown result type (might be due to invalid IL or missing references)
-		//IL_018d: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0192: Unknown result type (might be due to invalid IL or missing references)
-		//IL_019f: Unknown result type (might be due to invalid IL or missing references)
-		//IL_01a4: Unknown result type (might be due to invalid IL or missing references)
-		//IL_01aa: Unknown result type (might be due to invalid IL or missing references)
+		//IL_015e: Unknown result type (might be due to invalid IL or missing references)
+		//IL_016b: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0170: Unknown result type (might be due to invalid IL or missing references)
+		//IL_017a: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0183: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0189: Unknown result type (might be due to invalid IL or missing references)
+		//IL_019c: Unknown result type (might be due to invalid IL or missing references)
+		//IL_01a9: Unknown result type (might be due to invalid IL or missing references)
+		//IL_01ae: Unknown result type (might be due to invalid IL or missing references)
 		//IL_01b3: Unknown result type (might be due to invalid IL or missing references)
-		//IL_01b9: Unknown result type (might be due to invalid IL or missing references)
+		//IL_01c0: Unknown result type (might be due to invalid IL or missing references)
+		//IL_01c5: Unknown result type (might be due to invalid IL or missing references)
+		//IL_01cf: Unknown result type (might be due to invalid IL or missing references)
+		//IL_01d8: Unknown result type (might be due to invalid IL or missing references)
+		//IL_01de: Unknown result type (might be due to invalid IL or missing references)
 		float num = origin.position.y - radius + heightOffset;
-		Enumerator<BasePlayer> enumerator = BasePlayer.activePlayerList.GetEnumerator();
-		try
+		IEnumerable<BasePlayer> enumerable;
+		if (!includeSleepers)
 		{
-			while (enumerator.MoveNext())
-			{
-				BasePlayer current = enumerator.Current;
-				if (current.IsSleeping() || !current.IsAlive() || current.isInvisible || ((Component)current).transform.position.y < num || !(Vector3.Distance(((Component)current).transform.position, origin.position) < radius) || (ignoreAboveGroundPlayers && !current.IsUnderground()))
-				{
-					continue;
-				}
-				if (ConVar.Server.drawpuzzleresets && current.IsAdmin)
-				{
-					float duration = 10f;
-					current.SendConsoleCommand(DDrawCommand.Sphere(origin.position, duration, Color.green, radius, distanceFade: false));
-					current.SendConsoleCommand(DDrawCommand.Sphere(origin.position, duration, Color.yellow, ScaleRadiusByConVar(radius), distanceFade: false));
-					if (heightOffset > 0f)
-					{
-						Vector3 val = origin.position + new Vector3(0f, 0f - radius + heightOffset, 0f);
-						current.SendConsoleCommand(DDrawCommand.Line(val + new Vector3(radius, 0f, 0f), val - new Vector3(radius, 0f, 0f), duration, Color.red, distanceFade: false, zTest: true));
-						current.SendConsoleCommand(DDrawCommand.Line(val + new Vector3(0f, 0f, radius), val - new Vector3(0f, 0f, radius), duration, Color.red, distanceFade: false, zTest: true));
-					}
-				}
-				return true;
-			}
+			IEnumerable<BasePlayer> activePlayerList = (IEnumerable<BasePlayer>)BasePlayer.activePlayerList;
+			enumerable = activePlayerList;
 		}
-		finally
+		else
 		{
-			((IDisposable)enumerator/*cast due to .constrained prefix*/).Dispose();
+			enumerable = BasePlayer.allPlayerList;
+		}
+		foreach (BasePlayer item in enumerable)
+		{
+			if (!item.IsAlive() || item.isInvisible || (!includeSleepers && item.IsSleeping()) || ((Component)item).transform.position.y < num || Vector3.Distance(((Component)item).transform.position, origin.position) >= radius || (ignoreAboveGroundPlayers && item.IsUnderground()))
+			{
+				continue;
+			}
+			if (ConVar.Server.drawpuzzleresets && item.IsConnected && item.IsAdmin)
+			{
+				item.SendConsoleCommand(DDrawCommand.Sphere(origin.position, 10f, Color.green, radius, distanceFade: false));
+				item.SendConsoleCommand(DDrawCommand.Sphere(origin.position, 10f, Color.yellow, ScaleRadiusByConVar(radius), distanceFade: false));
+				if (heightOffset > 0f)
+				{
+					Vector3 val = origin.position + new Vector3(0f, 0f - radius + heightOffset, 0f);
+					item.SendConsoleCommand(DDrawCommand.Line(val + new Vector3(radius, 0f, 0f), val - new Vector3(radius, 0f, 0f), 10f, Color.red, distanceFade: false, zTest: true));
+					item.SendConsoleCommand(DDrawCommand.Line(val + new Vector3(0f, 0f, radius), val - new Vector3(0f, 0f, radius), 10f, Color.red, distanceFade: false, zTest: true));
+				}
+			}
+			return true;
 		}
 		return false;
 	}
@@ -13946,14 +15798,35 @@ public class PuzzleReset : FacepunchBehaviour
 		}
 	}
 
-	public void DoReset()
+	public void TryForceReset()
 	{
+		if (PlayersWithinDistance(includeSleepers: true))
+		{
+			RadiationSphere radiationSphere = default(RadiationSphere);
+			foreach (GameObject resetObject in GetResetObjects())
+			{
+				if (resetObject.TryGetComponent<RadiationSphere>(ref radiationSphere))
+				{
+					radiationSphere.RestartRadiation();
+				}
+			}
+			return;
+		}
+		DoReset(skipAlerts: true);
+		ResetTimer();
+	}
+
+	public void DoReset(bool skipAlerts = false)
+	{
+		//IL_004d: Unknown result type (might be due to invalid IL or missing references)
 		//IL_0052: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0057: Unknown result type (might be due to invalid IL or missing references)
-		//IL_005e: Unknown result type (might be due to invalid IL or missing references)
-		//IL_005f: Unknown result type (might be due to invalid IL or missing references)
-		//IL_016d: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0172: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0059: Unknown result type (might be due to invalid IL or missing references)
+		//IL_005a: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00f7: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00fc: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0103: Unknown result type (might be due to invalid IL or missing references)
+		//IL_01f1: Unknown result type (might be due to invalid IL or missing references)
+		//IL_01f6: Unknown result type (might be due to invalid IL or missing references)
 		SetRadiusRadiationAmount(0f);
 		CleanupSleepers();
 		IOEntity component = ((Component)this).GetComponent<IOEntity>();
@@ -13962,7 +15835,7 @@ public class PuzzleReset : FacepunchBehaviour
 			ResetIOEntRecursive(component, Time.frameCount);
 			component.MarkDirty();
 		}
-		else if (resetPositions != null)
+		if (resetPositions != null)
 		{
 			Vector3[] array = resetPositions;
 			foreach (Vector3 val in array)
@@ -13981,6 +15854,18 @@ public class PuzzleReset : FacepunchBehaviour
 				Pool.FreeUnmanaged<IOEntity>(ref list);
 			}
 		}
+		if (danglingSpawnedInstances != null)
+		{
+			foreach (NetworkableId danglingSpawnedInstance in danglingSpawnedInstances)
+			{
+				BaseNetworkable baseNetworkable = BaseNetworkable.serverEntities.Find(danglingSpawnedInstance);
+				if (baseNetworkable.IsValid())
+				{
+					baseNetworkable.Kill();
+				}
+			}
+			Pool.FreeUnmanaged<NetworkableId>(ref danglingSpawnedInstances);
+		}
 		foreach (SpawnGroup spawnGroup in GetSpawnGroups())
 		{
 			if (!((Object)(object)spawnGroup == (Object)null))
@@ -13989,31 +15874,31 @@ public class PuzzleReset : FacepunchBehaviour
 				spawnGroup.DelayedSpawn();
 			}
 		}
-		GameObject[] array2 = resetObjects;
-		foreach (GameObject val2 in array2)
+		OilRigResetNotification oilRigResetNotification = default(OilRigResetNotification);
+		foreach (GameObject resetObject in GetResetObjects())
 		{
-			if ((Object)(object)val2 != (Object)null)
+			if ((!skipAlerts || !resetObject.TryGetComponent<OilRigResetNotification>(ref oilRigResetNotification)) && (Object)(object)resetObject != (Object)null)
 			{
-				val2.SendMessage("OnPuzzleReset", (SendMessageOptions)1);
+				resetObject.SendMessage("OnPuzzleReset", (SendMessageOptions)1);
 			}
 		}
-		if (broadcastResetMessage)
+		if (broadcastResetMessage && !skipAlerts)
 		{
-			Enumerator<BasePlayer> enumerator3 = BasePlayer.activePlayerList.GetEnumerator();
+			Enumerator<BasePlayer> enumerator5 = BasePlayer.activePlayerList.GetEnumerator();
 			try
 			{
-				while (enumerator3.MoveNext())
+				while (enumerator5.MoveNext())
 				{
-					BasePlayer current3 = enumerator3.Current;
-					if (!current3.IsNpc && current3.IsConnected && !current3.IsInTutorial)
+					BasePlayer current5 = enumerator5.Current;
+					if (!current5.IsNpc && current5.IsConnected && !current5.IsInTutorial)
 					{
-						current3.ShowToast(GameTip.Styles.Server_Event, resetPhrase, false);
+						current5.ShowToast(GameTip.Styles.Server_Event, resetPhrase, false);
 					}
 				}
 			}
 			finally
 			{
-				((IDisposable)enumerator3/*cast due to .constrained prefix*/).Dispose();
+				((IDisposable)enumerator5/*cast due to .constrained prefix*/).Dispose();
 			}
 		}
 		Analytics.Azure.OnPuzzleReset(this, currentResetTotalTime, timeSpentBlocked, timeSpentBlockedWithRads, timePausedUnlooted);
@@ -14255,6 +16140,13 @@ public class PuzzleReset : FacepunchBehaviour
 		size.z = Mathf.Min(size.z * ConVar.Server.monumentPuzzleResetRadiationRadiusMultiplier, size.z + ConVar.Server.monumentPuzzleResetRadiationMaxRadiusIncrease * 2f);
 		return size;
 	}
+}
+
+
+using UnityEngine;
+
+public class PuzzleResetObject : MonoBehaviour
+{
 }
 
 
@@ -15128,13 +17020,14 @@ public class Bootstrap : SingletonComponent<Bootstrap>
 
 	public static void Init_Tier0()
 	{
-		//IL_0062: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0067: Unknown result type (might be due to invalid IL or missing references)
 		RunDefaults();
 		GameSetup.RunOnce = true;
 		bootstrapInitRun = true;
 		Index.Initialize(ConsoleGen.All);
 		Index.Reset();
 		UnityButtons.Register();
+		ExceptionReporter.InstallHook();
 		Output.Install();
 		Pool.ResizeBuffer<NetRead>(16384);
 		Pool.ResizeBuffer<NetWrite>(16384);
@@ -15280,17 +17173,11 @@ public class Bootstrap : SingletonComponent<Bootstrap>
 		if (!Application.isEditor)
 		{
 			BuildInfo current = BuildInfo.Current;
-			if ((current.Scm.Branch == null || !(current.Scm.Branch == "experimental/release")) && !(current.Scm.Branch == "release"))
-			{
-				ExceptionReporter.InitializeFromUrl("https://0654eb77d1e04d6babad83201b6b6b95:d2098f1d15834cae90501548bd5dbd0d@sentry.io/1836389");
-			}
-			else
-			{
-				ExceptionReporter.InitializeFromUrl("https://83df169465e84da091c1a3cd2fbffeee:3671b903f9a840ecb68411cf946ab9b6@sentry.io/51080");
-			}
+			bool flag = (current.Scm.Branch != null && current.Scm.Branch == "experimental/release") || current.Scm.Branch == "release";
+			ExceptionReporter.Initialize("https://gw.facepunch.com/facetry/errors", flag ? "server-release" : "server-staging");
 			bool num = CommandLine.Full.Contains("-official") || CommandLine.Full.Contains("-server.official") || CommandLine.Full.Contains("+official") || CommandLine.Full.Contains("+server.official");
-			bool flag = CommandLine.Full.Contains("-stats") || CommandLine.Full.Contains("-server.stats") || CommandLine.Full.Contains("+stats") || CommandLine.Full.Contains("+server.stats");
-			ExceptionReporter.Disabled = !(num && flag);
+			bool flag2 = CommandLine.Full.Contains("-stats") || CommandLine.Full.Contains("-server.stats") || CommandLine.Full.Contains("+stats") || CommandLine.Full.Contains("+server.stats");
+			ExceptionReporter.Disabled = !(num && flag2);
 		}
 		Scope val;
 		Scope val2;
@@ -15683,6 +17570,7 @@ public class Bootstrap : SingletonComponent<Bootstrap>
 			((IDisposable)(Scope)(ref val2)/*cast due to .constrained prefix*/).Dispose();
 		}
 		RustEmojiLibrary.FindAllServerEmoji();
+		_ = PaintballColorLookup.instance;
 		UnderwearManifest.Get();
 		if (ConVar.Time.pausewhileloading)
 		{
@@ -17042,7 +18930,7 @@ public class ClanChangeTracker : IClanChangeSink
 		IClan clan = default(IClan);
 		if (_clanManager.Backend.TryGet(data.ClanId, ref clan))
 		{
-			_clanManager.SendClanChanged(clan);
+			_clanManager.OnClanChanged(clan);
 			AppBroadcast val = Pool.Get<AppBroadcast>();
 			try
 			{
@@ -17085,14 +18973,19 @@ public class ClanChangeTracker : IClanChangeSink
 			{
 				_clanManager.ClientRPC(RpcTarget.Player("Client_CurrentClanChanged", basePlayer));
 			}
-			IClan serverClan = default(IClan);
-			if (_clanManager.Backend.TryGet(basePlayer.clanId, ref serverClan))
+			IClan val = default(IClan);
+			if (_clanManager.Backend.TryGet(basePlayer.clanId, ref val))
 			{
-				basePlayer.serverClan = serverClan;
+				basePlayer.serverClan = val;
 			}
 			else
 			{
 				basePlayer.LoadClanInfo();
+			}
+			if (data.ClanId != 0L)
+			{
+				basePlayer.GiveClanJoinedAchievement();
+				basePlayer.CheckClanProgressiveAchievements(val);
 			}
 		}
 	}
@@ -17661,8 +19554,8 @@ public class Climate : SingletonComponent<Climate>
 		[Horizontal(4, -1)]
 		public Float4 FogAmbientIntensity = Float4.One();
 
-		[Range(0f, 1f)]
 		[Horizontal(4, -1)]
+		[Range(0f, 1f)]
 		public Float4 FogAmbientSaturation = Float4.One();
 
 		[Horizontal(4, -1)]
@@ -18347,8 +20240,8 @@ public class ClimateParameters
 	[Horizontal(4, -1)]
 	public Float4 FogAmbientIntensity = Float4.One();
 
-	[Range(0f, 1f)]
 	[Horizontal(4, -1)]
+	[Range(0f, 1f)]
 	public Float4 FogAmbientSaturation = Float4.One();
 
 	[Horizontal(4, -1)]
@@ -19901,6 +21794,117 @@ public class PreventBuildingMonumentTag : MonoBehaviour
 	[SerializeField]
 	private MonumentInfo AttachedMonument;
 
+	private static readonly ListHashSet<PreventBuildingMonumentTag> allTags = new ListHashSet<PreventBuildingMonumentTag>();
+
+	private Collider volume;
+
+	private bool hasVolume;
+
+	public static ListHashSet<PreventBuildingMonumentTag> All => allTags;
+
+	private void Awake()
+	{
+		allTags.TryAdd(this);
+	}
+
+	private void OnDestroy()
+	{
+		allTags.Remove(this);
+	}
+
+	public bool TryGetVolume(out OBB result)
+	{
+		//IL_002a: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0050: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0056: Unknown result type (might be due to invalid IL or missing references)
+		//IL_005b: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0060: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0065: Unknown result type (might be due to invalid IL or missing references)
+		//IL_007c: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0081: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0097: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00a6: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00b5: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00cd: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00d2: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00d7: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00de: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00e3: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00e8: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00ed: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0195: Unknown result type (might be due to invalid IL or missing references)
+		//IL_019a: Unknown result type (might be due to invalid IL or missing references)
+		//IL_019f: Unknown result type (might be due to invalid IL or missing references)
+		//IL_01a6: Unknown result type (might be due to invalid IL or missing references)
+		//IL_01ab: Unknown result type (might be due to invalid IL or missing references)
+		//IL_01b0: Unknown result type (might be due to invalid IL or missing references)
+		//IL_01b5: Unknown result type (might be due to invalid IL or missing references)
+		//IL_01bc: Unknown result type (might be due to invalid IL or missing references)
+		//IL_01c1: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0177: Unknown result type (might be due to invalid IL or missing references)
+		//IL_017c: Unknown result type (might be due to invalid IL or missing references)
+		//IL_017e: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0183: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0188: Unknown result type (might be due to invalid IL or missing references)
+		if (!hasVolume)
+		{
+			volume = ((Component)this).GetComponent<Collider>();
+			hasVolume = true;
+		}
+		if ((Object)(object)volume == (Object)null)
+		{
+			result = default(OBB);
+			return false;
+		}
+		Transform transform = ((Component)volume).transform;
+		Collider obj = volume;
+		BoxCollider val = (BoxCollider)(object)((obj is BoxCollider) ? obj : null);
+		if (val != null)
+		{
+			result = new OBB(transform, new Bounds(val.center, val.size));
+			return true;
+		}
+		Collider obj2 = volume;
+		SphereCollider val2 = (SphereCollider)(object)((obj2 is SphereCollider) ? obj2 : null);
+		if (val2 != null)
+		{
+			Vector3 lossyScale = transform.lossyScale;
+			float num = val2.radius * 2f * Mathf.Max(new float[3]
+			{
+				Mathf.Abs(lossyScale.x),
+				Mathf.Abs(lossyScale.y),
+				Mathf.Abs(lossyScale.z)
+			});
+			result = new OBB(transform.TransformPoint(val2.center), Vector3.one * num, Quaternion.identity);
+			return true;
+		}
+		Collider obj3 = volume;
+		CapsuleCollider val3 = (CapsuleCollider)(object)((obj3 is CapsuleCollider) ? obj3 : null);
+		if (val3 != null)
+		{
+			float num2 = val3.radius * 2f;
+			Vector3 val4 = default(Vector3);
+			((Vector3)(ref val4))..ctor(num2, num2, num2);
+			switch (val3.direction)
+			{
+			case 0:
+				val4.x = Mathf.Max(val3.height, num2);
+				break;
+			case 1:
+				val4.y = Mathf.Max(val3.height, num2);
+				break;
+			default:
+				val4.z = Mathf.Max(val3.height, num2);
+				break;
+			}
+			result = new OBB(transform, new Bounds(val3.center, val4));
+			return true;
+		}
+		Bounds bounds = volume.bounds;
+		result = new OBB(((Bounds)(ref bounds)).center, ((Bounds)(ref bounds)).size, Quaternion.identity);
+		return ((Bounds)(ref bounds)).size != Vector3.zero;
+	}
+
 	public MonumentInfo GetAttachedMonument()
 	{
 		//IL_002b: Unknown result type (might be due to invalid IL or missing references)
@@ -20214,10 +22218,8 @@ public class EffectRecycle : BaseMonoBehaviour, IClientComponent, IRagdollInhert
 	}
 
 	[FormerlySerializedAs("lifeTime")]
-	[ReadOnly]
 	public float detachTime;
 
-	[ReadOnly]
 	[FormerlySerializedAs("lifeTime")]
 	public float recycleTime;
 
@@ -20550,8 +22552,8 @@ public class EnvironmentVolume : MonoBehaviour, IPrefabPreProcess
 	[field: SerializeField]
 	public Vector3 FalloffPositive { get; private set; } = Vector3.zero;
 
-	[field: SerializeField]
 	[field: Tooltip("Controls the falloff amount of the negative axes of spatially aware volumes.")]
+	[field: SerializeField]
 	public Vector3 FalloffNegative { get; private set; } = Vector3.zero;
 
 	[field: SerializeField]
@@ -20976,9 +22978,9 @@ using UnityEngine;
 public static class EnvironmentVolumeMath
 {
 	[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-	internal delegate void CalculateTransformationBoundsBurst_00005EFC$PostfixBurstDelegate(in float4x4 transformationMatrix, in bool capsule, out Bounds bounds);
+	internal delegate void CalculateTransformationBoundsBurst_0000600C$PostfixBurstDelegate(in float4x4 transformationMatrix, in bool capsule, out Bounds bounds);
 
-	internal static class CalculateTransformationBoundsBurst_00005EFC$BurstDirectCall
+	internal static class CalculateTransformationBoundsBurst_0000600C$BurstDirectCall
 	{
 		private static IntPtr Pointer;
 
@@ -20989,7 +22991,7 @@ public static class EnvironmentVolumeMath
 			//IL_001b: Unknown result type (might be due to invalid IL or missing references)
 			if (Pointer == (IntPtr)0)
 			{
-				Pointer = BurstCompiler.CompileFunctionPointer<CalculateTransformationBoundsBurst_00005EFC$PostfixBurstDelegate>((CalculateTransformationBoundsBurst_00005EFC$PostfixBurstDelegate)CalculateTransformationBoundsBurst).Value;
+				Pointer = BurstCompiler.CompileFunctionPointer<CalculateTransformationBoundsBurst_0000600C$PostfixBurstDelegate>((CalculateTransformationBoundsBurst_0000600C$PostfixBurstDelegate)CalculateTransformationBoundsBurst).Value;
 			}
 			P_0 = Pointer;
 		}
@@ -21017,9 +23019,9 @@ public static class EnvironmentVolumeMath
 	}
 
 	[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-	internal delegate void MultiplyPoint3X4_00005EFD$PostfixBurstDelegate(in float4x4 transformationMatrix, in float3 point, out float3 result);
+	internal delegate void MultiplyPoint3X4_0000600D$PostfixBurstDelegate(in float4x4 transformationMatrix, in float3 point, out float3 result);
 
-	internal static class MultiplyPoint3X4_00005EFD$BurstDirectCall
+	internal static class MultiplyPoint3X4_0000600D$BurstDirectCall
 	{
 		private static IntPtr Pointer;
 
@@ -21030,7 +23032,7 @@ public static class EnvironmentVolumeMath
 			//IL_001b: Unknown result type (might be due to invalid IL or missing references)
 			if (Pointer == (IntPtr)0)
 			{
-				Pointer = BurstCompiler.CompileFunctionPointer<MultiplyPoint3X4_00005EFD$PostfixBurstDelegate>((MultiplyPoint3X4_00005EFD$PostfixBurstDelegate)MultiplyPoint3X4).Value;
+				Pointer = BurstCompiler.CompileFunctionPointer<MultiplyPoint3X4_0000600D$PostfixBurstDelegate>((MultiplyPoint3X4_0000600D$PostfixBurstDelegate)MultiplyPoint3X4).Value;
 			}
 			P_0 = Pointer;
 		}
@@ -21058,9 +23060,9 @@ public static class EnvironmentVolumeMath
 	}
 
 	[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-	internal delegate void UpdateVolumeTransformationAndBoundsBurst_00005EFE$PostfixBurstDelegate(in float3 size, in float3 center, in float4x4 localToWorldMatrix, in bool isCapsule, out float4x4 volumeTransformation, out float4x4 volumeTransformationInverse, out float3 volumePosition, out Bounds volumeBounds);
+	internal delegate void UpdateVolumeTransformationAndBoundsBurst_0000600E$PostfixBurstDelegate(in float3 size, in float3 center, in float4x4 localToWorldMatrix, in bool isCapsule, out float4x4 volumeTransformation, out float4x4 volumeTransformationInverse, out float3 volumePosition, out Bounds volumeBounds);
 
-	internal static class UpdateVolumeTransformationAndBoundsBurst_00005EFE$BurstDirectCall
+	internal static class UpdateVolumeTransformationAndBoundsBurst_0000600E$BurstDirectCall
 	{
 		private static IntPtr Pointer;
 
@@ -21071,7 +23073,7 @@ public static class EnvironmentVolumeMath
 			//IL_001b: Unknown result type (might be due to invalid IL or missing references)
 			if (Pointer == (IntPtr)0)
 			{
-				Pointer = BurstCompiler.CompileFunctionPointer<UpdateVolumeTransformationAndBoundsBurst_00005EFE$PostfixBurstDelegate>((UpdateVolumeTransformationAndBoundsBurst_00005EFE$PostfixBurstDelegate)UpdateVolumeTransformationAndBoundsBurst).Value;
+				Pointer = BurstCompiler.CompileFunctionPointer<UpdateVolumeTransformationAndBoundsBurst_0000600E$PostfixBurstDelegate>((UpdateVolumeTransformationAndBoundsBurst_0000600E$PostfixBurstDelegate)UpdateVolumeTransformationAndBoundsBurst).Value;
 			}
 			P_0 = Pointer;
 		}
@@ -21098,25 +23100,25 @@ public static class EnvironmentVolumeMath
 		}
 	}
 
+	[MonoPInvokeCallback(typeof(CalculateTransformationBoundsBurst_0000600C$PostfixBurstDelegate))]
 	[BurstCompile]
-	[MonoPInvokeCallback(typeof(CalculateTransformationBoundsBurst_00005EFC$PostfixBurstDelegate))]
 	private static void CalculateTransformationBoundsBurst(in float4x4 transformationMatrix, in bool capsule, out Bounds bounds)
 	{
-		CalculateTransformationBoundsBurst_00005EFC$BurstDirectCall.Invoke(in transformationMatrix, in capsule, out bounds);
+		CalculateTransformationBoundsBurst_0000600C$BurstDirectCall.Invoke(in transformationMatrix, in capsule, out bounds);
 	}
 
+	[MonoPInvokeCallback(typeof(MultiplyPoint3X4_0000600D$PostfixBurstDelegate))]
 	[BurstCompile]
-	[MonoPInvokeCallback(typeof(MultiplyPoint3X4_00005EFD$PostfixBurstDelegate))]
 	private static void MultiplyPoint3X4(in float4x4 transformationMatrix, in float3 point, out float3 result)
 	{
-		MultiplyPoint3X4_00005EFD$BurstDirectCall.Invoke(in transformationMatrix, in point, out result);
+		MultiplyPoint3X4_0000600D$BurstDirectCall.Invoke(in transformationMatrix, in point, out result);
 	}
 
+	[MonoPInvokeCallback(typeof(UpdateVolumeTransformationAndBoundsBurst_0000600E$PostfixBurstDelegate))]
 	[BurstCompile]
-	[MonoPInvokeCallback(typeof(UpdateVolumeTransformationAndBoundsBurst_00005EFE$PostfixBurstDelegate))]
 	public static void UpdateVolumeTransformationAndBoundsBurst(in float3 size, in float3 center, in float4x4 localToWorldMatrix, in bool isCapsule, out float4x4 volumeTransformation, out float4x4 volumeTransformationInverse, out float3 volumePosition, out Bounds volumeBounds)
 	{
-		UpdateVolumeTransformationAndBoundsBurst_00005EFE$BurstDirectCall.Invoke(in size, in center, in localToWorldMatrix, in isCapsule, out volumeTransformation, out volumeTransformationInverse, out volumePosition, out volumeBounds);
+		UpdateVolumeTransformationAndBoundsBurst_0000600E$BurstDirectCall.Invoke(in size, in center, in localToWorldMatrix, in isCapsule, out volumeTransformation, out volumeTransformationInverse, out volumePosition, out volumeBounds);
 	}
 
 	[MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -21236,7 +23238,7 @@ using Unity.Mathematics;
 using UnityEngine;
 
 [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-internal delegate void CalculateTransformationBoundsBurst_00005EFC$PostfixBurstDelegate(in float4x4 transformationMatrix, in bool capsule, out Bounds bounds);
+internal delegate void CalculateTransformationBoundsBurst_0000600C$PostfixBurstDelegate(in float4x4 transformationMatrix, in bool capsule, out Bounds bounds);
 
 
 using System;
@@ -21244,7 +23246,7 @@ using Unity.Burst;
 using Unity.Mathematics;
 using UnityEngine;
 
-internal static class CalculateTransformationBoundsBurst_00005EFC$BurstDirectCall
+internal static class CalculateTransformationBoundsBurst_0000600C$BurstDirectCall
 {
 	private static IntPtr Pointer;
 
@@ -21255,7 +23257,7 @@ internal static class CalculateTransformationBoundsBurst_00005EFC$BurstDirectCal
 		//IL_001b: Unknown result type (might be due to invalid IL or missing references)
 		if (Pointer == (IntPtr)0)
 		{
-			Pointer = BurstCompiler.CompileFunctionPointer<CalculateTransformationBoundsBurst_00005EFC$PostfixBurstDelegate>((CalculateTransformationBoundsBurst_00005EFC$PostfixBurstDelegate)CalculateTransformationBoundsBurst).Value;
+			Pointer = BurstCompiler.CompileFunctionPointer<CalculateTransformationBoundsBurst_0000600C$PostfixBurstDelegate>((CalculateTransformationBoundsBurst_0000600C$PostfixBurstDelegate)CalculateTransformationBoundsBurst).Value;
 		}
 		P_0 = Pointer;
 	}
@@ -21287,14 +23289,14 @@ using System.Runtime.InteropServices;
 using Unity.Mathematics;
 
 [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-internal delegate void MultiplyPoint3X4_00005EFD$PostfixBurstDelegate(in float4x4 transformationMatrix, in float3 point, out float3 result);
+internal delegate void MultiplyPoint3X4_0000600D$PostfixBurstDelegate(in float4x4 transformationMatrix, in float3 point, out float3 result);
 
 
 using System;
 using Unity.Burst;
 using Unity.Mathematics;
 
-internal static class MultiplyPoint3X4_00005EFD$BurstDirectCall
+internal static class MultiplyPoint3X4_0000600D$BurstDirectCall
 {
 	private static IntPtr Pointer;
 
@@ -21305,7 +23307,7 @@ internal static class MultiplyPoint3X4_00005EFD$BurstDirectCall
 		//IL_001b: Unknown result type (might be due to invalid IL or missing references)
 		if (Pointer == (IntPtr)0)
 		{
-			Pointer = BurstCompiler.CompileFunctionPointer<MultiplyPoint3X4_00005EFD$PostfixBurstDelegate>((MultiplyPoint3X4_00005EFD$PostfixBurstDelegate)MultiplyPoint3X4).Value;
+			Pointer = BurstCompiler.CompileFunctionPointer<MultiplyPoint3X4_0000600D$PostfixBurstDelegate>((MultiplyPoint3X4_0000600D$PostfixBurstDelegate)MultiplyPoint3X4).Value;
 		}
 		P_0 = Pointer;
 	}
@@ -21338,7 +23340,7 @@ using Unity.Mathematics;
 using UnityEngine;
 
 [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-internal delegate void UpdateVolumeTransformationAndBoundsBurst_00005EFE$PostfixBurstDelegate(in float3 size, in float3 center, in float4x4 localToWorldMatrix, in bool isCapsule, out float4x4 volumeTransformation, out float4x4 volumeTransformationInverse, out float3 volumePosition, out Bounds volumeBounds);
+internal delegate void UpdateVolumeTransformationAndBoundsBurst_0000600E$PostfixBurstDelegate(in float3 size, in float3 center, in float4x4 localToWorldMatrix, in bool isCapsule, out float4x4 volumeTransformation, out float4x4 volumeTransformationInverse, out float3 volumePosition, out Bounds volumeBounds);
 
 
 using System;
@@ -21346,7 +23348,7 @@ using Unity.Burst;
 using Unity.Mathematics;
 using UnityEngine;
 
-internal static class UpdateVolumeTransformationAndBoundsBurst_00005EFE$BurstDirectCall
+internal static class UpdateVolumeTransformationAndBoundsBurst_0000600E$BurstDirectCall
 {
 	private static IntPtr Pointer;
 
@@ -21357,7 +23359,7 @@ internal static class UpdateVolumeTransformationAndBoundsBurst_00005EFE$BurstDir
 		//IL_001b: Unknown result type (might be due to invalid IL or missing references)
 		if (Pointer == (IntPtr)0)
 		{
-			Pointer = BurstCompiler.CompileFunctionPointer<UpdateVolumeTransformationAndBoundsBurst_00005EFE$PostfixBurstDelegate>((UpdateVolumeTransformationAndBoundsBurst_00005EFE$PostfixBurstDelegate)UpdateVolumeTransformationAndBoundsBurst).Value;
+			Pointer = BurstCompiler.CompileFunctionPointer<UpdateVolumeTransformationAndBoundsBurst_0000600E$PostfixBurstDelegate>((UpdateVolumeTransformationAndBoundsBurst_0000600E$PostfixBurstDelegate)UpdateVolumeTransformationAndBoundsBurst).Value;
 		}
 		P_0 = Pointer;
 	}
@@ -21610,8 +23612,8 @@ public class FoliagePlacement : ScriptableObject
 
 	public float RangeFade = 0.1f;
 
-	[Range(0f, 1f)]
 	[Header("LOD")]
+	[Range(0f, 1f)]
 	public float DistanceDensity;
 
 	[Range(1f, 2f)]
@@ -21729,7 +23731,7 @@ public class GameManager
 		Clientside = clientside;
 		Serverside = serverside;
 		preProcessed = new PrefabPreProcess(clientside, serverside);
-		pool = new PrefabPoolCollection(clientside);
+		pool = new PrefabPoolCollection(this, clientside);
 	}
 
 	public GameObject FindPrefab(uint prefabID)
@@ -23454,10 +25456,6 @@ public class GameSetup : MonoBehaviour
 
 	public string loadLevelScene = "";
 
-	public bool loadSave;
-
-	public string loadSaveFile = "";
-
 	public string initializationFile = "";
 
 	public string initializationCommands = "";
@@ -23576,11 +25574,9 @@ public class GameSetup : MonoBehaviour
 		ConVar.GC.unload();
 		yield return CoroutineEx.waitForEndOfFrame;
 		yield return CoroutineEx.waitForEndOfFrame;
-		if (loadSaveFile.StartsWith('"') && loadSaveFile.EndsWith('"'))
-		{
-			loadSaveFile = loadSaveFile.Substring(1, loadSaveFile.Length - 2);
-		}
-		yield return ((MonoBehaviour)this).StartCoroutine(Bootstrap.StartServer(loadSave, loadSaveFile, allowOutOfDateSaves: true));
+		bool doLoad = false;
+		string empty = string.Empty;
+		yield return ((MonoBehaviour)this).StartCoroutine(Bootstrap.StartServer(doLoad, empty, allowOutOfDateSaves: true));
 	}
 }
 
@@ -25653,7 +27649,7 @@ public class RendererLOD : InstancedLODComponent, IPrefabPreProcess, ICustomMate
 
 	public float minDistanceMultiplier;
 
-	public State[] States;
+	public State[] States = Array.Empty<State>();
 
 	public bool shouldNotifyOnLODChange;
 
@@ -25763,6 +27759,135 @@ public class SkinnedPlaceholder : FacepunchBehaviour
 	private bool showSkinnedRenderer;
 
 	private int inactiveStateHash;
+}
+
+
+using System;
+using System.Collections.Generic;
+using Rust.Rendering.IndirectInstancing;
+using UnityEngine;
+
+public class StagedRendererLOD : InstancedLODComponent, IHLODMeshSource
+{
+	public struct LodVisual
+	{
+		public Mesh Mesh;
+
+		public Material[] Materials;
+
+		public bool IsValid
+		{
+			get
+			{
+				if ((Object)(object)Mesh != (Object)null && Materials != null)
+				{
+					return Materials.Length != 0;
+				}
+				return false;
+			}
+		}
+	}
+
+	[Serializable]
+	public class State
+	{
+		[Range(0f, 1000f)]
+		public float distance;
+
+		public bool disableShadows;
+	}
+
+	[Header("Target Renderer")]
+	[Tooltip("The single renderer everything is drawn through. Its mesh and materials are swapped at runtime.")]
+	public MeshRenderer TargetRenderer;
+
+	public MeshFilter TargetFilter;
+
+	[Tooltip("Distance at which each LOD level becomes active. LOD levels the active stage has no mesh for are culled.")]
+	[Header("LOD Levels")]
+	public State[] States = Array.Empty<State>();
+
+	public StagedDestructionEntityInfo FindStageInfo()
+	{
+		Transform root = ((Component)this).transform.root;
+		if (!((Object)(object)root != (Object)null))
+		{
+			return null;
+		}
+		return ((Component)root).GetComponentInChildren<StagedDestructionEntityInfo>(true);
+	}
+
+	public IEnumerable<Mesh> GetAllStageMeshes()
+	{
+		StagedDestructionEntityInfo stagedDestructionEntityInfo = FindStageInfo();
+		if (stagedDestructionEntityInfo == null || stagedDestructionEntityInfo.Stages == null)
+		{
+			yield break;
+		}
+		StagedDestructionEntityInfo.ResourceStage[] stages = stagedDestructionEntityInfo.Stages;
+		foreach (StagedDestructionEntityInfo.ResourceStage resourceStage in stages)
+		{
+			if (resourceStage == null || resourceStage.VisualLods == null)
+			{
+				continue;
+			}
+			StagedDestructionEntityInfo.LodVisual[] visualLods = resourceStage.VisualLods;
+			foreach (StagedDestructionEntityInfo.LodVisual lodVisual in visualLods)
+			{
+				if (lodVisual != null && (Object)(object)lodVisual.Mesh != (Object)null)
+				{
+					yield return lodVisual.Mesh;
+				}
+			}
+		}
+	}
+
+	public void EditorPreviewStage(int stageIndex, int lodLevel = 0)
+	{
+		if ((Object)(object)TargetFilter == (Object)null)
+		{
+			TargetFilter = ((Component)this).GetComponent<MeshFilter>();
+		}
+		if ((Object)(object)TargetRenderer == (Object)null)
+		{
+			TargetRenderer = ((Component)this).GetComponent<MeshRenderer>();
+		}
+	}
+}
+
+
+using UnityEngine;
+
+public struct LodVisual
+{
+	public Mesh Mesh;
+
+	public Material[] Materials;
+
+	public bool IsValid
+	{
+		get
+		{
+			if ((Object)(object)Mesh != (Object)null && Materials != null)
+			{
+				return Materials.Length != 0;
+			}
+			return false;
+		}
+	}
+}
+
+
+using System;
+using UnityEngine;
+
+[Serializable]
+public class State
+{
+	[Range(0f, 1000f)]
+	public float distance;
+
+	public bool disableShadows;
 }
 
 
@@ -25891,8 +28016,8 @@ public class LevelInfo : SingletonComponent<LevelInfo>
 	[Tooltip("A background image to be shown when loading the map")]
 	public Texture2D image;
 
-	[Tooltip("You should incrememnt this version when you make changes to the map that will invalidate old saves")]
 	[Space(10f)]
+	[Tooltip("You should incrememnt this version when you make changes to the map that will invalidate old saves")]
 	public int version = 1;
 }
 
@@ -26582,6 +28707,10 @@ public class Prefab : IComparable<Prefab>
 
 	private TerrainPlacement[] cachedTerrainPlacements;
 
+	private TerrainFootprint cachedTerrainFootprint;
+
+	private bool cachedTerrainFootprintValid;
+
 	private WaterCheck[] cachedWaterChecks;
 
 	private BoundsCheck[] cachedBoundsChecks;
@@ -26589,6 +28718,19 @@ public class Prefab : IComparable<Prefab>
 	private DecorComponent[] cachedDecorComponents;
 
 	private EnvironmentVolumeCheck[] cachedEnvironmentVolumeChecks;
+
+	private TerrainFootprint TerrainFootprint
+	{
+		get
+		{
+			if (!cachedTerrainFootprintValid)
+			{
+				cachedTerrainFootprint = Attribute.Find<TerrainFootprint>(ID);
+				cachedTerrainFootprintValid = true;
+			}
+			return cachedTerrainFootprint;
+		}
+	}
 
 	public static PrefabAttribute.Library DefaultAttribute => PrefabAttribute.server;
 
@@ -26661,6 +28803,22 @@ public class Prefab : IComparable<Prefab>
 			cachedTerrainAnchors = Attribute.FindAll<TerrainAnchor>(ID);
 		}
 		return Object.transform.ApplyTerrainAnchors(cachedTerrainAnchors, ref pos, rot, scale, filter);
+	}
+
+	public bool CheckTerrainFootprint(Vector3 pos, Quaternion rot, Vector3 scale)
+	{
+		//IL_0011: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0012: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0013: Unknown result type (might be due to invalid IL or missing references)
+		return Object.transform.CheckTerrainFootprint(TerrainFootprint, pos, rot, scale);
+	}
+
+	public void FillTerrainFootprint(Vector3 pos, Quaternion rot, Vector3 scale)
+	{
+		//IL_0011: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0012: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0013: Unknown result type (might be due to invalid IL or missing references)
+		Object.transform.FillTerrainFootprint(TerrainFootprint, pos, rot, scale);
 	}
 
 	public bool ApplyTerrainChecks(Vector3 pos, Quaternion rot, Vector3 scale, SpawnFilter filter = null)
@@ -27374,6 +29532,10 @@ public class PrefabPreProcess : IPrefabProcessor
 				RemoveChildEntities(go);
 			}
 		}
+		if (!isServerside)
+		{
+			DisableWheelColliders(go);
+		}
 		if (options.StripEmptyChildren)
 		{
 			BaseEntity baseEntity = default(BaseEntity);
@@ -27489,6 +29651,20 @@ public class PrefabPreProcess : IPrefabProcessor
 				Object.DestroyImmediate((Object)(object)((Component)baseNetworkable).gameObject, true);
 			}
 		}
+	}
+
+	private void DisableWheelColliders(GameObject go)
+	{
+		List<WheelCollider> list = Pool.Get<List<WheelCollider>>();
+		this.FindComponents<WheelCollider>(go.transform, list);
+		foreach (WheelCollider item in list)
+		{
+			if (!((Object)(object)((Component)item).GetComponentInParent<Rigidbody>(true) != (Object)null))
+			{
+				((Collider)item).enabled = false;
+			}
+		}
+		Pool.FreeUnmanaged<WheelCollider>(ref list);
 	}
 
 	private bool TryGetHierarchyGroup(out GameObject obj)
@@ -28572,7 +30748,7 @@ public class SaveRestore : SingletonComponent<SaveRestore>
 					binaryReader.ReadChar();
 					SaveCreatedTime = Epoch.ToDateTime((long)binaryReader.ReadInt32());
 				}
-				if (binaryReader.ReadUInt32() != 287)
+				if (binaryReader.ReadUInt32() != 288)
 				{
 					if (allowOutOfDateSaves)
 					{
@@ -29186,7 +31362,7 @@ public class SaveRestore : SingletonComponent<SaveRestore>
 		writer.Write(JsonConvert.SerializeObject((object)saveExtraData));
 		writer.Write((sbyte)68);
 		writer.Write(Epoch.FromDateTime(SaveCreatedTime));
-		writer.Write(287u);
+		writer.Write(288u);
 	}
 
 	private static int WriteEntities(BinaryWriter writer)
@@ -29662,10 +31838,10 @@ using UnityEngine.Serialization;
 [CreateAssetMenu(menuName = "Rust/Density Spawn Population")]
 public class DensitySpawnPopulation : SpawnPopulationBase
 {
-	[SerializeField]
-	[FormerlySerializedAs("TargetDensity")]
 	[Tooltip("Usually per square km")]
 	[Header("Spawn Info")]
+	[SerializeField]
+	[FormerlySerializedAs("TargetDensity")]
 	public float _targetDensity = 1f;
 
 	public int ClusterSizeMin = 1;
@@ -29696,6 +31872,9 @@ public class DensitySpawnPopulation : SpawnPopulationBase
 
 	public float NpcRadiusCheckDistance;
 
+	[Tooltip("Reject spawn positions further than this from actual water (0 = disabled). Topology like Swamp can be painted on terrain with no water body, so water-dependent NPCs need a real water check.")]
+	public float MaxDistanceFromWater;
+
 	private int sumToSpawn;
 
 	public virtual float TargetDensity => _targetDensity;
@@ -29713,22 +31892,23 @@ public class DensitySpawnPopulation : SpawnPopulationBase
 		//IL_0122: Unknown result type (might be due to invalid IL or missing references)
 		//IL_012d: Unknown result type (might be due to invalid IL or missing references)
 		//IL_0132: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0298: Unknown result type (might be due to invalid IL or missing references)
 		//IL_01c9: Unknown result type (might be due to invalid IL or missing references)
 		//IL_014f: Unknown result type (might be due to invalid IL or missing references)
 		//IL_0151: Unknown result type (might be due to invalid IL or missing references)
 		//IL_015c: Unknown result type (might be due to invalid IL or missing references)
 		//IL_0161: Unknown result type (might be due to invalid IL or missing references)
-		//IL_028d: Unknown result type (might be due to invalid IL or missing references)
-		//IL_020d: Unknown result type (might be due to invalid IL or missing references)
+		//IL_02d0: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0216: Unknown result type (might be due to invalid IL or missing references)
 		//IL_017e: Unknown result type (might be due to invalid IL or missing references)
 		//IL_0180: Unknown result type (might be due to invalid IL or missing references)
 		//IL_018b: Unknown result type (might be due to invalid IL or missing references)
 		//IL_0190: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0249: Unknown result type (might be due to invalid IL or missing references)
-		//IL_025f: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0261: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0282: Unknown result type (might be due to invalid IL or missing references)
+		//IL_02c5: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0245: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0281: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0297: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0299: Unknown result type (might be due to invalid IL or missing references)
+		//IL_02ba: Unknown result type (might be due to invalid IL or missing references)
 		float num = Mathf.Max((float)ClusterSizeMax, distribution.GetGridCellArea() * GetMaximumSpawnDensity());
 		UpdateWeights(distribution, GetTargetCount(distribution));
 		int num2 = (initialSpawn ? (numToFill * SpawnAttemptsInitial) : (numToFill * SpawnAttemptsRepeating));
@@ -29762,6 +31942,10 @@ public class DensitySpawnPopulation : SpawnPopulationBase
 					{
 						((IDisposable)val)?.Dispose();
 					}
+				}
+				if (flag && MaxDistanceFromWater > 0f)
+				{
+					flag = (Object)(object)TerrainTexturing.Instance != (Object)null && TerrainTexturing.Instance.GetCoarseDistanceToShore(spawnPos) > 0f - MaxDistanceFromWater;
 				}
 				if (flag && FilterOutMonuments != null && FilterOutMonuments.Length != 0)
 				{
@@ -30777,9 +32961,9 @@ public abstract class BaseSpawnPoint : MonoBehaviour, IServerComponent
 
 	public SpawnPointType spawnPointType;
 
-	[SerializeField]
 	[Range(1f, 25f)]
 	[Tooltip("Min distance between the spawn area and any human players")]
+	[SerializeField]
 	protected float playerCheckMargin = 2f;
 
 	public static Dictionary<SpawnPointType, List<BaseSpawnPoint>> spawnPoints = new Dictionary<SpawnPointType, List<BaseSpawnPoint>>();
@@ -31436,9 +33620,9 @@ using UnityEngine;
 
 public class RadialSpawnPoint : BaseSpawnPoint
 {
-	[Header("Position Settings")]
-	[SerializeField]
 	[Tooltip("Circle to spawn within")]
+	[SerializeField]
+	[Header("Position Settings")]
 	public float radius = 10f;
 
 	[SerializeField]
@@ -31450,27 +33634,27 @@ public class RadialSpawnPoint : BaseSpawnPoint
 	[SerializeField]
 	private float yAxisOffsetMax;
 
-	[Header("Random Rotation Settings")]
 	[SerializeField]
+	[Header("Random Rotation Settings")]
 	private bool xRotationEnabled;
 
-	[SerializeField]
 	[Range(-180f, 180f)]
+	[SerializeField]
 	private float xRotationMin = -180f;
 
-	[SerializeField]
 	[Range(-180f, 180f)]
+	[SerializeField]
 	private float xRotationMax = 180f;
 
 	[SerializeField]
 	private bool yRotationEnabled = true;
 
-	[Range(-180f, 180f)]
 	[SerializeField]
+	[Range(-180f, 180f)]
 	private float yRotationMin = -180f;
 
-	[Range(-180f, 180f)]
 	[SerializeField]
+	[Range(-180f, 180f)]
 	private float yRotationMax = 180f;
 
 	[SerializeField]
@@ -31542,1716 +33726,6 @@ public class SingleSpawn : SpawnGroup
 	public void FillDelay(float delay)
 	{
 		((FacepunchBehaviour)this).Invoke((Action)Fill, delay);
-	}
-}
-
-
-using UnityEngine;
-
-public class SpaceCheckingSpawnPoint : GenericSpawnPoint
-{
-	public bool useCustomBoundsCheckMask;
-
-	public LayerMask customBoundsCheckMask;
-
-	public float customBoundsCheckScale = 1f;
-
-	public override bool IsAvailableTo(GameObject prefab)
-	{
-		//IL_0029: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0034: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0039: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0044: Unknown result type (might be due to invalid IL or missing references)
-		//IL_004a: Unknown result type (might be due to invalid IL or missing references)
-		//IL_006e: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0079: Unknown result type (might be due to invalid IL or missing references)
-		//IL_007e: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0089: Unknown result type (might be due to invalid IL or missing references)
-		if (!base.IsAvailableTo(prefab))
-		{
-			return false;
-		}
-		if (customBoundsCheckScale == 0f)
-		{
-			return true;
-		}
-		if (useCustomBoundsCheckMask)
-		{
-			return SpawnHandler.CheckBounds(prefab, ((Component)this).transform.position, ((Component)this).transform.rotation, Vector3.one * customBoundsCheckScale, customBoundsCheckMask);
-		}
-		if ((Object)(object)SingletonComponent<SpawnHandler>.Instance != (Object)null)
-		{
-			return SingletonComponent<SpawnHandler>.Instance.CheckBounds(prefab, ((Component)this).transform.position, ((Component)this).transform.rotation, Vector3.one * customBoundsCheckScale);
-		}
-		return false;
-	}
-}
-
-
-public enum SpawnGroupResetBehavior
-{
-	Default,
-	Include,
-	Exclude
-}
-
-
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using ConVar;
-using Rust.Ai.Gen2;
-using UnityEngine;
-using UnityEngine.AI;
-
-public class SpawnGroup : BaseMonoBehaviour, IServerComponent, ISpawnPointUser, ISpawnGroup
-{
-	[Serializable]
-	public class SpawnEntry
-	{
-		public GameObjectRef prefab;
-
-		public int weight = 1;
-
-		public bool mobile;
-	}
-
-	[InspectorFlags]
-	public MonumentTier Tier = (MonumentTier)(-1);
-
-	public List<SpawnEntry> prefabs;
-
-	public int maxPopulation = 5;
-
-	public int numToSpawnPerTickMin = 1;
-
-	public int numToSpawnPerTickMax = 2;
-
-	public float respawnDelayMin = 10f;
-
-	public float respawnDelayMax = 20f;
-
-	public bool wantsInitialSpawn = true;
-
-	public bool temporary;
-
-	public bool forceInitialSpawn;
-
-	public bool preventDuplicates;
-
-	public bool isSpawnerActive = true;
-
-	public bool shouldBlockSpawnedEntitySaving = true;
-
-	public SpawnGroupResetBehavior resetBehavior;
-
-	public BoxCollider setFreeIfMovedBeyond;
-
-	public string category;
-
-	[NonSerialized]
-	public MonumentInfo Monument;
-
-	public bool fillOnSpawn;
-
-	public BaseSpawnPoint[] spawnPoints;
-
-	public List<SpawnPointInstance> spawnInstances = new List<SpawnPointInstance>();
-
-	public LocalClock spawnClock = new LocalClock();
-
-	public int currentPopulation => spawnInstances.Count;
-
-	public List<SpawnPointInstance> SpawnInstances => spawnInstances;
-
-	public int ObjectsAdded { get; private set; }
-
-	public int ObjectsRemoved { get; private set; }
-
-	public int ObjectsActive => spawnInstances.Count;
-
-	public int SpawnPointCount => spawnPoints.Length;
-
-	protected virtual bool BlockSpawnedEntitySaving => shouldBlockSpawnedEntitySaving;
-
-	protected virtual bool AllowOverlappingSpawns => false;
-
-	public bool DoesGroupContainNPCs()
-	{
-		foreach (SpawnEntry prefab in prefabs)
-		{
-			GameObject val = prefab.prefab?.Get();
-			if (!((Object)(object)val == (Object)null))
-			{
-				BaseCombatEntity component = val.GetComponent<BaseCombatEntity>();
-				if (!((Object)(object)component == (Object)null) && component.IsNpc)
-				{
-					return true;
-				}
-			}
-		}
-		return false;
-	}
-
-	public virtual bool WantsInitialSpawn()
-	{
-		return wantsInitialSpawn;
-	}
-
-	public virtual bool WantsTimedSpawn()
-	{
-		return respawnDelayMax != float.PositiveInfinity;
-	}
-
-	public float GetSpawnDelta()
-	{
-		return (respawnDelayMax + respawnDelayMin) * 0.5f / SpawnHandler.PlayerScale(ConVar.Spawn.player_scale);
-	}
-
-	public float GetSpawnVariance()
-	{
-		return (respawnDelayMax - respawnDelayMin) * 0.5f / SpawnHandler.PlayerScale(ConVar.Spawn.player_scale);
-	}
-
-	protected void Awake()
-	{
-		//IL_0019: Unknown result type (might be due to invalid IL or missing references)
-		if ((Object)(object)TerrainMeta.TopologyMap == (Object)null)
-		{
-			return;
-		}
-		int topology = TerrainMeta.TopologyMap.GetTopology(((Component)this).transform.position);
-		int num = 469762048;
-		int num2 = MonumentInfo.TierToMask(Tier);
-		if (num2 == num || (num2 & topology) != 0)
-		{
-			spawnPoints = ((Component)this).GetComponentsInChildren<BaseSpawnPoint>();
-			if (WantsTimedSpawn())
-			{
-				spawnClock.Add(GetSpawnDelta(), GetSpawnVariance(), Spawn);
-			}
-			if (!temporary && Object.op_Implicit((Object)(object)SingletonComponent<SpawnHandler>.Instance))
-			{
-				SingletonComponent<SpawnHandler>.Instance.SpawnGroups.Add((ISpawnGroup)this);
-			}
-			if (forceInitialSpawn)
-			{
-				((FacepunchBehaviour)this).Invoke((Action)SpawnInitial, 1f);
-			}
-			Monument = FindMonument();
-		}
-	}
-
-	protected void OnDestroy()
-	{
-		if (Object.op_Implicit((Object)(object)SingletonComponent<SpawnHandler>.Instance))
-		{
-			SingletonComponent<SpawnHandler>.Instance.SpawnGroups.Remove((ISpawnGroup)this);
-		}
-		else if (AI.logIssues)
-		{
-			Debug.LogWarning((object)(((object)this).GetType().Name + ": SpawnHandler instance not found."));
-		}
-	}
-
-	public void Fill()
-	{
-		if (isSpawnerActive)
-		{
-			Spawn(maxPopulation);
-		}
-	}
-
-	public void Clear()
-	{
-		//IL_003e: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0043: Unknown result type (might be due to invalid IL or missing references)
-		//IL_004c: Unknown result type (might be due to invalid IL or missing references)
-		for (int num = spawnInstances.Count - 1; num >= 0; num--)
-		{
-			SpawnPointInstance spawnPointInstance = spawnInstances[num];
-			BaseEntity baseEntity = ((Component)spawnPointInstance).gameObject.ToBaseEntity();
-			if ((Object)(object)setFreeIfMovedBeyond != (Object)null)
-			{
-				Bounds bounds = ((Collider)setFreeIfMovedBeyond).bounds;
-				if (!((Bounds)(ref bounds)).Contains(((Component)baseEntity).transform.position))
-				{
-					spawnPointInstance.Retire();
-					continue;
-				}
-			}
-			if (Object.op_Implicit((Object)(object)baseEntity))
-			{
-				baseEntity.Kill();
-			}
-		}
-		spawnInstances.Clear();
-	}
-
-	public bool HasSpawnedAny()
-	{
-		return spawnInstances.Count > 0;
-	}
-
-	public bool HasSpawned(uint prefabID)
-	{
-		foreach (SpawnPointInstance spawnInstance in spawnInstances)
-		{
-			BaseEntity baseEntity = ((Component)spawnInstance).gameObject.ToBaseEntity();
-			if (Object.op_Implicit((Object)(object)baseEntity) && baseEntity.prefabID == prefabID)
-			{
-				return true;
-			}
-		}
-		return false;
-	}
-
-	public virtual void SpawnInitial()
-	{
-		if (wantsInitialSpawn && isSpawnerActive)
-		{
-			if (fillOnSpawn)
-			{
-				Spawn(maxPopulation);
-			}
-			else
-			{
-				Spawn();
-			}
-		}
-	}
-
-	public void SpawnRepeating()
-	{
-		for (int i = 0; i < spawnClock.events.Count; i++)
-		{
-			LocalClock.TimedEvent value = spawnClock.events[i];
-			if (Time.time > value.time)
-			{
-				value.delta = GetSpawnDelta();
-				value.variance = GetSpawnVariance();
-				spawnClock.events[i] = value;
-			}
-		}
-		spawnClock.Tick();
-	}
-
-	public void ObjectSpawned(SpawnPointInstance instance)
-	{
-		spawnInstances.Add(instance);
-		ObjectsAdded++;
-	}
-
-	public void ObjectRetired(SpawnPointInstance instance)
-	{
-		spawnInstances.Remove(instance);
-		ObjectsRemoved++;
-	}
-
-	public void DelayedSpawn()
-	{
-		((FacepunchBehaviour)this).Invoke((Action)Spawn, 1f);
-	}
-
-	public void Spawn()
-	{
-		if (isSpawnerActive)
-		{
-			Spawn(Random.Range(numToSpawnPerTickMin, numToSpawnPerTickMax + 1));
-		}
-	}
-
-	protected virtual void Spawn(int numToSpawn)
-	{
-		//IL_00f4: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00f6: Unknown result type (might be due to invalid IL or missing references)
-		if (!AI.scientist_spawners_enabled && prefabs != null)
-		{
-			foreach (SpawnEntry prefab2 in prefabs)
-			{
-				if (prefab2?.prefab != null && prefab2.prefab.isValid)
-				{
-					BaseEntity entity = prefab2.prefab.GetEntity();
-					if (entity is ScientistNPC || entity is TunnelDweller || entity is UnderwaterDweller || entity is ScientistNPC2)
-					{
-						((Behaviour)this).enabled = false;
-						return;
-					}
-				}
-			}
-		}
-		numToSpawn = Mathf.Min(numToSpawn, maxPopulation - currentPopulation);
-		for (int i = 0; i < numToSpawn; i++)
-		{
-			GameObjectRef prefab = GetPrefab();
-			if (prefab == null || !prefab.isValid)
-			{
-				continue;
-			}
-			Vector3 pos;
-			Quaternion rot;
-			BaseSpawnPoint spawnPoint = GetSpawnPoint(prefab, out pos, out rot);
-			if (!Object.op_Implicit((Object)(object)spawnPoint))
-			{
-				continue;
-			}
-			BaseEntity baseEntity = GameManager.server.CreateEntity(prefab.resourcePath, pos, rot, startActive: false);
-			if (Object.op_Implicit((Object)(object)baseEntity))
-			{
-				if (baseEntity.enableSaving && BlockSpawnedEntitySaving && !(spawnPoint is SpaceCheckingSpawnPoint))
-				{
-					baseEntity.enableSaving = false;
-				}
-				((Component)baseEntity).gameObject.AwakeFromInstantiate();
-				baseEntity.Spawn();
-				PostSpawnProcess(baseEntity, spawnPoint);
-				SpawnPointInstance spawnPointInstance = ((Component)baseEntity).gameObject.AddComponent<SpawnPointInstance>();
-				spawnPointInstance.parentSpawnPointUser = this;
-				spawnPointInstance.parentSpawnPoint = spawnPoint;
-				spawnPointInstance.Entity = baseEntity;
-				spawnPointInstance.Notify();
-			}
-		}
-	}
-
-	protected virtual void PostSpawnProcess(BaseEntity entity, BaseSpawnPoint spawnPoint)
-	{
-		//IL_0010: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0015: Unknown result type (might be due to invalid IL or missing references)
-		//IL_001b: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0026: Unknown result type (might be due to invalid IL or missing references)
-		//IL_003c: Unknown result type (might be due to invalid IL or missing references)
-		if (entity is HumanNPC humanNPC)
-		{
-			Vector3 position = ((Component)spawnPoint).transform.position;
-			bool num = TerrainMeta.BiomeMap.GetBiomeMaxType(position) == 16;
-			bool flag = EnvironmentManager.Check(position, EnvironmentType.TrainTunnels | EnvironmentType.UnderwaterLab | EnvironmentType.Submarine);
-			bool topology = TerrainMeta.TopologyMap.GetTopology(position, 128);
-			if (num && !flag && !topology && SingletonComponent<SpawnHandler>.Instance.JungleLoadouts != null && SingletonComponent<SpawnHandler>.Instance.JungleLoadouts.Length != 0)
-			{
-				humanNPC.EquipLoadout(SingletonComponent<SpawnHandler>.Instance.JungleLoadouts);
-			}
-		}
-	}
-
-	protected GameObjectRef GetPrefab()
-	{
-		float num = prefabs.Sum((SpawnEntry x) => (!preventDuplicates || !HasSpawned(x.prefab.resourceID)) ? x.weight : 0);
-		if (num == 0f)
-		{
-			return null;
-		}
-		float num2 = Random.Range(0f, num);
-		foreach (SpawnEntry prefab in prefabs)
-		{
-			int num3 = ((!preventDuplicates || !HasSpawned(prefab.prefab.resourceID)) ? prefab.weight : 0);
-			if ((num2 -= (float)num3) <= 0f)
-			{
-				return prefab.prefab;
-			}
-		}
-		return prefabs[prefabs.Count - 1].prefab;
-	}
-
-	protected virtual BaseSpawnPoint GetSpawnPoint(GameObjectRef prefabRef, out Vector3 pos, out Quaternion rot)
-	{
-		//IL_0001: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0006: Unknown result type (might be due to invalid IL or missing references)
-		//IL_000c: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0011: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0092: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00d2: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00d7: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00b9: Unknown result type (might be due to invalid IL or missing references)
-		pos = Vector3.zero;
-		rot = Quaternion.identity;
-		bool flag = DoesRequireNavmeshToSpawn(prefabRef.Get());
-		BaseEntity entity = ((Component)this).transform.ToBaseEntity();
-		int num = Random.Range(0, spawnPoints.Length);
-		for (int i = 0; i < spawnPoints.Length; i++)
-		{
-			BaseSpawnPoint baseSpawnPoint = spawnPoints[(num + i) % spawnPoints.Length];
-			if (!((Object)(object)baseSpawnPoint == (Object)null) && (baseSpawnPoint.IsAvailableTo(prefabRef.Get()) || AllowOverlappingSpawns) && !baseSpawnPoint.HasPlayersIntersecting())
-			{
-				baseSpawnPoint.GetLocation(out pos, out rot);
-				if (!flag)
-				{
-					return baseSpawnPoint;
-				}
-				if (RustNavMeshHelpers.SamplePositionWS(entity, pos, out var hitWS, 2f, -1))
-				{
-					pos = ((NavMeshHit)(ref hitWS)).position;
-					return baseSpawnPoint;
-				}
-				if (AI.logIssues)
-				{
-					Debug.LogWarning((object)$"Failed to spawn {prefabRef.Get()} at {pos} - no navmesh found");
-				}
-			}
-		}
-		return null;
-	}
-
-	private static bool DoesRequireNavmeshToSpawn(GameObject prefab)
-	{
-		if (!AI.npc_check_spawner_is_on_navmesh)
-		{
-			return false;
-		}
-		BaseNavigator baseNavigator = default(BaseNavigator);
-		if (prefab.TryGetComponent<BaseNavigator>(ref baseNavigator) && !baseNavigator.CanUseNavMesh)
-		{
-			return false;
-		}
-		RustNavMeshAgent rustNavMeshAgent = default(RustNavMeshAgent);
-		if (prefab.TryGetComponent<RustNavMeshAgent>(ref rustNavMeshAgent))
-		{
-			return true;
-		}
-		return false;
-	}
-
-	private MonumentInfo FindMonument()
-	{
-		return ((Component)this).GetComponentInParent<MonumentInfo>();
-	}
-
-	protected virtual void OnDrawGizmos()
-	{
-		//IL_0014: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0024: Unknown result type (might be due to invalid IL or missing references)
-		Gizmos.color = new Color(1f, 1f, 0f, 1f);
-		Gizmos.DrawSphere(((Component)this).transform.position, 0.25f);
-	}
-
-	public void SetIsSpawningActive(bool isActive)
-	{
-		isSpawnerActive = isActive;
-	}
-}
-
-
-using System;
-
-[Serializable]
-public class SpawnEntry
-{
-	public GameObjectRef prefab;
-
-	public int weight = 1;
-
-	public bool mobile;
-}
-
-
-using Rust;
-using UnityEngine;
-
-public class SpawnPointInstance : MonoBehaviour
-{
-	internal BaseEntity Entity;
-
-	public ISpawnPointUser parentSpawnPointUser;
-
-	public BaseSpawnPoint parentSpawnPoint;
-
-	public void Notify()
-	{
-		if (!parentSpawnPointUser.IsUnityNull())
-		{
-			parentSpawnPointUser.ObjectSpawned(this);
-		}
-		if (Object.op_Implicit((Object)(object)parentSpawnPoint))
-		{
-			parentSpawnPoint.ObjectSpawned(this);
-		}
-	}
-
-	public void Retire()
-	{
-		if (!parentSpawnPointUser.IsUnityNull())
-		{
-			parentSpawnPointUser.ObjectRetired(this);
-		}
-		if (Object.op_Implicit((Object)(object)parentSpawnPoint))
-		{
-			parentSpawnPoint.ObjectRetired(this);
-		}
-	}
-
-	protected void OnDestroy()
-	{
-		if (!Application.isQuitting)
-		{
-			Retire();
-		}
-	}
-}
-
-
-using UnityEngine;
-
-public class VehicleSpawnPoint : SpaceCheckingSpawnPoint
-{
-	public override void ObjectSpawned(SpawnPointInstance instance)
-	{
-		base.ObjectSpawned(instance);
-		AddStartingFuel(((Component)instance).gameObject.ToBaseEntity() as VehicleSpawner.IVehicleSpawnUser);
-	}
-
-	public static void AddStartingFuel(VehicleSpawner.IVehicleSpawnUser vehicle)
-	{
-		vehicle?.GetFuelSystem()?.AddFuel(vehicle.StartingFuelUnits());
-	}
-
-	public static void AddStartingFlares(ICanFireHelicopterFlares vehicleWithFlares)
-	{
-		if (vehicleWithFlares != null)
-		{
-			HelicopterFlares flaresInstance = vehicleWithFlares.FlaresInstance;
-			if ((Object)(object)flaresInstance != (Object)null)
-			{
-				flaresInstance.RefillFlares();
-			}
-		}
-	}
-}
-
-
-using System;
-using System.Collections;
-using System.Collections.Generic;
-using System.IO;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
-using ConVar;
-using UnityEngine;
-
-public class SpawnHandler : SingletonComponent<SpawnHandler>, SpawnPopulationBase.ISpawnHandler
-{
-	private class DebugSpawner : SpawnPopulationBase.ISpawnHandler
-	{
-		private SpawnHandler handler;
-
-		private List<(Vector3, SpawnPopulationBase.Status)> samples;
-
-		public DebugSpawner(SpawnHandler handler, List<(Vector3, SpawnPopulationBase.Status)> samples)
-		{
-			this.handler = handler;
-			this.samples = samples;
-		}
-
-		SpawnPopulationBase.Status SpawnPopulationBase.ISpawnHandler.TrySpawn(SpawnPopulationBase pop, Prefab<Spawnable> prefab, Vector3 pos, Quaternion rot, out GameObject spawned)
-		{
-			//IL_000c: Unknown result type (might be due to invalid IL or missing references)
-			//IL_000d: Unknown result type (might be due to invalid IL or missing references)
-			spawned = null;
-			if (!handler.Validate(pop, prefab, pos, rot))
-			{
-				return SpawnPopulationBase.Status.PrefabRejected;
-			}
-			if ((Object)(object)((Component)prefab.Component).GetComponent<BaseEntity>() == (Object)null || ((Component)prefab.Component).CompareTag("CannotBeCreated"))
-			{
-				return SpawnPopulationBase.Status.InvalidEntity;
-			}
-			return SpawnPopulationBase.Status.Success;
-		}
-
-		void SpawnPopulationBase.ISpawnHandler.ReportAttempt(SpawnPopulationBase.Status status, Vector3 pos)
-		{
-			//IL_0006: Unknown result type (might be due to invalid IL or missing references)
-			samples.Add((pos, status));
-		}
-	}
-
-	public float TickInterval = 60f;
-
-	public int MinSpawnsPerTick = 100;
-
-	public int MaxSpawnsPerTick = 100;
-
-	public LayerMask PlacementMask;
-
-	public LayerMask PlacementCheckMask;
-
-	public float PlacementCheckHeight = 25f;
-
-	public LayerMask RadiusCheckMask;
-
-	public float RadiusCheckDistance = 5f;
-
-	public LayerMask BoundsCheckMask;
-
-	public SpawnFilter CharacterSpawn;
-
-	public float CharacterSpawnCutoff;
-
-	public SpawnPopulationBase[] SpawnPopulations;
-
-	public SpawnDistribution[] SpawnDistributions;
-
-	public SpawnDistribution CharDistribution;
-
-	public ListHashSet<ISpawnGroup> SpawnGroups = new ListHashSet<ISpawnGroup>();
-
-	internal List<SpawnIndividual> SpawnIndividuals = new List<SpawnIndividual>();
-
-	[Header("Scientist Outfits")]
-	public PlayerInventoryProperties[] JungleLoadouts;
-
-	[ReadOnly]
-	public SpawnPopulationBase[] ConvarSpawnPopulations;
-
-	public Dictionary<SpawnPopulationBase, SpawnDistribution> population2distribution;
-
-	private bool spawnTick;
-
-	public SpawnPopulationBase[] AllSpawnPopulations;
-
-	private static int PlayerCount
-	{
-		get
-		{
-			if (ConVar.Spawn.loot_population_test <= 0)
-			{
-				return BasePlayer.activePlayerList.Count;
-			}
-			return ConVar.Spawn.loot_population_test;
-		}
-	}
-
-	protected void OnEnable()
-	{
-		AllSpawnPopulations = SpawnPopulations.Concat(ConvarSpawnPopulations).ToArray();
-		((MonoBehaviour)this).StartCoroutine(SpawnTick());
-		((MonoBehaviour)this).StartCoroutine(SpawnGroupTick());
-		((MonoBehaviour)this).StartCoroutine(SpawnIndividualTick());
-	}
-
-	public static BasePlayer.SpawnPoint GetSpawnPoint()
-	{
-		if ((Object)(object)SingletonComponent<SpawnHandler>.Instance == (Object)null || SingletonComponent<SpawnHandler>.Instance.CharDistribution == null)
-		{
-			return null;
-		}
-		BasePlayer.SpawnPoint spawnPoint = new BasePlayer.SpawnPoint();
-		if (!((WaterSystem.OceanLevel < 0.5f) ? GetSpawnPointStandard(spawnPoint) : FloodedSpawnHandler.GetSpawnPoint(spawnPoint, WaterSystem.OceanLevel + 1f)))
-		{
-			return null;
-		}
-		return spawnPoint;
-	}
-
-	public static BasePlayer.SpawnPoint GetSpawnPointForTeam(ulong teamId)
-	{
-		//IL_0021: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0028: Unknown result type (might be due to invalid IL or missing references)
-		//IL_002e: Unknown result type (might be due to invalid IL or missing references)
-		//IL_004e: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0054: Unknown result type (might be due to invalid IL or missing references)
-		if (teamId == 0L)
-		{
-			return null;
-		}
-		RelationshipManager.PlayerTeam playerTeam = RelationshipManager.ServerInstance.FindTeam(teamId);
-		if (playerTeam == null)
-		{
-			return null;
-		}
-		if (!playerTeam.usePartySpawn)
-		{
-			return null;
-		}
-		if (playerTeam.firstSpawnLocation == default(Vector3))
-		{
-			return null;
-		}
-		float num = 100000f;
-		BasePlayer.SpawnPoint spawnPoint = null;
-		for (int i = 0; i < party.maxpartyspawnattempts; i++)
-		{
-			BasePlayer.SpawnPoint spawnPoint2 = GetSpawnPoint();
-			float num2 = Vector3Ex.Distance2D(spawnPoint2.pos, playerTeam.firstSpawnLocation);
-			if (num2 < num || spawnPoint == null)
-			{
-				spawnPoint = spawnPoint2;
-				num = num2;
-			}
-			if (num2 < (float)party.maxpartyspawndistance)
-			{
-				return spawnPoint2;
-			}
-		}
-		return spawnPoint;
-	}
-
-	private static bool GetSpawnPointStandard(BasePlayer.SpawnPoint spawnPoint)
-	{
-		//IL_006c: Unknown result type (might be due to invalid IL or missing references)
-		for (int i = 0; i < 60; i++)
-		{
-			if (!SingletonComponent<SpawnHandler>.Instance.CharDistribution.Sample(out spawnPoint.pos, out spawnPoint.rot, alignToNormal: false, 0f, 0.5f, SingletonComponent<SpawnHandler>.Instance.CharacterSpawn, SingletonComponent<SpawnHandler>.Instance.CharacterSpawnCutoff))
-			{
-				continue;
-			}
-			bool flag = true;
-			if ((Object)(object)TerrainMeta.Path != (Object)null)
-			{
-				foreach (MonumentInfo monument in TerrainMeta.Path.Monuments)
-				{
-					if (monument.Distance(spawnPoint.pos) < 50f)
-					{
-						flag = false;
-						break;
-					}
-				}
-			}
-			if (flag)
-			{
-				return true;
-			}
-		}
-		return false;
-	}
-
-	public void UpdateDistributions()
-	{
-		//IL_002c: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0031: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0032: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0037: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0121: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0122: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0087: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0088: Unknown result type (might be due to invalid IL or missing references)
-		if (World.Size == 0)
-		{
-			return;
-		}
-		SpawnDistributions = new SpawnDistribution[AllSpawnPopulations.Length];
-		population2distribution = new Dictionary<SpawnPopulationBase, SpawnDistribution>();
-		Vector3 size = TerrainMeta.Size;
-		Vector3 position = TerrainMeta.Position;
-		int populationRes = Mathf.NextPowerOfTwo((int)((float)World.Size * 0.25f));
-		for (int i = 0; i < AllSpawnPopulations.Length; i++)
-		{
-			SpawnPopulationBase spawnPopulationBase = AllSpawnPopulations[i];
-			if (spawnPopulationBase == null)
-			{
-				Debug.LogError((object)"Spawn handler contains null spawn population.");
-				continue;
-			}
-			byte[] baseMapValues = spawnPopulationBase.GetBaseMapValues(populationRes);
-			SpawnDistribution value = (SpawnDistributions[i] = new SpawnDistribution(this, baseMapValues, position, size));
-			population2distribution.Add(spawnPopulationBase, value);
-		}
-		int char_res = Mathf.NextPowerOfTwo((int)((float)World.Size * 0.5f));
-		byte[] map = new byte[char_res * char_res];
-		SpawnFilter filter = CharacterSpawn;
-		float cutoff = CharacterSpawnCutoff;
-		Parallel.For(0, char_res, delegate(int z)
-		{
-			for (int j = 0; j < char_res; j++)
-			{
-				float normX = ((float)j + 0.5f) / (float)char_res;
-				float normZ = ((float)z + 0.5f) / (float)char_res;
-				float factor = filter.GetFactor(normX, normZ);
-				map[z * char_res + j] = (byte)((factor > cutoff) ? (255f * factor) : 0f);
-			}
-		});
-		CharDistribution = new SpawnDistribution(this, map, position, size);
-	}
-
-	public void FillPopulations()
-	{
-		if (SpawnDistributions == null)
-		{
-			return;
-		}
-		for (int i = 0; i < AllSpawnPopulations.Length; i++)
-		{
-			if (!(AllSpawnPopulations[i] == null))
-			{
-				SpawnInitial(AllSpawnPopulations[i], SpawnDistributions[i]);
-			}
-		}
-	}
-
-	public void DeletePopulation(string name)
-	{
-		SpawnPopulationBase[] allSpawnPopulations = AllSpawnPopulations;
-		foreach (SpawnPopulationBase spawnPopulationBase in allSpawnPopulations)
-		{
-			if (((Object)spawnPopulationBase).name == name)
-			{
-				spawnPopulationBase.DeleteEntities();
-				break;
-			}
-		}
-	}
-
-	public void DeleteAllPopulations()
-	{
-		SpawnPopulationBase[] allSpawnPopulations = AllSpawnPopulations;
-		for (int i = 0; i < allSpawnPopulations.Length; i++)
-		{
-			allSpawnPopulations[i].DeleteEntities();
-		}
-	}
-
-	public void FillGroups()
-	{
-		for (int i = 0; i < SpawnGroups.Count; i++)
-		{
-			SpawnGroups[i].Fill();
-		}
-	}
-
-	public void ClearGroups()
-	{
-		for (int i = 0; i < SpawnGroups.Count; i++)
-		{
-			SpawnGroups[i].Clear();
-		}
-	}
-
-	public void ResetGroups()
-	{
-		ClearGroups();
-		((FacepunchBehaviour)this).Invoke((Action)FillGroups, 0f);
-	}
-
-	public void FillIndividuals()
-	{
-		//IL_0020: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0026: Unknown result type (might be due to invalid IL or missing references)
-		for (int i = 0; i < SpawnIndividuals.Count; i++)
-		{
-			SpawnIndividual spawnIndividual = SpawnIndividuals[i];
-			Spawn(Prefab.Load<Spawnable>(spawnIndividual.PrefabID, (GameManager)null, (PrefabAttribute.Library)null), spawnIndividual.Position, spawnIndividual.Rotation);
-		}
-	}
-
-	public void InitialSpawn()
-	{
-		if (ConVar.Spawn.respawn_populations && SpawnDistributions != null)
-		{
-			for (int i = 0; i < AllSpawnPopulations.Length; i++)
-			{
-				if (!(AllSpawnPopulations[i] == null))
-				{
-					SpawnInitial(AllSpawnPopulations[i], SpawnDistributions[i]);
-				}
-			}
-		}
-		if (ConVar.Spawn.respawn_groups)
-		{
-			for (int j = 0; j < SpawnGroups.Count; j++)
-			{
-				SpawnGroups[j].SpawnInitial();
-			}
-		}
-	}
-
-	public void StartSpawnTick()
-	{
-		spawnTick = true;
-	}
-
-	private IEnumerator SpawnTick()
-	{
-		while (true)
-		{
-			yield return CoroutineEx.waitForEndOfFrame;
-			if (!spawnTick || !ConVar.Spawn.respawn_populations)
-			{
-				continue;
-			}
-			yield return CoroutineEx.waitForSeconds(ConVar.Spawn.tick_populations);
-			for (int i = 0; i < AllSpawnPopulations.Length; i++)
-			{
-				SpawnPopulationBase spawnPopulationBase = AllSpawnPopulations[i];
-				if (spawnPopulationBase == null)
-				{
-					continue;
-				}
-				SpawnDistribution spawnDistribution = SpawnDistributions[i];
-				if (spawnDistribution == null)
-				{
-					continue;
-				}
-				try
-				{
-					if (SpawnDistributions != null)
-					{
-						SpawnRepeating(spawnPopulationBase, spawnDistribution);
-					}
-				}
-				catch (Exception ex)
-				{
-					Debug.LogError((object)ex);
-				}
-				yield return CoroutineEx.waitForEndOfFrame;
-			}
-		}
-	}
-
-	private IEnumerator SpawnGroupTick()
-	{
-		while (true)
-		{
-			yield return CoroutineEx.waitForEndOfFrame;
-			if (!spawnTick || !ConVar.Spawn.respawn_groups)
-			{
-				continue;
-			}
-			yield return CoroutineEx.waitForSeconds(1f);
-			for (int i = 0; i < SpawnGroups.Count; i++)
-			{
-				ISpawnGroup spawnGroup = SpawnGroups[i];
-				if (spawnGroup != null)
-				{
-					try
-					{
-						spawnGroup.SpawnRepeating();
-					}
-					catch (Exception ex)
-					{
-						Debug.LogError((object)ex);
-					}
-					yield return CoroutineEx.waitForEndOfFrame;
-				}
-			}
-		}
-	}
-
-	private IEnumerator SpawnIndividualTick()
-	{
-		while (true)
-		{
-			yield return CoroutineEx.waitForEndOfFrame;
-			if (!spawnTick || !ConVar.Spawn.respawn_individuals)
-			{
-				continue;
-			}
-			yield return CoroutineEx.waitForSeconds(ConVar.Spawn.tick_individuals);
-			for (int i = 0; i < SpawnIndividuals.Count; i++)
-			{
-				SpawnIndividual spawnIndividual = SpawnIndividuals[i];
-				try
-				{
-					Spawn(Prefab.Load<Spawnable>(spawnIndividual.PrefabID, (GameManager)null, (PrefabAttribute.Library)null), spawnIndividual.Position, spawnIndividual.Rotation);
-				}
-				catch (Exception ex)
-				{
-					Debug.LogError((object)ex);
-				}
-				yield return CoroutineEx.waitForEndOfFrame;
-			}
-		}
-	}
-
-	public void SpawnInitial(SpawnPopulationBase population, SpawnDistribution distribution)
-	{
-		int targetCount = population.GetTargetCount(distribution);
-		int count = distribution.Count;
-		int numToFill = targetCount - count;
-		population.Fill(this, distribution, numToFill, initialSpawn: true);
-	}
-
-	public void SpawnRepeating(SpawnPopulationBase population, SpawnDistribution distribution)
-	{
-		int targetCount = population.GetTargetCount(distribution);
-		int count = distribution.Count;
-		int num = targetCount - count;
-		num = Mathf.RoundToInt((float)num * population.GetCurrentSpawnRate());
-		num = Random.Range(Mathf.Min(num, MinSpawnsPerTick), Mathf.Min(num, MaxSpawnsPerTick));
-		population.Fill(this, distribution, num, initialSpawn: false);
-	}
-
-	public int EstimateMaxPopToSpawn(int toSpawn, SpawnPopulationBase pop)
-	{
-		toSpawn = Mathf.RoundToInt((float)toSpawn * pop.GetCurrentSpawnRate());
-		return Mathf.Min(toSpawn, MaxSpawnsPerTick);
-	}
-
-	public bool Validate(SpawnPopulationBase population, Prefab<Spawnable> prefab, Vector3 pos, Quaternion rot)
-	{
-		//IL_002a: Unknown result type (might be due to invalid IL or missing references)
-		//IL_002f: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0059: Unknown result type (might be due to invalid IL or missing references)
-		//IL_005a: Unknown result type (might be due to invalid IL or missing references)
-		//IL_005c: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0068: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0069: Unknown result type (might be due to invalid IL or missing references)
-		//IL_006b: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0078: Unknown result type (might be due to invalid IL or missing references)
-		//IL_007a: Unknown result type (might be due to invalid IL or missing references)
-		//IL_008c: Unknown result type (might be due to invalid IL or missing references)
-		//IL_008d: Unknown result type (might be due to invalid IL or missing references)
-		//IL_008f: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00a0: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00a1: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00a3: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00ae: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00af: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00b1: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00b3: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00ce: Unknown result type (might be due to invalid IL or missing references)
-		if (prefab == null)
-		{
-			return false;
-		}
-		if ((Object)(object)prefab.Component == (Object)null)
-		{
-			Debug.LogError((object)("[Spawn] Missing component 'Spawnable' on " + prefab.Name));
-			return false;
-		}
-		Vector3 scale = Vector3.one;
-		DecorComponent[] components = PrefabAttribute.server.FindAll<DecorComponent>(prefab.ID);
-		prefab.Object.transform.ApplyDecorComponents(components, ref pos, ref rot, ref scale);
-		if (!prefab.ApplyTerrainFilters(pos, rot, scale))
-		{
-			return false;
-		}
-		if (!prefab.ApplyWaterChecks(pos, rot, scale))
-		{
-			return false;
-		}
-		if (!prefab.ApplyTerrainAnchors(ref pos, rot, scale, TerrainAnchorMode.MinimizeMovement, population.GetSpawnFilter()))
-		{
-			return false;
-		}
-		if (!prefab.ApplyTerrainChecks(pos, rot, scale, population.GetSpawnFilter()))
-		{
-			return false;
-		}
-		if (!prefab.ApplyEnvironmentVolumeChecks(pos, rot, scale))
-		{
-			return false;
-		}
-		if (!prefab.ApplyBoundsChecks(pos, rot, scale, BoundsCheckMask))
-		{
-			return false;
-		}
-		if (!prefab.Component.CanSpawnInSafeZone && IsInSafeZone(pos))
-		{
-			return false;
-		}
-		return true;
-	}
-
-	private static bool IsInSafeZone(Vector3 pos)
-	{
-		//IL_002b: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0030: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0033: Unknown result type (might be due to invalid IL or missing references)
-		//IL_003c: Unknown result type (might be due to invalid IL or missing references)
-		//IL_003d: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0042: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0043: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0048: Unknown result type (might be due to invalid IL or missing references)
-		foreach (TriggerSafeZone allSafeZone in TriggerSafeZone.allSafeZones)
-		{
-			Collider val = allSafeZone?.triggerCollider;
-			if ((Object)(object)val == (Object)null)
-			{
-				continue;
-			}
-			Bounds bounds = val.bounds;
-			if (((Bounds)(ref bounds)).Contains(pos))
-			{
-				Vector3 val2 = val.ClosestPoint(pos) - pos;
-				if (((Vector3)(ref val2)).sqrMagnitude <= 0.0001f)
-				{
-					return true;
-				}
-			}
-		}
-		return false;
-	}
-
-	void SpawnPopulationBase.ISpawnHandler.ReportAttempt(SpawnPopulationBase.Status status, Vector3 pos)
-	{
-	}
-
-	SpawnPopulationBase.Status SpawnPopulationBase.ISpawnHandler.TrySpawn(SpawnPopulationBase population, Prefab<Spawnable> prefab, Vector3 pos, Quaternion rot, out GameObject spawned)
-	{
-		//IL_0007: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0008: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0031: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0032: Unknown result type (might be due to invalid IL or missing references)
-		spawned = null;
-		if (!Validate(population, prefab, pos, rot))
-		{
-			return SpawnPopulationBase.Status.PrefabRejected;
-		}
-		if (Global.developer > 1)
-		{
-			Debug.Log((object)("[Spawn] Spawning " + prefab.Name));
-		}
-		BaseEntity baseEntity = prefab.SpawnEntity(pos, rot, active: false);
-		if ((Object)(object)baseEntity == (Object)null)
-		{
-			Debug.LogWarning((object)("[Spawn] Couldn't create prefab as entity - " + prefab.Name));
-			return SpawnPopulationBase.Status.InvalidEntity;
-		}
-		Spawnable component = ((Component)baseEntity).GetComponent<Spawnable>();
-		if (component.Population != population)
-		{
-			component.Population = population;
-		}
-		((Component)baseEntity).gameObject.AwakeFromInstantiate();
-		baseEntity.Spawn();
-		spawned = ((Component)baseEntity).gameObject;
-		return SpawnPopulationBase.Status.Success;
-	}
-
-	private GameObject Spawn(Prefab<Spawnable> prefab, Vector3 pos, Quaternion rot)
-	{
-		//IL_0007: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0008: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0009: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0018: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0019: Unknown result type (might be due to invalid IL or missing references)
-		if (!CheckBounds(prefab.Object, pos, rot, Vector3.one))
-		{
-			return null;
-		}
-		BaseEntity baseEntity = prefab.SpawnEntity(pos, rot);
-		if ((Object)(object)baseEntity == (Object)null)
-		{
-			Debug.LogWarning((object)("[Spawn] Couldn't create prefab as entity - " + prefab.Name));
-			return null;
-		}
-		baseEntity.Spawn();
-		return ((Component)baseEntity).gameObject;
-	}
-
-	public bool CheckBounds(GameObject gameObject, Vector3 pos, Quaternion rot, Vector3 scale)
-	{
-		//IL_0001: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0002: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0003: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0006: Unknown result type (might be due to invalid IL or missing references)
-		return CheckBounds(gameObject, pos, rot, scale, BoundsCheckMask);
-	}
-
-	public static bool CheckBounds(GameObject gameObject, Vector3 pos, Quaternion rot, Vector3 scale, LayerMask mask)
-	{
-		//IL_000b: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0024: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0025: Unknown result type (might be due to invalid IL or missing references)
-		//IL_002c: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0031: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0032: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0037: Unknown result type (might be due to invalid IL or missing references)
-		//IL_003c: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0047: Unknown result type (might be due to invalid IL or missing references)
-		//IL_004c: Unknown result type (might be due to invalid IL or missing references)
-		//IL_004d: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0052: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0053: Unknown result type (might be due to invalid IL or missing references)
-		if ((Object)(object)gameObject == (Object)null)
-		{
-			return true;
-		}
-		if (LayerMask.op_Implicit(mask) != 0)
-		{
-			BaseEntity component = gameObject.GetComponent<BaseEntity>();
-			if ((Object)(object)component != (Object)null && Physics.CheckBox(pos + rot * Vector3.Scale(((Bounds)(ref component.bounds)).center, scale), Vector3.Scale(((Bounds)(ref component.bounds)).extents, scale), rot, LayerMask.op_Implicit(mask)))
-			{
-				return false;
-			}
-		}
-		return true;
-	}
-
-	public void EnforceLimits(bool forceAll = false)
-	{
-		if (SpawnDistributions == null)
-		{
-			return;
-		}
-		for (int i = 0; i < AllSpawnPopulations.Length; i++)
-		{
-			if (!(AllSpawnPopulations[i] == null))
-			{
-				SpawnPopulationBase spawnPopulationBase = AllSpawnPopulations[i];
-				SpawnDistribution distribution = SpawnDistributions[i];
-				if (forceAll || spawnPopulationBase.EnforcePopulationLimits)
-				{
-					EnforceLimits(spawnPopulationBase, distribution);
-				}
-			}
-		}
-	}
-
-	public void EnforceLimits(SpawnPopulationBase population, SpawnDistribution distribution)
-	{
-		int targetCount = population.GetTargetCount(distribution);
-		Spawnable[] array = FindAll(population);
-		if (array.Length <= targetCount)
-		{
-			return;
-		}
-		Debug.Log((object)(((object)population)?.ToString() + " has " + array.Length + " objects, but max allowed is " + targetCount));
-		int count = array.Length - targetCount;
-		Debug.Log((object)(" - deleting " + count + " objects"));
-		foreach (Spawnable item in array.Take(count))
-		{
-			BaseEntity baseEntity = ((Component)item).gameObject.ToBaseEntity();
-			if (baseEntity.IsValid())
-			{
-				baseEntity.Kill();
-			}
-			else
-			{
-				GameManager.Destroy(((Component)item).gameObject);
-			}
-		}
-	}
-
-	public Spawnable[] FindAll(SpawnPopulationBase population)
-	{
-		return (from x in Object.FindObjectsByType<Spawnable>((FindObjectsSortMode)0)
-			where ((Component)x).gameObject.activeInHierarchy && x.Population == population
-			select x).ToArray();
-	}
-
-	public void AddRespawn(SpawnIndividual individual)
-	{
-		SpawnIndividuals.Add(individual);
-	}
-
-	public void AddInstance(Spawnable spawnable)
-	{
-		if (spawnable.Population != null)
-		{
-			spawnable.Population.AddInstance(spawnable);
-			if (!population2distribution.TryGetValue(spawnable.Population, out var value))
-			{
-				Debug.LogWarning((object)("[SpawnHandler] trying to add instance to invalid population: " + (object)spawnable.Population));
-			}
-			else
-			{
-				value.AddInstance(spawnable);
-			}
-		}
-	}
-
-	public void RemoveInstance(Spawnable spawnable)
-	{
-		if (spawnable.Population != null)
-		{
-			spawnable.Population.RemoveInstance(spawnable);
-			if (!population2distribution.TryGetValue(spawnable.Population, out var value))
-			{
-				Debug.LogWarning((object)("[SpawnHandler] trying to remove instance from invalid population: " + (object)spawnable.Population));
-			}
-			else
-			{
-				value.RemoveInstance(spawnable);
-			}
-		}
-	}
-
-	public static float PlayerFraction()
-	{
-		float num = Mathf.Max(Server.maxplayers, 1);
-		if (ConVar.Spawn.population_cap_rate > 0 && Server.maxplayers > ConVar.Spawn.population_cap_rate)
-		{
-			num = ConVar.Spawn.population_cap_rate;
-		}
-		return Mathf.Clamp01((float)PlayerCount / num);
-	}
-
-	public static float PlayerLerp(float min, float max)
-	{
-		return Mathf.Lerp(min, max, PlayerFraction());
-	}
-
-	public static float PlayerExcess()
-	{
-		float num = Mathf.Max(ConVar.Spawn.player_base, 1f);
-		float num2 = PlayerCount;
-		if (num2 > (float)ConVar.Spawn.population_cap_rate && ConVar.Spawn.population_cap_rate > 0)
-		{
-			num2 = ConVar.Spawn.population_cap_rate;
-		}
-		if (num2 <= num)
-		{
-			return 0f;
-		}
-		return (num2 - num) / num;
-	}
-
-	public static float PlayerScale(float scalar)
-	{
-		return Mathf.Max(1f, PlayerExcess() * scalar);
-	}
-
-	public void DumpReport(string filename)
-	{
-		File.AppendAllText(filename, "\r\n\r\nSpawnHandler Report:\r\n\r\n" + GetReport());
-	}
-
-	public string GetReport(bool detailed = true, string filter = null)
-	{
-		StringBuilder stringBuilder = new StringBuilder();
-		if (AllSpawnPopulations == null)
-		{
-			stringBuilder.AppendLine("Spawn population array is null.");
-		}
-		if (SpawnDistributions == null)
-		{
-			stringBuilder.AppendLine("Spawn distribution array is null.");
-		}
-		if (AllSpawnPopulations != null && SpawnDistributions != null)
-		{
-			for (int i = 0; i < AllSpawnPopulations.Length; i++)
-			{
-				if (AllSpawnPopulations[i] == null)
-				{
-					continue;
-				}
-				SpawnPopulationBase spawnPopulationBase = AllSpawnPopulations[i];
-				SpawnDistribution spawnDistribution = SpawnDistributions[i];
-				if (filter != null && !((Object)spawnPopulationBase).name.Contains(filter))
-				{
-					continue;
-				}
-				if (spawnPopulationBase != null)
-				{
-					spawnPopulationBase.GetReportString(stringBuilder, detailed);
-					if (spawnDistribution != null)
-					{
-						int count = spawnDistribution.Count;
-						int targetCount = spawnPopulationBase.GetTargetCount(spawnDistribution);
-						stringBuilder.AppendLine("- Population: " + count + "/" + targetCount);
-						int toSpawn = targetCount - count;
-						toSpawn = EstimateMaxPopToSpawn(toSpawn, spawnPopulationBase);
-						toSpawn = spawnPopulationBase.EstimateMaxAttempts(toSpawn);
-						stringBuilder.Append("- Max attempts for next tick: ");
-						stringBuilder.Append(toSpawn);
-						stringBuilder.AppendLine();
-						int failedFillsInARow = spawnPopulationBase.FailedFillsInARow;
-						if (failedFillsInARow > 0)
-						{
-							stringBuilder.Append("- Failed to reach target population in a row: ");
-							stringBuilder.Append(failedFillsInARow);
-							stringBuilder.Append("(Recent average spawns: ");
-							stringBuilder.Append(spawnPopulationBase.AvgSpawnCount);
-							stringBuilder.AppendLine(")");
-						}
-					}
-					else
-					{
-						stringBuilder.AppendLine("- Distribution #" + i + " is not set.");
-					}
-				}
-				else
-				{
-					stringBuilder.AppendLine("Population #" + i + " is not set.");
-				}
-				stringBuilder.AppendLine();
-			}
-		}
-		return stringBuilder.ToString();
-	}
-
-	public void GenerateDebugMaps(string name, int simCount, out int spawned, out int attempts)
-	{
-		//IL_00d8: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00dd: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00e6: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00e8: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00ff: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0104: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0109: Unknown result type (might be due to invalid IL or missing references)
-		//IL_010e: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0110: Unknown result type (might be due to invalid IL or missing references)
-		//IL_011f: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0152: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0157: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0161: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0166: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0173: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0178: Unknown result type (might be due to invalid IL or missing references)
-		//IL_016a: Unknown result type (might be due to invalid IL or missing references)
-		//IL_016f: Unknown result type (might be due to invalid IL or missing references)
-		//IL_017c: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0181: Unknown result type (might be due to invalid IL or missing references)
-		//IL_01c0: Unknown result type (might be due to invalid IL or missing references)
-		//IL_01d6: Unknown result type (might be due to invalid IL or missing references)
-		//IL_01ec: Unknown result type (might be due to invalid IL or missing references)
-		//IL_01b5: Unknown result type (might be due to invalid IL or missing references)
-		//IL_01ba: Unknown result type (might be due to invalid IL or missing references)
-		spawned = 0;
-		attempts = 0;
-		SpawnPopulationBase spawnPopulationBase = null;
-		SpawnDistribution distribution = null;
-		for (int i = 0; i < AllSpawnPopulations.Length; i++)
-		{
-			SpawnPopulationBase spawnPopulationBase2 = AllSpawnPopulations[i];
-			if (((Object)spawnPopulationBase2).name == name)
-			{
-				spawnPopulationBase = spawnPopulationBase2;
-				distribution = SpawnDistributions[i];
-				break;
-			}
-		}
-		if (spawnPopulationBase == null)
-		{
-			return;
-		}
-		int num = Mathf.NextPowerOfTwo((int)((float)World.Size * 0.25f));
-		ExportToPNG(spawnPopulationBase.GetBaseMapValues(num), num, (TextureFormat)63, ((Object)spawnPopulationBase).name + ".png");
-		byte[] array = new byte[World.Size * World.Size * 3];
-		List<(Vector3, SpawnPopulationBase.Status)> list = new List<(Vector3, SpawnPopulationBase.Status)>(simCount);
-		DebugSpawner spawnHandler = new DebugSpawner(this, list);
-		spawnPopulationBase.SubFill(spawnHandler, distribution, simCount, initialSpawn: false);
-		attempts = list.Count;
-		Color val2 = default(Color);
-		foreach (var item3 in list)
-		{
-			Vector3 item = item3.Item1;
-			SpawnPopulationBase.Status item2 = item3.Item2;
-			Vector2i val = (Vector2i)(Vector3Ex.XZ2D(item) + new Vector2((float)(World.Size / 2), (float)(World.Size / 2)));
-			long num2 = (val.y * World.Size + val.x) * 3;
-			switch (item2)
-			{
-			case SpawnPopulationBase.Status.Success:
-				val2 = Color.green;
-				spawned++;
-				break;
-			case SpawnPopulationBase.Status.InvalidSample:
-				val2 = Color.red;
-				break;
-			case SpawnPopulationBase.Status.PrefabRejected:
-				val2 = Color.yellow;
-				break;
-			case SpawnPopulationBase.Status.PrefabPickFailed:
-				val2 = Color.blue;
-				break;
-			case SpawnPopulationBase.Status.InvalidEntity:
-				val2 = Color.cyan;
-				break;
-			case SpawnPopulationBase.Status.InvalidSpawnPosOverride:
-				((Color)(ref val2))..ctor(1f, 0.41f, 0f);
-				break;
-			case SpawnPopulationBase.Status.DensityOverflow:
-				((Color)(ref val2))..ctor(1f, 0f, 0.91f);
-				break;
-			default:
-				val2 = Color.magenta;
-				break;
-			}
-			array[num2] = (byte)(val2.r * 255f);
-			array[num2 + 1] = (byte)(val2.g * 255f);
-			array[num2 + 2] = (byte)(val2.b * 255f);
-		}
-		ExportToPNG(array, (int)World.Size, (TextureFormat)3, ((Object)spawnPopulationBase).name + "-samples.png");
-	}
-
-	public int GenerateOreNodeMap(out int inSafeZone)
-	{
-		//IL_0036: Unknown result type (might be due to invalid IL or missing references)
-		//IL_003b: Unknown result type (might be due to invalid IL or missing references)
-		//IL_004e: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0047: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0053: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0055: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0062: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0067: Unknown result type (might be due to invalid IL or missing references)
-		//IL_006c: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0071: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0073: Unknown result type (might be due to invalid IL or missing references)
-		//IL_007c: Unknown result type (might be due to invalid IL or missing references)
-		//IL_008d: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00a3: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00b9: Unknown result type (might be due to invalid IL or missing references)
-		//IL_011c: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0121: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0127: Unknown result type (might be due to invalid IL or missing references)
-		//IL_012e: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0138: Unknown result type (might be due to invalid IL or missing references)
-		int size = (int)World.Size;
-		byte[] array = new byte[size * size * 3];
-		inSafeZone = 0;
-		int num = 0;
-		foreach (OreResourceEntity item in BaseNetworkable.serverEntities.OfType<OreResourceEntity>())
-		{
-			Vector3 position = ((Component)item).transform.position;
-			bool flag = IsInSafeZone(position);
-			Color val = (flag ? Color.red : Color.green);
-			Vector2i val2 = (Vector2i)(Vector3Ex.XZ2D(position) + new Vector2((float)(size / 2), (float)(size / 2)));
-			long num2 = (val2.y * size + val2.x) * 3;
-			array[num2] = (byte)(val.r * 255f);
-			array[num2 + 1] = (byte)(val.g * 255f);
-			array[num2 + 2] = (byte)(val.b * 255f);
-			num++;
-			if (flag)
-			{
-				inSafeZone++;
-			}
-		}
-		foreach (TriggerSafeZone allSafeZone in TriggerSafeZone.allSafeZones)
-		{
-			Collider val3 = allSafeZone?.triggerCollider;
-			if (!((Object)(object)val3 == (Object)null))
-			{
-				Bounds bounds = val3.bounds;
-				PlotCircle(array, size, ((Bounds)(ref bounds)).center, ((Bounds)(ref bounds)).extents.x, Color.blue);
-			}
-		}
-		ExportToPNG(array, size, (TextureFormat)3, "ore-nodes.png");
-		return num;
-	}
-
-	private static void ExportToPNG(byte[] data, int size, TextureFormat format, string filename)
-	{
-		//IL_0002: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0004: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0009: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0012: Unknown result type (might be due to invalid IL or missing references)
-		//IL_001d: Expected O, but got Unknown
-		Texture2D val = new Texture2D(size, size, format, false);
-		val.SetPixelData<byte>(data, 0, 0);
-		val.Apply();
-		byte[] bytes = ImageConversion.EncodeToPNG(val);
-		if (!Directory.Exists(Server.rootFolder + "/debug"))
-		{
-			Directory.CreateDirectory(Server.rootFolder + "/debug");
-		}
-		File.WriteAllBytes(Server.rootFolder + "/debug/" + filename, bytes);
-	}
-
-	private static void PlotCircle(byte[] pixels, int size, Vector3 worldCenter, float worldRadius, Color color)
-	{
-		//IL_0000: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0001: Unknown result type (might be due to invalid IL or missing references)
-		//IL_000e: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0013: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0018: Unknown result type (might be due to invalid IL or missing references)
-		//IL_001d: Unknown result type (might be due to invalid IL or missing references)
-		//IL_004a: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0062: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00a1: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00b7: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00cd: Unknown result type (might be due to invalid IL or missing references)
-		Vector2i val = (Vector2i)(Vector3Ex.XZ2D(worldCenter) + new Vector2((float)(size / 2), (float)(size / 2)));
-		int num = Mathf.RoundToInt(worldRadius);
-		int num2 = Mathf.Max(64, num * 4);
-		for (int i = 0; i < num2; i++)
-		{
-			float num3 = (float)i / (float)num2 * MathF.PI * 2f;
-			int num4 = val.x + Mathf.RoundToInt(Mathf.Cos(num3) * (float)num);
-			int num5 = val.y + Mathf.RoundToInt(Mathf.Sin(num3) * (float)num);
-			if (num4 >= 0 && num4 < size && num5 >= 0 && num5 < size)
-			{
-				long num6 = ((long)num5 * (long)size + num4) * 3;
-				pixels[num6] = (byte)(color.r * 255f);
-				pixels[num6 + 1] = (byte)(color.g * 255f);
-				pixels[num6 + 2] = (byte)(color.b * 255f);
-			}
-		}
-	}
-}
-
-
-using System.Collections.Generic;
-using UnityEngine;
-
-private class DebugSpawner : SpawnPopulationBase.ISpawnHandler
-{
-	private SpawnHandler handler;
-
-	private List<(Vector3, SpawnPopulationBase.Status)> samples;
-
-	public DebugSpawner(SpawnHandler handler, List<(Vector3, SpawnPopulationBase.Status)> samples)
-	{
-		this.handler = handler;
-		this.samples = samples;
-	}
-
-	SpawnPopulationBase.Status SpawnPopulationBase.ISpawnHandler.TrySpawn(SpawnPopulationBase pop, Prefab<Spawnable> prefab, Vector3 pos, Quaternion rot, out GameObject spawned)
-	{
-		//IL_000c: Unknown result type (might be due to invalid IL or missing references)
-		//IL_000d: Unknown result type (might be due to invalid IL or missing references)
-		spawned = null;
-		if (!handler.Validate(pop, prefab, pos, rot))
-		{
-			return SpawnPopulationBase.Status.PrefabRejected;
-		}
-		if ((Object)(object)((Component)prefab.Component).GetComponent<BaseEntity>() == (Object)null || ((Component)prefab.Component).CompareTag("CannotBeCreated"))
-		{
-			return SpawnPopulationBase.Status.InvalidEntity;
-		}
-		return SpawnPopulationBase.Status.Success;
-	}
-
-	void SpawnPopulationBase.ISpawnHandler.ReportAttempt(SpawnPopulationBase.Status status, Vector3 pos)
-	{
-		//IL_0006: Unknown result type (might be due to invalid IL or missing references)
-		samples.Add((pos, status));
-	}
-}
-
-
-using UnityEngine;
-
-public abstract class StripComponents<T> : BaseMonoBehaviour, IPrefabPreProcess where T : Component
-{
-	public bool CanRunDuringBundling { get; } = true;
-
-	public void PreProcess(IPrefabProcessor preProcess, GameObject rootObj, string name, bool serverside, bool clientside, bool bundling)
-	{
-	}
-}
-
-
-using System.Collections.Generic;
-using Facepunch;
-using UnityEngine;
-
-public class StripRig : MonoBehaviour, IPrefabPreProcess
-{
-	public Transform root;
-
-	public bool fromClient;
-
-	public bool fromServer;
-
-	bool IPrefabPreProcess.CanRunDuringBundling => true;
-
-	public void PreProcess(IPrefabProcessor preProcess, GameObject rootObj, string name, bool serverside, bool clientside, bool bundling)
-	{
-		if (Object.op_Implicit((Object)(object)root) && ((serverside && fromServer) || (clientside && fromClient)))
-		{
-			SkinnedMeshRenderer component = ((Component)this).GetComponent<SkinnedMeshRenderer>();
-			Strip(preProcess, component);
-		}
-		preProcess.RemoveComponent((Component)(object)this);
-	}
-
-	public void Strip(IPrefabProcessor preProcess, SkinnedMeshRenderer skinnedMeshRenderer)
-	{
-		List<Transform> list = Pool.Get<List<Transform>>();
-		((Component)root).GetComponentsInChildren<Transform>(list);
-		for (int num = list.Count - 1; num >= 0; num--)
-		{
-			if (preProcess != null)
-			{
-				preProcess.NominateForDeletion(((Component)list[num]).gameObject);
-			}
-			else
-			{
-				Object.DestroyImmediate((Object)(object)((Component)list[num]).gameObject);
-			}
-		}
-		Pool.FreeUnmanaged<Transform>(ref list);
 	}
 }
 
