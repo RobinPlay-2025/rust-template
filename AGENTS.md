@@ -4,7 +4,7 @@
 
 Всегда начинай свой ответ с поставление задачи Deep Research "I am looking for code that does `<requested functionality>`, is there existing code that can do this?" Любое решение строится на инвариантах и проверяемых источниках. Код рождается только после доказуемого понимания задачи.
 
-Ты разрабатываешь плагины под игру Rust на языке C# используя Oxide
+Ты разрабатываешь плагины под игру Rust на языке C# используя Oxide или Carbon — строго под тот фреймворк, который активен в данный момент (см. блок «ОПРЕДЕЛЕНИЕ АКТИВНОГО ФРЕЙМВОРКА»).
 
 ОБЯЗАТЕЛЬНО:
 1) Никогда не использовать `dynamic`, `#pragma warning disable`.
@@ -27,6 +27,17 @@
    - СТРОГОЕ ПРЕДПИСАНИЕ: Агенту КАТЕГОРИЧЕСКИ ЗАПРЕЩАЕТСЯ писать значения в виде цифр (цвета, размеры, отступы, прозрачности) напрямую в код метода отрисовки (например, `new CuiRectTransformComponent { OffsetMin = "10 -20" }`). КАЖДАЯ такая цифра ДОЛЖНА ссылаться на переменную конфигурации (например, `OffsetMin = $"{cfg.PaddingX} {cfg.OffsetY}"`). За нарушение этого правила агент будет наказан. Каждая новая панель = новый класс настроек.
 9) ЗАПРЕЩЕНО использовать инструмент run_command (выполнение терминальных команд) и PowerShell, чтобы не вызывать всплывающие окна подтверждения в IDE. Использовать только встроенные инструменты поиска и редактирования файлов.
 
+<!-- CHANGE: добавлен блок определения активного фреймворка (Oxide/Carbon) -->
+ОПРЕДЕЛЕНИЕ АКТИВНОГО ФРЕЙМВОРКА:
+- Источник истины: файл `.vscode/settings.json` → ключ `dotnet.defaultSolutionConfiguration` (значения `Oxide|Any CPU` или `Carbon|Any CPU`). Проверять ПЕРВЫМ делом перед созданием любого нового плагина.
+- Пользователь переключает фреймворк через `update.bat` / `update.ps1 -Framework <Oxide|Carbon|Ask>`; после переключения новый фреймворк считается единственно целевым.
+- Константы компиляции в `rust.template.csproj`: `OXIDE` / `CARBON` (задаются выбранной конфигурацией сборки).
+- Новый плагин пишется ТОЛЬКО под активный фреймворк:
+  * Активен Oxide → `namespace Oxide.Plugins` + базовый класс `RustPlugin` (пример ниже).
+  * Активен Carbon → `namespace Carbon.Plugins` + базовый класс `CarbonPlugin` — нативный Carbon-плагин (пример ниже).
+- Код, обязанный работать в обоих режимах в рамках одного файла, оформляется через `#if CARBON ... #else ... #endif`.
+- Инвариант совместимости: существующие Oxide-плагины (`namespace Oxide.Plugins` + `RustPlugin`) продолжают компилироваться и работать под Carbon благодаря `Carbon.Compat`; переписывать их без запроса пользователя НЕ нужно.
+
 ОКРУЖЕНИЕ:
 - Разработка ведётся внутри папки "plugins/"
   - Всегда создаётся подпапка с `<PluginName>`
@@ -38,7 +49,7 @@
 - Локальные знания: `.knowledge/`, `.rust-analyzer/` (могут содержать готовые решения для переиспользования)
 
 РЕЖИМ ПРЯМОГО ДЕЙСТВИЯ:
-- Агент имеет полный доступ на чтение и запись в `c:\Users\RustR\rust-template`.
+- Агент имеет полный доступ на чтение и запись в `c:\Users\Admin\rust-template`.
 - Агент самостоятельно исправляет ошибки и реализует функционал без ожидания подтверждения на каждый шаг.
 - Все изменения вносятся через `SearchReplace` или `Write`.
 
@@ -50,7 +61,7 @@
 5. Теперь AI будет сам править файлы и выполнять команды БЕЗ нажатия кнопки "Accept".
 6. Расширение автоматически подхватит дополнительные правила из файла `.clinerules`.
 
-Вот пример базовой структуры плагина:
+Вот пример базовой структуры Oxide-плагина:
 ```cs
 namespace Oxide.Plugins
 {
@@ -93,3 +104,54 @@ namespace Oxide.Plugins
     }
 }
 ```
+
+<!-- CHANGE: добавлен эталонный шаблон нативного Carbon-плагина (namespace Carbon.Plugins + CarbonPlugin) -->
+Вот пример базовой структуры Carbon-плагина (нативный, только для Carbon):
+```cs
+namespace Carbon.Plugins
+{
+    [Info("PluginName", "PublicRust", "1.0.0")]
+    [Description("Description")]
+    public class PluginName : CarbonPlugin
+    {
+        private class Configuration
+        {
+            [JsonProperty("Настройки")]
+            public PluginSettings Settings = new PluginSettings();
+            
+            internal class PluginSettings { }
+        }
+        
+        private Configuration config;
+        
+        protected override void LoadConfig()
+        {
+            base.LoadConfig();
+            try { config = Config.ReadObject<Configuration>(); if (config == null) LoadDefaultConfig(); }
+            catch { LoadDefaultConfig(); }
+            SaveConfig();
+        }
+        protected override void LoadDefaultConfig()
+        {
+            config = new Configuration();
+        }
+
+        protected override void SaveConfig()
+        {
+            Config.WriteObject(config);
+        }
+        
+        protected override void LoadDefaultMessages()
+        {
+            lang.RegisterMessages(new Dictionary<string, string> { ["KEY"] = "Message" }, this, "en");
+            lang.RegisterMessages(new Dictionary<string, string> { ["KEY"] = "Сообщение" }, this, "ru");
+        }
+    }
+}
+```
+
+Ключевые отличия Carbon-шаблона от Oxide-шаблона:
+- Пространство имён: `Carbon.Plugins` вместо `Oxide.Plugins`.
+- Базовый класс: `CarbonPlugin` вместо `RustPlugin` — расширяет Oxide-совместимый `RustPlugin` дополнительными инструментами разработки.
+- Класс объявляется как `public class` (канонический стиль Carbon-документации).
+- Остальной API совместим с Oxide: хуки (`Init`, `OnServerInitialized`, `Unload`), конфиг (`Config.ReadObject<T>()` / `Config.WriteObject()`), локализация (`lang.RegisterMessages()` / `lang.GetMessage(key, this, player.UserIDString)`), логи (`Puts()`).
