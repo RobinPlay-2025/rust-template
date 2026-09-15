@@ -14,18 +14,20 @@ if ($Framework -eq "Ask") {
     $choice = Read-Host "Choose option [1-2]"
     if ($choice -eq "2") { $Framework = "Carbon" }
     else { $Framework = "Oxide" }
+}
 
-    # --- Automatic VS Code Setting Update ---
-    $SettingsPath = Join-Path $PSScriptRoot ".vscode/settings.json"
-    if (Test-Path $SettingsPath) {
-        try {
-            $json = Get-Content $SettingsPath -Raw | ConvertFrom-Json
-            $json.'dotnet.defaultSolutionConfiguration' = "$Framework|Any CPU"
-            $json | ConvertTo-Json -Depth 100 | Set-Content $SettingsPath
-            Write-Host "--- VS Code configuration set to: $Framework|Any CPU ---" -ForegroundColor Green
-        } catch {
-            Write-Warning "Could not update .vscode/settings.json: $_"
-        }
+# CHANGE: Обновление .vscode/settings.json вынесено из интерактивной ветки — теперь выполняется
+# CHANGE: и при явном запуске `update.ps1 -Framework <Oxide|Carbon>`.
+# --- Automatic VS Code Setting Update ---
+$SettingsPath = Join-Path $PSScriptRoot ".vscode/settings.json"
+if (Test-Path $SettingsPath) {
+    try {
+        $json = Get-Content $SettingsPath -Raw | ConvertFrom-Json
+        $json.'dotnet.defaultSolutionConfiguration' = "$Framework|Any CPU"
+        $json | ConvertTo-Json -Depth 100 | Set-Content $SettingsPath
+        Write-Host "--- VS Code configuration set to: $Framework|Any CPU ---" -ForegroundColor Green
+    } catch {
+        Write-Warning "Could not update .vscode/settings.json: $_"
     }
 }
 
@@ -103,6 +105,22 @@ foreach ($file in $allFiles) {
 
 
 # CHANGE: Убран безусловный рекурсивный перезапуск update.ps1, вызывавший бесконечный цикл обновления (все файлы уже обновлены на шаге checkout).
+
+# CHANGE: Синхронизация дефолтной конфигурации rust.template.csproj с выбранным фреймворком.
+# CHANGE: Шаг 2 перезаписывает csproj из репозитория, поэтому синхронизация выполняется строго после него.
+# CHANGE: Без этого IDE-компиляция документов и `dotnet build` без -p:Configuration использовали
+# CHANGE: зашитый дефолт и давали ложные ошибки CS0246/CS0103 для плагинов активного фреймворка.
+$CsprojPath = Join-Path $PSScriptRoot "rust.template.csproj"
+if (Test-Path $CsprojPath) {
+    try {
+        $csprojContent = Get-Content $CsprojPath -Raw
+        $csprojContent = $csprojContent -replace "<Configuration>(Oxide|Carbon)</Configuration>", "<Configuration>$Framework</Configuration>"
+        Set-Content $CsprojPath $csprojContent
+        Write-Host "--- rust.template.csproj default configuration set to: $Framework ---" -ForegroundColor Green
+    } catch {
+        Write-Warning "Could not update rust.template.csproj: $_"
+    }
+}
 
 Write-Header "DONE! UPDATE COMPLETE (100%)"
 Write-Host "Total $totalFiles files processed. Your plugins folder is safe." -ForegroundColor Green
