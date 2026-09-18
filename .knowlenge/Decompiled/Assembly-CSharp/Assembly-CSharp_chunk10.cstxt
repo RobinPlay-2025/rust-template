@@ -15949,8 +15949,8 @@ public class BasePet : NPCPlayer, IThinker
 	[ServerVar]
 	public static bool onlyQueueBaseNavMovements = true;
 
-	[Help("How many miliseconds to budget for processing pet movements per frame")]
 	[ServerVar]
+	[Help("How many miliseconds to budget for processing pet movements per frame")]
 	public static float movementupdatebudgetms = 1f;
 
 	public float BaseAttackRate = 2f;
@@ -16645,8 +16645,8 @@ public class AIThinkManager : BaseMonoBehaviour, IServerComponent
 
 	public static ListHashSet<IThinker> _petRemovalQueue = new ListHashSet<IThinker>();
 
-	[ServerVar]
 	[Help("How many miliseconds to budget for processing AI entities per server frame")]
+	[ServerVar]
 	public static float framebudgetms = 2f;
 
 	[ServerVar]
@@ -24667,8 +24667,6 @@ public class DungeonNavmesh : FacepunchBehaviour, IServerComponent
 
 	private int agentTypeId;
 
-	private IndependantNavmesh independantNavmesh;
-
 	public bool IsBuilding
 	{
 		get
@@ -24681,11 +24679,7 @@ public class DungeonNavmesh : FacepunchBehaviour, IServerComponent
 				}
 				return true;
 			}
-			if ((Object)(object)independantNavmesh != (Object)null)
-			{
-				return !independantNavmesh.IsBuilt();
-			}
-			return true;
+			return false;
 		}
 	}
 
@@ -24852,12 +24846,34 @@ public class DungeonNavmesh : FacepunchBehaviour, IServerComponent
 		}
 		else
 		{
-			if (!((Component)this).TryGetComponent<IndependantNavmesh>(ref independantNavmesh))
+			RegisterTunnelRegions(roots);
+		}
+	}
+
+	private static void RegisterTunnelRegions(IEnumerable<GameObject> roots)
+	{
+		//IL_002b: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0043: Unknown result type (might be due to invalid IL or missing references)
+		if ((Object)(object)RustNavigation.Instance == (Object)null)
+		{
+			return;
+		}
+		foreach (GameObject root in roots)
+		{
+			if (!((Object)(object)root == (Object)null))
 			{
-				independantNavmesh = ((Component)this).gameObject.AddComponent<IndependantNavmesh>();
+				bool hasFootprint = false;
+				Bounds footprint = default(Bounds);
+				NavMeshTools.EncapsulateNavmeshColliders(root, ref footprint, ref hasFootprint);
+				if (hasFootprint)
+				{
+					RustNavigation.Instance.AddTunnelRegion(footprint);
+				}
+				else if (AI.logIssues)
+				{
+					NavMeshTools.LogWarning("Tunnel cell " + ((Object)root).name + " has no bakeable colliders, its tiles stay subject to the open sea cull.");
+				}
 			}
-			independantNavmesh.size = ((Bounds)(ref Bounds)).size;
-			RustNavigation.Instance.AddNavmesh(independantNavmesh);
 		}
 	}
 
@@ -25742,6 +25758,31 @@ public static class NavMeshTools
 	public static void LogWarning(string message)
 	{
 		Debug.LogWarning((object)("[UnityNavmesh] " + message));
+	}
+
+	public static void EncapsulateNavmeshColliders(GameObject root, ref Bounds footprint, ref bool hasFootprint)
+	{
+		//IL_0056: Unknown result type (might be due to invalid IL or missing references)
+		//IL_005b: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0048: Unknown result type (might be due to invalid IL or missing references)
+		if ((Object)(object)root == (Object)null)
+		{
+			return;
+		}
+		Collider[] componentsInChildren = root.GetComponentsInChildren<Collider>(false);
+		foreach (Collider val in componentsInChildren)
+		{
+			if (!val.isTrigger && val.enabled && (0x20000000 & (1 << ((Component)val).gameObject.layer)) == 0)
+			{
+				if (hasFootprint)
+				{
+					((Bounds)(ref footprint)).Encapsulate(val.bounds);
+					continue;
+				}
+				footprint = val.bounds;
+				hasFootprint = true;
+			}
+		}
 	}
 
 	public static IEnumerator CollectSourcesAsync(Bounds bounds, int mask, NavMeshCollectGeometry geometry, int area, bool useBakedTerrainMesh, int cellSize, List<NavMeshBuildSource> sources, Action<List<NavMeshBuildSource>> append, Action callback, Transform customNavMeshDataRoot, HashSet<Transform> ignoreRoots = null)
@@ -27831,15 +27872,15 @@ public class BoatAI : BaseEntity
 	[SerializeField]
 	private float _searchRange = 50f;
 
-	[Header("Boat AI - Collision Avoidance")]
 	[SerializeField]
+	[Header("Boat AI - Collision Avoidance")]
 	private float _awarenessAngle;
 
 	[SerializeField]
 	private float _awarenessDistance;
 
-	[Header("Boat AI - Debug")]
 	[SerializeField]
+	[Header("Boat AI - Debug")]
 	private Transform _debugMoveTo;
 
 	[ServerVar(Help = "(Generated) When enabled, draws DDraw visualisations of boat AI steering, avoidance, and pathfinding state")]

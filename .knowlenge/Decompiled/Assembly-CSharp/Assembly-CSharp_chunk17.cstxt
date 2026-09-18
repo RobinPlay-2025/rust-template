@@ -1831,8 +1831,8 @@ public abstract class ProceduralComponent : MonoBehaviour
 	[Space]
 	public string Description = "Procedural Component";
 
-	[Space]
 	[Header("Map Creator Settings")]
+	[Space]
 	public bool HideInMapCreator;
 
 	public string MapCreatorCategory = "";
@@ -2071,6 +2071,9 @@ public class GenerateDecorTopology : ProceduralComponent
 
 using System.Collections.Generic;
 using System.Linq;
+using ConVar;
+using Rust.Ai;
+using Rust.Ai.Gen2.Nav;
 using UnityEngine;
 
 public class GenerateDungeonBase : ProceduralComponent
@@ -2867,6 +2870,56 @@ public class GenerateDungeonBase : ProceduralComponent
 			wakeAIZ.size = ((Bounds)(ref aIInformationZone.bounds)).extents + new Vector3(100f, 100f, 100f);
 			wakeAIZ.Init(aIInformationZone);
 		}
+	}
+
+	public static void SetupNavmesh()
+	{
+		//IL_0099: Unknown result type (might be due to invalid IL or missing references)
+		//IL_009e: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00a6: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00b0: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00d0: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00d5: Unknown result type (might be due to invalid IL or missing references)
+		if (AI.useUnityNavmesh || AiManager.nav_disable || !AI.npc_enable || (Object)(object)TerrainMeta.Path == (Object)null || TerrainMeta.Path.DungeonBaseEntrances == null)
+		{
+			return;
+		}
+		if ((Object)(object)RustNavigation.Instance == (Object)null)
+		{
+			NavMeshTools.LogWarning("No RustNavigation instance, the underwater labs will have no navmesh at all.");
+			return;
+		}
+		foreach (DungeonBaseInfo dungeonBaseEntrance in TerrainMeta.Path.DungeonBaseEntrances)
+		{
+			if (!((Object)(object)dungeonBaseEntrance == (Object)null))
+			{
+				if (!TryGetStructureBounds(dungeonBaseEntrance, out var bounds))
+				{
+					NavMeshTools.LogWarning("Underwater lab " + ((Object)dungeonBaseEntrance).name + " has no bakeable colliders, it will have no navmesh at all.");
+					continue;
+				}
+				GameObject val = new GameObject("LabNavmesh");
+				val.transform.position = ((Bounds)(ref bounds)).center;
+				val.transform.SetParent(((Component)dungeonBaseEntrance).gameObject.transform, true);
+				IndependantNavmesh independantNavmesh = val.AddComponent<IndependantNavmesh>();
+				independantNavmesh.size = ((Bounds)(ref bounds)).size;
+				independantNavmesh.forceHiRes = true;
+				RustNavigation.Instance.AddNavmesh(independantNavmesh);
+			}
+		}
+	}
+
+	private static bool TryGetStructureBounds(DungeonBaseInfo dungeon, out Bounds bounds)
+	{
+		//IL_0003: Unknown result type (might be due to invalid IL or missing references)
+		bool hasFootprint = false;
+		bounds = default(Bounds);
+		NavMeshTools.EncapsulateNavmeshColliders(((Component)dungeon).gameObject, ref bounds, ref hasFootprint);
+		foreach (GameObject link in dungeon.Links)
+		{
+			NavMeshTools.EncapsulateNavmeshColliders(link, ref bounds, ref hasFootprint);
+		}
+		return hasFootprint;
 	}
 }
 
@@ -15638,10 +15691,10 @@ public enum FishingTag
 
 using UnityEngine;
 
-[RequireComponent(typeof(CommandBufferManager))]
+[ExecuteInEditMode]
 [RequireComponent(typeof(Camera))]
 [RequireComponent(typeof(PostOpaqueDepth))]
-[ExecuteInEditMode]
+[RequireComponent(typeof(CommandBufferManager))]
 public class WaterCamera : MonoBehaviour
 {
 }
@@ -17050,9 +17103,9 @@ using UnityEngine;
 public class WaterSystemBurst
 {
 	[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-	internal delegate void GetHeightArray_Burst_000071E2$PostfixBurstDelegate(in ReadOnly<Vector2> posUV, ref NativeArray<float> shore, ref NativeArray<float> terrainHeight, in TerrainTexturing.ShoreData shoreData, in TerrainHeightMap.HeightMapQueryStructure terrainHeightMapData, in bool hasHeightMap, in bool hasTerrainTexturing);
+	internal delegate void GetHeightArray_Burst_000071E7$PostfixBurstDelegate(in ReadOnly<Vector2> posUV, ref NativeArray<float> shore, ref NativeArray<float> terrainHeight, in TerrainTexturing.ShoreData shoreData, in TerrainHeightMap.HeightMapQueryStructure terrainHeightMapData, in bool hasHeightMap, in bool hasTerrainTexturing);
 
-	internal static class GetHeightArray_Burst_000071E2$BurstDirectCall
+	internal static class GetHeightArray_Burst_000071E7$BurstDirectCall
 	{
 		private static IntPtr Pointer;
 
@@ -17063,7 +17116,7 @@ public class WaterSystemBurst
 			//IL_001b: Unknown result type (might be due to invalid IL or missing references)
 			if (Pointer == (IntPtr)0)
 			{
-				Pointer = BurstCompiler.CompileFunctionPointer<GetHeightArray_Burst_000071E2$PostfixBurstDelegate>((GetHeightArray_Burst_000071E2$PostfixBurstDelegate)GetHeightArray_Burst).Value;
+				Pointer = BurstCompiler.CompileFunctionPointer<GetHeightArray_Burst_000071E7$PostfixBurstDelegate>((GetHeightArray_Burst_000071E7$PostfixBurstDelegate)GetHeightArray_Burst).Value;
 			}
 			P_0 = Pointer;
 		}
@@ -17091,9 +17144,9 @@ public class WaterSystemBurst
 	}
 
 	[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-	internal delegate void ComputeOceanSimHeight_Burst_000071E3$PostfixBurstDelegate(in NativeArray<Vector2> pos, in NativeArray<Vector2> posUV, ref NativeArray<float> shore, ref NativeArray<float> waterHeight, in bool isDeepSea, in bool hasWaterAndTopology, in TerrainTopologyMap.TopologyQueryStructure topologyQueryStructure, in float OceanLevel, in float MaxOceanLevel, in bool hasWaterSystem, in TerrainWaterMap.WaterMapQueryStructure waterMapQueryStruct);
+	internal delegate void ComputeOceanSimHeight_Burst_000071E8$PostfixBurstDelegate(in NativeArray<Vector2> pos, in NativeArray<Vector2> posUV, ref NativeArray<float> shore, ref NativeArray<float> waterHeight, in bool isDeepSea, in bool hasWaterAndTopology, in TerrainTopologyMap.TopologyQueryStructure topologyQueryStructure, in float OceanLevel, in float MaxOceanLevel, in bool hasWaterSystem, in TerrainWaterMap.WaterMapQueryStructure waterMapQueryStruct);
 
-	internal static class ComputeOceanSimHeight_Burst_000071E3$BurstDirectCall
+	internal static class ComputeOceanSimHeight_Burst_000071E8$BurstDirectCall
 	{
 		private static IntPtr Pointer;
 
@@ -17104,7 +17157,7 @@ public class WaterSystemBurst
 			//IL_001b: Unknown result type (might be due to invalid IL or missing references)
 			if (Pointer == (IntPtr)0)
 			{
-				Pointer = BurstCompiler.CompileFunctionPointer<ComputeOceanSimHeight_Burst_000071E3$PostfixBurstDelegate>((ComputeOceanSimHeight_Burst_000071E3$PostfixBurstDelegate)ComputeOceanSimHeight_Burst).Value;
+				Pointer = BurstCompiler.CompileFunctionPointer<ComputeOceanSimHeight_Burst_000071E8$PostfixBurstDelegate>((ComputeOceanSimHeight_Burst_000071E8$PostfixBurstDelegate)ComputeOceanSimHeight_Burst).Value;
 			}
 			P_0 = Pointer;
 		}
@@ -17131,18 +17184,18 @@ public class WaterSystemBurst
 		}
 	}
 
-	[MonoPInvokeCallback(typeof(GetHeightArray_Burst_000071E2$PostfixBurstDelegate))]
 	[BurstCompile]
+	[MonoPInvokeCallback(typeof(GetHeightArray_Burst_000071E7$PostfixBurstDelegate))]
 	public static void GetHeightArray_Burst(in ReadOnly<Vector2> posUV, ref NativeArray<float> shore, ref NativeArray<float> terrainHeight, in TerrainTexturing.ShoreData shoreData, in TerrainHeightMap.HeightMapQueryStructure terrainHeightMapData, in bool hasHeightMap, in bool hasTerrainTexturing)
 	{
-		GetHeightArray_Burst_000071E2$BurstDirectCall.Invoke(in posUV, ref shore, ref terrainHeight, in shoreData, in terrainHeightMapData, in hasHeightMap, in hasTerrainTexturing);
+		GetHeightArray_Burst_000071E7$BurstDirectCall.Invoke(in posUV, ref shore, ref terrainHeight, in shoreData, in terrainHeightMapData, in hasHeightMap, in hasTerrainTexturing);
 	}
 
-	[MonoPInvokeCallback(typeof(ComputeOceanSimHeight_Burst_000071E3$PostfixBurstDelegate))]
+	[MonoPInvokeCallback(typeof(ComputeOceanSimHeight_Burst_000071E8$PostfixBurstDelegate))]
 	[BurstCompile]
 	public static void ComputeOceanSimHeight_Burst(in NativeArray<Vector2> pos, in NativeArray<Vector2> posUV, ref NativeArray<float> shore, ref NativeArray<float> waterHeight, in bool isDeepSea, in bool hasWaterAndTopology, in TerrainTopologyMap.TopologyQueryStructure topologyQueryStructure, in float OceanLevel, in float MaxOceanLevel, in bool hasWaterSystem, in TerrainWaterMap.WaterMapQueryStructure waterMapQueryStruct)
 	{
-		ComputeOceanSimHeight_Burst_000071E3$BurstDirectCall.Invoke(in pos, in posUV, ref shore, ref waterHeight, in isDeepSea, in hasWaterAndTopology, in topologyQueryStructure, in OceanLevel, in MaxOceanLevel, in hasWaterSystem, in waterMapQueryStruct);
+		ComputeOceanSimHeight_Burst_000071E8$BurstDirectCall.Invoke(in pos, in posUV, ref shore, ref waterHeight, in isDeepSea, in hasWaterAndTopology, in topologyQueryStructure, in OceanLevel, in MaxOceanLevel, in hasWaterSystem, in waterMapQueryStruct);
 	}
 
 	[MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -17234,7 +17287,7 @@ using Unity.Collections;
 using UnityEngine;
 
 [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-internal delegate void GetHeightArray_Burst_000071E2$PostfixBurstDelegate(in ReadOnly<Vector2> posUV, ref NativeArray<float> shore, ref NativeArray<float> terrainHeight, in TerrainTexturing.ShoreData shoreData, in TerrainHeightMap.HeightMapQueryStructure terrainHeightMapData, in bool hasHeightMap, in bool hasTerrainTexturing);
+internal delegate void GetHeightArray_Burst_000071E7$PostfixBurstDelegate(in ReadOnly<Vector2> posUV, ref NativeArray<float> shore, ref NativeArray<float> terrainHeight, in TerrainTexturing.ShoreData shoreData, in TerrainHeightMap.HeightMapQueryStructure terrainHeightMapData, in bool hasHeightMap, in bool hasTerrainTexturing);
 
 
 using System;
@@ -17242,7 +17295,7 @@ using Unity.Burst;
 using Unity.Collections;
 using UnityEngine;
 
-internal static class GetHeightArray_Burst_000071E2$BurstDirectCall
+internal static class GetHeightArray_Burst_000071E7$BurstDirectCall
 {
 	private static IntPtr Pointer;
 
@@ -17253,7 +17306,7 @@ internal static class GetHeightArray_Burst_000071E2$BurstDirectCall
 		//IL_001b: Unknown result type (might be due to invalid IL or missing references)
 		if (Pointer == (IntPtr)0)
 		{
-			Pointer = BurstCompiler.CompileFunctionPointer<GetHeightArray_Burst_000071E2$PostfixBurstDelegate>((GetHeightArray_Burst_000071E2$PostfixBurstDelegate)GetHeightArray_Burst).Value;
+			Pointer = BurstCompiler.CompileFunctionPointer<GetHeightArray_Burst_000071E7$PostfixBurstDelegate>((GetHeightArray_Burst_000071E7$PostfixBurstDelegate)GetHeightArray_Burst).Value;
 		}
 		P_0 = Pointer;
 	}
@@ -17286,7 +17339,7 @@ using Unity.Collections;
 using UnityEngine;
 
 [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-internal delegate void ComputeOceanSimHeight_Burst_000071E3$PostfixBurstDelegate(in NativeArray<Vector2> pos, in NativeArray<Vector2> posUV, ref NativeArray<float> shore, ref NativeArray<float> waterHeight, in bool isDeepSea, in bool hasWaterAndTopology, in TerrainTopologyMap.TopologyQueryStructure topologyQueryStructure, in float OceanLevel, in float MaxOceanLevel, in bool hasWaterSystem, in TerrainWaterMap.WaterMapQueryStructure waterMapQueryStruct);
+internal delegate void ComputeOceanSimHeight_Burst_000071E8$PostfixBurstDelegate(in NativeArray<Vector2> pos, in NativeArray<Vector2> posUV, ref NativeArray<float> shore, ref NativeArray<float> waterHeight, in bool isDeepSea, in bool hasWaterAndTopology, in TerrainTopologyMap.TopologyQueryStructure topologyQueryStructure, in float OceanLevel, in float MaxOceanLevel, in bool hasWaterSystem, in TerrainWaterMap.WaterMapQueryStructure waterMapQueryStruct);
 
 
 using System;
@@ -17294,7 +17347,7 @@ using Unity.Burst;
 using Unity.Collections;
 using UnityEngine;
 
-internal static class ComputeOceanSimHeight_Burst_000071E3$BurstDirectCall
+internal static class ComputeOceanSimHeight_Burst_000071E8$BurstDirectCall
 {
 	private static IntPtr Pointer;
 
@@ -17305,7 +17358,7 @@ internal static class ComputeOceanSimHeight_Burst_000071E3$BurstDirectCall
 		//IL_001b: Unknown result type (might be due to invalid IL or missing references)
 		if (Pointer == (IntPtr)0)
 		{
-			Pointer = BurstCompiler.CompileFunctionPointer<ComputeOceanSimHeight_Burst_000071E3$PostfixBurstDelegate>((ComputeOceanSimHeight_Burst_000071E3$PostfixBurstDelegate)ComputeOceanSimHeight_Burst).Value;
+			Pointer = BurstCompiler.CompileFunctionPointer<ComputeOceanSimHeight_Burst_000071E8$PostfixBurstDelegate>((ComputeOceanSimHeight_Burst_000071E8$PostfixBurstDelegate)ComputeOceanSimHeight_Burst).Value;
 		}
 		P_0 = Pointer;
 	}
@@ -17835,8 +17888,8 @@ public enum DeferredDecalQueue
 
 using UnityEngine;
 
-[ExecuteInEditMode]
 [RequireComponent(typeof(Renderer))]
+[ExecuteInEditMode]
 public class BindRendererBounds : MonoBehaviour, IClientComponent
 {
 }
@@ -17918,9 +17971,9 @@ public struct ScreenSpaceRefractionParams
 
 using UnityEngine;
 
-[ExecuteInEditMode]
 [RequireComponent(typeof(CommandBufferManager))]
 [RequireComponent(typeof(Camera))]
+[ExecuteInEditMode]
 public class DeferredExtension : MonoBehaviour
 {
 	public ExtendGBufferParams extendGBuffer = ExtendGBufferParams.Default;
@@ -17953,9 +18006,9 @@ public class DeferredExtensionMesh : MonoBehaviour
 
 using UnityEngine;
 
-[RequireComponent(typeof(CommandBufferManager))]
-[RequireComponent(typeof(Camera))]
 [ExecuteInEditMode]
+[RequireComponent(typeof(Camera))]
+[RequireComponent(typeof(CommandBufferManager))]
 public class DeferredIndirectLightingPass : MonoBehaviour
 {
 }
@@ -18618,9 +18671,9 @@ public class OceanParameters
 using UnityEngine;
 using UnityEngine.Rendering;
 
-[RequireComponent(typeof(CommandBufferManager))]
-[RequireComponent(typeof(DeferredIndirectLightingPass))]
 [ExecuteInEditMode]
+[RequireComponent(typeof(DeferredIndirectLightingPass))]
+[RequireComponent(typeof(CommandBufferManager))]
 public class SpatialEnvironmentVolumePass : MonoBehaviour
 {
 	private const CameraEvent VOLUME_RENDERING_CAMERA_EVENT = 6;
@@ -19278,8 +19331,8 @@ public class ObjectMotionVectorFix : MonoBehaviour
 
 using UnityEngine;
 
-[RequireComponent(typeof(CommandBufferManager))]
 [ExecuteInEditMode]
+[RequireComponent(typeof(CommandBufferManager))]
 public class PostOpaqueDepth : MonoBehaviour
 {
 	public RenderTexture postOpaqueDepth;
@@ -20099,8 +20152,8 @@ using UnityEngine;
 [CreateAssetMenu(menuName = "Rendering/RustRendererFeatures/AmbientOcclusion")]
 public class SSAORendererFeature : RustRendererFeature
 {
-	[Header("Ambient Occlusion")]
 	[Tooltip("How the occlusion result is composited into the frame.")]
+	[Header("Ambient Occlusion")]
 	public ApplicationMethod ApplyMethod;
 
 	[Tooltip("Number of samples per occlusion pass.")]
@@ -20109,8 +20162,8 @@ public class SSAORendererFeature : RustRendererFeature
 	[Tooltip("Source used for per-pixel normals.")]
 	public PerPixelNormalSource PerPixelNormals = PerPixelNormalSource.Camera;
 
-	[Range(0f, 1f)]
 	[Tooltip("Final applied intensity of the occlusion effect.")]
+	[Range(0f, 1f)]
 	public float Intensity = 1f;
 
 	[Tooltip("Tint colour blended with the occlusion shadow.")]
@@ -20135,8 +20188,8 @@ public class SSAORendererFeature : RustRendererFeature
 	[Tooltip("Compute occlusion and blur at half resolution.")]
 	public bool Downsample = true;
 
-	[Tooltip("Fade the effect out at a distance.")]
 	[Header("Distance Fade")]
+	[Tooltip("Fade the effect out at a distance.")]
 	public bool FadeEnabled;
 
 	[Tooltip("Distance (Unity units) where fading begins.")]
@@ -20162,24 +20215,24 @@ public class SSAORendererFeature : RustRendererFeature
 	[Header("Bilateral Blur")]
 	public bool BlurEnabled = true;
 
-	[Range(1f, 4f)]
 	[Tooltip("Blur kernel radius in screen pixels (1–4).")]
+	[Range(1f, 4f)]
 	public int BlurRadius = 3;
 
-	[Range(1f, 4f)]
 	[Tooltip("Number of blur passes.")]
+	[Range(1f, 4f)]
 	public int BlurPasses = 1;
 
-	[Range(0f, 20f)]
 	[Tooltip("0 = blurred / 1 = sharpened.")]
+	[Range(0f, 20f)]
 	public float BlurSharpness = 10f;
 
 	[Tooltip("Accumulate occlusion over multiple frames to reduce noise.")]
 	[Header("Temporal Filter")]
 	public bool FilterEnabled = true;
 
-	[Tooltip("Accumulation decay. 0 = fast update (more flicker). 1 = slow update (ghosting).")]
 	[Range(0f, 1f)]
+	[Tooltip("Accumulation decay. 0 = fast update (more flicker). 1 = slow update (ghosting).")]
 	public float FilterBlending = 0.5f;
 
 	[Tooltip("Motion-discard sensitivity. 0 = reuse more. 1 = discard more.")]
@@ -20518,8 +20571,8 @@ using UnityEngine;
 using UnityEngine.Rendering;
 
 [Serializable]
-[SupportedOnRenderPipeline(typeof(RustRenderPipelineAsset))]
 [VolumeComponentMenu("RRP/Cathode")]
+[SupportedOnRenderPipeline(typeof(RustRenderPipelineAsset))]
 public class CathodeVolumeComponent : VolumeComponent, IPostProcessComponent
 {
 	public ClampedFloatParameter intensity = new ClampedFloatParameter(0f, 0f, 1f, false);
@@ -21770,8 +21823,8 @@ using UnityEngine;
 using UnityEngine.Rendering;
 
 [Serializable]
-[SupportedOnRenderPipeline(typeof(RustRenderPipelineAsset))]
 [VolumeComponentMenu("RRP/Underwater Post Effect")]
+[SupportedOnRenderPipeline(typeof(RustRenderPipelineAsset))]
 public class UnderwaterEffectVolumeComponent : VolumeComponent, IPostProcessComponent
 {
 	[Header("Wiggle")]
@@ -22426,8 +22479,8 @@ public class SpatialBiomeFog : SingletonComponent<SpatialBiomeFog>
 using UnityEngine;
 
 [RequireComponent(typeof(Camera))]
-[ExecuteAlways]
 [RequireComponent(typeof(CommandBufferManager))]
+[ExecuteAlways]
 public class SpatialBiomeFogCamera : MonoBehaviour
 {
 }
@@ -22460,12 +22513,12 @@ public class GeometryClipmapTerrain : MonoBehaviour, IClientComponent
 	[SerializeField]
 	public Material terrainMaterial;
 
-	[SerializeField]
 	[Range(1f, 8f)]
+	[SerializeField]
 	public int minVertLOD = 4;
 
-	[SerializeField]
 	[Range(1f, 10f)]
+	[SerializeField]
 	protected int lodGlobalScale = 2;
 
 	[SerializeField]
@@ -22489,12 +22542,12 @@ public class GeometryClipmapTerrain : MonoBehaviour, IClientComponent
 
 	public float cellSize;
 
-	[Range(0f, 4f)]
 	[SerializeField]
+	[Range(0f, 4f)]
 	protected int colliderVertexReduction;
 
-	[Range(0f, 4f)]
 	[SerializeField]
+	[Range(0f, 4f)]
 	protected int vertexDensity;
 
 	[Range(0f, 4f)]
@@ -22546,8 +22599,8 @@ public class HoleShapeAsset : ScriptableObject
 
 using UnityEngine;
 
-[ExecuteAlways]
 [RequireComponent(typeof(Camera))]
+[ExecuteAlways]
 [RequireComponent(typeof(CommandBufferManager))]
 public class TerrainHoleCamera : MonoBehaviour, IClientComponent
 {
@@ -23389,8 +23442,8 @@ public class VolumeCloudsConfig : ScriptableObject
 	[Range(0f, 3f)]
 	public float AmbientScatterContrast = 1f;
 
-	[Range(0f, 1f)]
 	[Header("Other")]
+	[Range(0f, 1f)]
 	public float CoverageScale = 1f;
 
 	[Range(0f, 1f)]
@@ -23731,8 +23784,8 @@ public class ClothWindModify : FacepunchBehaviour
 
 using UnityEngine;
 
-[RequireComponent(typeof(WindZone))]
 [ExecuteInEditMode]
+[RequireComponent(typeof(WindZone))]
 public class WindZoneEx : MonoBehaviour
 {
 }
@@ -23740,8 +23793,8 @@ public class WindZoneEx : MonoBehaviour
 
 using UnityEngine;
 
-[ExecuteInEditMode]
 [RequireComponent(typeof(WindZone))]
+[ExecuteInEditMode]
 public class WindZoneExManager : MonoBehaviour
 {
 	private enum TestMode
