@@ -383,6 +383,7 @@ using System.Net;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Threading;
+using Facepunch;
 using Facepunch.Rcon;
 using Facepunch.Rust.Profiling;
 using Fleck;
@@ -530,8 +531,6 @@ public class Listener
 
 	private readonly Dictionary<int, RconConnection> clients = new Dictionary<int, RconConnection>();
 
-	private readonly List<int> deadClients = new List<int>();
-
 	private WebSocketServer server;
 
 	public readonly Dictionary<IPAddress, FailedIPData> FailedIPs = new Dictionary<IPAddress, FailedIPData>();
@@ -555,14 +554,16 @@ public class Listener
 		}
 		lock (clients)
 		{
-			foreach (KeyValuePair<int, RconConnection> client in clients)
+			List<RconConnection> list = SnapshotClients();
+			foreach (RconConnection item2 in list)
 			{
-				if (item.Contains(client.Value.Socket.ConnectionInfo.ClientIpAddress))
+				if (item.Contains(item2.Socket.ConnectionInfo.ClientIpAddress))
 				{
-					Debug.Log((object)$"RCON: Banned IP {client.Value.Socket.ConnectionInfo.ClientIpAddress} connected and was kicked.");
-					client.Value.Socket.Close();
+					Debug.Log((object)$"RCON: Banned IP {item2.Socket.ConnectionInfo.ClientIpAddress} connected and was kicked.");
+					item2.Socket.Close();
 				}
 			}
+			Pool.FreeUnmanaged<RconConnection>(ref list);
 		}
 		SaveBans();
 		return true;
@@ -676,8 +677,8 @@ public class Listener
 
 	public void Start(int maxConnections, int maxConnectionsPerIP)
 	{
-		//IL_0089: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0093: Expected O, but got Unknown
+		//IL_007c: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0086: Expected O, but got Unknown
 		Shutdown();
 		LoadBans();
 		bool num = !string.IsNullOrEmpty(SslCertificate) && !string.IsNullOrEmpty(SslCertificatePassword);
@@ -696,102 +697,107 @@ public class Listener
 			X509Certificate2 certificate = new X509Certificate2(SslCertificate, SslCertificatePassword);
 			server.Certificate = certificate;
 		}
-		string requiredPath = "/" + Password;
-		server.Start((Action<IWebSocketConnection>)delegate(IWebSocketConnection socket)
+		server.Start((Action<IWebSocketConnection>)OnConnection);
+	}
+
+	public void OnConnection(IWebSocketConnection socket)
+	{
+		IWebSocketConnection socket2 = socket;
+		string text = "/" + Password;
+		IPAddress address = socket2.ConnectionInfo.ClientIpAddress;
+		if (IsBannedIP(address))
 		{
-			IWebSocketConnection socket2 = socket;
-			IPAddress address2 = socket2.ConnectionInfo.ClientIpAddress;
-			if (IsBannedIP(address2))
+			if (LogFailedAttempts)
 			{
-				if (LogFailedAttempts)
-				{
-					Debug.Log((object)$"RCON: Banned IP {address2} attempted to connect.");
-				}
-				if (socket2.ConnectionInfo.Path == requiredPath && LogFailedAttempts)
-				{
-					Debug.Log((object)$"RCON: CRITICAL - Banned IP {address2} supplied the correct password. Access was still denied.");
-				}
-				socket2.Close();
+				Debug.Log((object)$"RCON: Banned IP {address} attempted to connect.");
 			}
-			else
+			if (socket2.ConnectionInfo.Path == text && LogFailedAttempts)
 			{
-				if (Interface.CallHook("OnRconConnection", (object)socket.ConnectionInfo.ClientIpAddress) == null)
+				Debug.Log((object)$"RCON: CRITICAL - Banned IP {address} supplied the correct password. Access was still denied.");
+			}
+			socket2.Close();
+			return;
+		}
+		if (Interface.CallHook("OnRconConnection", (object)socket.ConnectionInfo.ClientIpAddress) == null)
+		{
+			if (!(socket2.ConnectionInfo.Path != text))
+			{
+				int id = Interlocked.Increment(ref nextClientId);
+				string ipString = address.ToString();
+				int port = socket2.ConnectionInfo.ClientPort;
+				RconProfiler.OnNewConnection(socket2, id);
+				socket2.OnOpen = delegate
 				{
-					if (!(socket2.ConnectionInfo.Path != requiredPath))
+					lock (clients)
 					{
-						int id = Interlocked.Increment(ref nextClientId);
-						string ipString = address2.ToString();
-						int port = socket2.ConnectionInfo.ClientPort;
-						RconProfiler.OnNewConnection(socket2, id);
-						socket2.OnOpen = delegate
-						{
-							lock (clients)
-							{
-								clients.Add(id, new RconConnection(socket2, id));
-								RconProfiler.UpdateClientCount(clients.Count);
-							}
-						};
-						socket2.OnClose = delegate
-						{
-							lock (clients)
-							{
-								try
-								{
-									RconProfiler.UpdateClientCount(clients.Count);
-									RconProfiler.OnDisconnect(ipString, port, id);
-								}
-								finally
-								{
-									clients.Remove(id);
-								}
-							}
-						};
-						socket2.OnMessage = delegate(string s)
-						{
-							if (Interface.CallHook("IOnRconMessage", (object)socket2.ConnectionInfo.ClientIpAddress, (object)s) == null)
-							{
-								lock (clients)
-								{
-									if (clients.TryGetValue(id, out var value))
-									{
-										value.Stats.RecievedMessages++;
-									}
-								}
-								RconProfiler.OnRconMessage(ipString, port, id, s);
-								OnMessage?.Invoke(address2, id, s);
-							}
-						};
-						socket2.OnError = delegate(Exception e)
-						{
-							RconProfiler.OnError(socket2);
-							Debug.LogException(e);
-						};
-						return;
+						clients.Add(id, new RconConnection(socket2, id));
+						RconProfiler.UpdateClientCount(clients.Count);
 					}
-					if (LogFailedAttempts)
-					{
-						Debug.Log((object)$"RCON: IP {address2} attempted to connect with incorrect password.");
-					}
-				}
-				RconProfiler.OnFailedConnection(socket2, socket2.ConnectionInfo.Path);
-				socket2.Close();
-				FailedIPData failedIPData = GetFailedIPData(address2);
-				if (++failedIPData.Attempts >= MaxPasswordFailures)
+				};
+				socket2.OnClose = delegate
 				{
-					failedIPData.IsBanned = true;
-					failedIPData.BanTime = DateTime.UtcNow.AddSeconds(BanDuration);
-					Debug.Log((object)$"RCON: IP {address2} banned for {BanDuration} seconds due to reaching max password failure attempts ({MaxPasswordFailures})");
-					if (PermanentBanFailedIPs)
+					lock (clients)
 					{
-						lock (BannedNetworks)
+						try
 						{
-							BannedNetworks.Add(new IPNetwork(address2.ToString()));
+							RconProfiler.UpdateClientCount(clients.Count);
+							RconProfiler.OnDisconnect(ipString, port, id);
 						}
-						Debug.Log((object)$"RCON: IP {address2} permanently banned due to reaching max password failure attempts ({MaxPasswordFailures})");
+						finally
+						{
+							clients.Remove(id);
+						}
 					}
-				}
+				};
+				socket2.OnMessage = delegate(string s)
+				{
+					if (Interface.CallHook("IOnRconMessage", (object)socket2.ConnectionInfo.ClientIpAddress, (object)s) == null)
+					{
+						lock (clients)
+						{
+							if (clients.TryGetValue(id, out var value))
+							{
+								value.Stats.RecievedMessages++;
+							}
+						}
+						RconProfiler.OnRconMessage(ipString, port, id, s);
+						OnMessage?.Invoke(address, id, s);
+					}
+				};
+				int errorLogged = 0;
+				socket2.OnError = delegate(Exception e)
+				{
+					RconProfiler.OnError(socket2);
+					if (Interlocked.Exchange(ref errorLogged, 1) != 1)
+					{
+						Debug.LogException(e);
+					}
+				};
+				return;
 			}
-		});
+			if (LogFailedAttempts)
+			{
+				Debug.Log((object)$"RCON: IP {address} attempted to connect with incorrect password.");
+			}
+		}
+		RconProfiler.OnFailedConnection(socket2, socket2.ConnectionInfo.Path);
+		socket2.Close();
+		FailedIPData failedIPData = GetFailedIPData(address);
+		if (++failedIPData.Attempts < MaxPasswordFailures)
+		{
+			return;
+		}
+		failedIPData.IsBanned = true;
+		failedIPData.BanTime = DateTime.UtcNow.AddSeconds(BanDuration);
+		Debug.Log((object)$"RCON: IP {address} banned for {BanDuration} seconds due to reaching max password failure attempts ({MaxPasswordFailures})");
+		if (PermanentBanFailedIPs)
+		{
+			lock (BannedNetworks)
+			{
+				BannedNetworks.Add(new IPNetwork(address.ToString()));
+			}
+			Debug.Log((object)$"RCON: IP {address} permanently banned due to reaching max password failure attempts ({MaxPasswordFailures})");
+		}
 	}
 
 	public void Shutdown()
@@ -811,29 +817,30 @@ public class Listener
 		}
 		lock (clients)
 		{
-			deadClients.Clear();
-			foreach (KeyValuePair<int, RconConnection> client in clients)
+			List<RconConnection> list = SnapshotClients();
+			foreach (RconConnection item in list)
 			{
-				if (client.Value.Socket.IsAvailable)
+				if (item.Socket.IsAvailable)
 				{
-					client.Value.Socket.Send(str);
-					client.Value.Stats.BroadcastedMessages++;
+					item.Socket.Send(str);
+					item.Stats.BroadcastedMessages++;
 				}
 				else
 				{
-					deadClients.Add(client.Key);
+					item.Socket.Close();
+					clients.Remove(item.ConnectionId);
 				}
 			}
-			foreach (int deadClient in deadClients)
-			{
-				if (clients.TryGetValue(deadClient, out var value))
-				{
-					value.Socket.Close();
-					clients.Remove(deadClient);
-				}
-			}
+			Pool.FreeUnmanaged<RconConnection>(ref list);
 			RconProfiler.UpdateClientCount(clients.Count);
 		}
+	}
+
+	private List<RconConnection> SnapshotClients()
+	{
+		List<RconConnection> list = Pool.Get<List<RconConnection>>();
+		list.AddRange(clients.Values);
+		return list;
 	}
 
 	public void SendMessage(int target, string str)

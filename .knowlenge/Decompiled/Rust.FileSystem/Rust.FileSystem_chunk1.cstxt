@@ -24,6 +24,10 @@ public class AssetBundleBackend : FileSystemBackend, IDisposable
 
 	private Dictionary<string, Dictionary<string, GameObject>> assetScenePrefabs = new Dictionary<string, Dictionary<string, GameObject>>(StringComparer.OrdinalIgnoreCase);
 
+	private Dictionary<string, AssetBundle> dynamicBundles = new Dictionary<string, AssetBundle>(StringComparer.OrdinalIgnoreCase);
+
+	private Dictionary<string, int> dynamicBundleSubCounts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+
 	public string assetPath { get; private set; }
 
 	public static bool Enabled => true;
@@ -57,7 +61,7 @@ public class AssetBundleBackend : FileSystemBackend, IDisposable
 		return assetScenePrefabs.ContainsKey(sceneName);
 	}
 
-	public void Load(string assetRoot)
+	public void Load(string assetRoot, HashSet<string> bundlesToSkip)
 	{
 		try
 		{
@@ -82,8 +86,11 @@ public class AssetBundleBackend : FileSystemBackend, IDisposable
 			string[] allAssetBundles = manifest.GetAllAssetBundles();
 			foreach (string text in allAssetBundles)
 			{
-				Debug.Log((object)("Loading " + text));
-				LoadBundle(text);
+				if (!bundlesToSkip.Contains(text))
+				{
+					Debug.Log((object)("Loading " + text));
+					LoadBundle(text);
+				}
 			}
 			AssetSceneManifest.Load(this);
 			Global.IsAsyncBundleQueueBlocked = () => HasIncompleteAssetScenes;
@@ -444,6 +451,72 @@ public class AssetBundleBackend : FileSystemBackend, IDisposable
 		throw new Exception("LoadAllFromBundle found none");
 	}
 
+	public override void SubscribeToDynamicBundle(string bundleName)
+	{
+		dynamicBundleSubCounts.TryGetValue(bundleName, out var value);
+		value++;
+		dynamicBundleSubCounts[bundleName] = value;
+		if (value == 1)
+		{
+			string text = assetPath + bundleName;
+			if (!File.Exists(text))
+			{
+				throw new FileNotFoundException("Couldn't load AssetBundle - file doesn't exist! " + text);
+			}
+			AssetBundle val = AssetBundle.LoadFromFile(text);
+			if ((Object)(object)val == (Object)null)
+			{
+				throw new Exception("Couldn't load AssetBundle: " + text);
+			}
+			dynamicBundles.Add(bundleName, val);
+		}
+	}
+
+	public override void UnsubscribeFromDynamicBundle(string bundleName)
+	{
+		if (dynamicBundleSubCounts.TryGetValue(bundleName, out var value))
+		{
+			if (--value == 0)
+			{
+				dynamicBundleSubCounts.Remove(bundleName);
+				if (!dynamicBundles.TryGetValue(bundleName, out var value2))
+				{
+					throw new Exception("Missing AssetBundle: " + bundleName);
+				}
+				value2.Unload(true);
+				dynamicBundles.Remove(bundleName);
+			}
+			else
+			{
+				dynamicBundleSubCounts[bundleName] = value;
+			}
+			return;
+		}
+		throw new Exception(bundleName + " is not loaded!");
+	}
+
+	public override T LoadAssetFromDynamicBundle<T>(string bundleName, string assetPath)
+	{
+		if (!dynamicBundles.TryGetValue(bundleName, out var value))
+		{
+			throw new Exception("Failed to load " + assetPath + ": " + bundleName + " is not loaded!");
+		}
+		T val = ((!assetPath.EndsWith(".prefab") || !(typeof(T) != typeof(GameObject))) ? value.LoadAsset<T>(assetPath) : value.LoadAsset<GameObject>(assetPath).GetComponent<T>());
+		if ((Object)(object)val == (Object)null)
+		{
+			throw new Exception("Failed to load " + assetPath + ": loaded null!");
+		}
+		return val;
+	}
+
+	public override void GetLoadedDynamicBundles(List<(string, int)> bundles)
+	{
+		foreach (KeyValuePair<string, int> dynamicBundleSubCount in dynamicBundleSubCounts)
+		{
+			bundles.Add((dynamicBundleSubCount.Key, dynamicBundleSubCount.Value));
+		}
+	}
+
 	public override bool HasAsset(string path)
 	{
 		if (prefabToAssetSceneName.TryGetValue(path, out var value) && assetScenePrefabs.TryGetValue(value, out var value2) && value2.ContainsKey(path))
@@ -724,6 +797,14 @@ public abstract class FileSystemBackend
 	public abstract T[] LoadAllFromBundle<T>(string bundleName, string editorSearch) where T : Object;
 
 	public abstract bool HasAsset(string path);
+
+	public abstract void SubscribeToDynamicBundle(string bundleName);
+
+	public abstract void UnsubscribeFromDynamicBundle(string bundleName);
+
+	public abstract T LoadAssetFromDynamicBundle<T>(string bundleName, string assetPath) where T : Object;
+
+	public abstract void GetLoadedDynamicBundles(List<(string, int)> bundles);
 }
 
 

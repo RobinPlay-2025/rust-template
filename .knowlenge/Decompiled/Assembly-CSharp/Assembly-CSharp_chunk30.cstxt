@@ -1,0 +1,702 @@
+using System;
+using System.Diagnostics;
+using System.Runtime.InteropServices;
+using System.Threading;
+using Rust.Ai.Gen2.Nav;
+using UnityEngine;
+
+public class RustNavmeshSaveJob
+{
+	private volatile bool finished;
+
+	private Thread thread;
+
+	private NavmeshSaveThreadResult result;
+
+	private string finalPath;
+
+	private string tempPath;
+
+	private IntPtr navHandle;
+
+	private IntPtr payload;
+
+	private int payloadSize;
+
+	private int flags;
+
+	private int threads;
+
+	private int debugDelayMs;
+
+	private IntPtr dirtyCoords;
+
+	private int dirtyCount;
+
+	private string deltaPath;
+
+	private long deltaExpectedLength;
+
+	private NavMeshBuildParams buildParams;
+
+	private Vector3 boundsMin;
+
+	private Vector3 boundsMax;
+
+	public bool TryBegin(string finalPath, string tempPath, IntPtr navHandle, in NavMeshBuildParams buildParams, Vector3 boundsMin, Vector3 boundsMax, IntPtr payload, int payloadSize, int flags, int threads, int debugDelayMs, IntPtr dirtyCoords, int dirtyCount, string deltaPath, long deltaExpectedLength)
+	{
+		//IL_004d: Unknown result type (might be due to invalid IL or missing references)
+		//IL_004f: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0055: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0057: Unknown result type (might be due to invalid IL or missing references)
+		if (thread != null)
+		{
+			return false;
+		}
+		this.dirtyCoords = dirtyCoords;
+		this.dirtyCount = dirtyCount;
+		this.deltaPath = deltaPath;
+		this.deltaExpectedLength = deltaExpectedLength;
+		this.finalPath = finalPath;
+		this.tempPath = tempPath;
+		this.navHandle = navHandle;
+		this.buildParams = buildParams;
+		this.boundsMin = boundsMin;
+		this.boundsMax = boundsMax;
+		this.payload = payload;
+		this.payloadSize = payloadSize;
+		this.flags = flags;
+		this.threads = threads;
+		this.debugDelayMs = debugDelayMs;
+		result = default(NavmeshSaveThreadResult);
+		finished = false;
+		try
+		{
+			thread = new Thread(RunOnSaveThread)
+			{
+				IsBackground = true,
+				Name = "RustNavSave"
+			};
+			thread.Start();
+		}
+		catch (Exception ex)
+		{
+			thread = null;
+			this.payload = IntPtr.Zero;
+			this.dirtyCoords = IntPtr.Zero;
+			Debug.LogException(ex);
+			return false;
+		}
+		return true;
+	}
+
+	public bool TryReapIfFinished(out NavmeshSaveThreadResult result)
+	{
+		if (thread == null || !finished)
+		{
+			result = default(NavmeshSaveThreadResult);
+			return false;
+		}
+		result = Join();
+		return true;
+	}
+
+	public NavmeshSaveThreadResult Join()
+	{
+		thread.Join();
+		thread = null;
+		return result;
+	}
+
+	private void RunOnSaveThread()
+	{
+		long timestamp = Stopwatch.GetTimestamp();
+		try
+		{
+			result.stats.threadId = Thread.CurrentThread.ManagedThreadId;
+			if (debugDelayMs > 0)
+			{
+				Thread.Sleep(debugDelayMs);
+			}
+			if (deltaPath != null)
+			{
+				AppendWarning(RustNavmesh.DeleteStaleTempFile(tempPath));
+				if (TryAppendDelta(timestamp))
+				{
+					return;
+				}
+			}
+			bool flag = WriteFullFile();
+			if (!flag)
+			{
+				string note;
+				bool num = RustNavmesh.CreateMissingDirectory(tempPath, out note);
+				AppendWarning(note);
+				if (num)
+				{
+					flag = WriteFullFile();
+				}
+			}
+			result.stats.threadMs = BakeStats.TicksToMs(Stopwatch.GetTimestamp() - timestamp);
+			if (!flag)
+			{
+				result.stats.failure = "the write to " + tempPath + " failed";
+				return;
+			}
+			long timestamp2 = Stopwatch.GetTimestamp();
+			result.stats.succeeded = RustNavmesh.MoveSavedFileIntoPlace(tempPath, finalPath, out result.stats.replaceMode, out var note2);
+			result.stats.replaceMs = BakeStats.TicksToMs(Stopwatch.GetTimestamp() - timestamp2);
+			if (result.stats.succeeded)
+			{
+				result.stats.bytes = (result.stats.phasesValid ? result.stats.phases.fileBytes : RustNavmesh.FileLengthOrZero(finalPath));
+				AppendWarning(note2);
+			}
+			else
+			{
+				result.stats.failure = note2;
+			}
+		}
+		catch (Exception ex)
+		{
+			result.stats.succeeded = false;
+			result.stats.failure = ex.ToString();
+			Debug.LogException(ex);
+		}
+		finally
+		{
+			if (dirtyCoords != IntPtr.Zero)
+			{
+				Marshal.FreeHGlobal(dirtyCoords);
+				dirtyCoords = IntPtr.Zero;
+			}
+			if (payload != IntPtr.Zero)
+			{
+				Marshal.FreeHGlobal(payload);
+				payload = IntPtr.Zero;
+			}
+			finished = true;
+		}
+	}
+
+	private bool WriteFullFile()
+	{
+		return RecastWrapper.SaveNavMeshWithPhases(tempPath, navHandle, in buildParams, in boundsMin, in boundsMax, payload, payloadSize, flags, threads, out result.stats.phases, out result.stats.phasesValid);
+	}
+
+	private bool TryAppendDelta(long start)
+	{
+		if (!RecastWrapper.TryAppendNavMeshDelta(deltaPath, deltaExpectedLength, navHandle, dirtyCoords, dirtyCount, payload, payloadSize, flags, threads, out result.stats.phases))
+		{
+			if (RecastWrapper.HasAppendNavMeshDelta)
+			{
+				AppendWarning("RustNative refused to append to " + deltaPath + ", see its reason above, so the whole file is rewritten.");
+			}
+			return false;
+		}
+		result.stats.wroteDelta = true;
+		result.stats.phasesValid = true;
+		result.stats.threadMs = BakeStats.TicksToMs(Stopwatch.GetTimestamp() - start);
+		result.stats.bytes = result.stats.phases.fileBytes;
+		result.stats.succeeded = true;
+		return true;
+	}
+
+	private void AppendWarning(string note)
+	{
+		if (!string.IsNullOrEmpty(note))
+		{
+			result.warning = ((result.warning == null) ? note : (result.warning + " " + note));
+		}
+	}
+}
+
+
+public static class PlayerMenuAnimation
+{
+	public enum Layers
+	{
+		Movement
+	}
+
+	public static class Groups
+	{
+	}
+}
+
+
+public enum Layers
+{
+	Movement
+}
+
+
+public static class Groups
+{
+}
+
+
+using System;
+using System.Collections.Generic;
+using Benchmark;
+using ProtoBuf;
+using UnityEngine;
+
+[JsonModel]
+public class Building
+{
+	[JsonModel]
+	public class Entity
+	{
+		public ulong NetId;
+
+		public string ResPath;
+
+		public ulong ParentNetId;
+
+		public Vector3 Pos;
+
+		public Vector3 RotEuler;
+
+		public ulong SkinID;
+
+		public virtual void FromProto(Entity ent)
+		{
+			//IL_0051: Unknown result type (might be due to invalid IL or missing references)
+			//IL_0056: Unknown result type (might be due to invalid IL or missing references)
+			//IL_0062: Unknown result type (might be due to invalid IL or missing references)
+			//IL_0067: Unknown result type (might be due to invalid IL or missing references)
+			NetId = ent.baseNetworkable.uid.Value;
+			ResPath = StringPool.Get(ent.baseNetworkable.prefabID);
+			ParentNetId = ent.parent?.uid.Value ?? 0;
+			Pos = ent.baseEntity.pos;
+			RotEuler = ent.baseEntity.rot;
+			SkinID = ent.baseEntity.skinid;
+		}
+	}
+
+	[JsonModel]
+	public class BuildingEntity : Entity
+	{
+		public BuildingGrade.Enum Grade;
+
+		public ulong Model;
+
+		public override void FromProto(Entity ent)
+		{
+			base.FromProto(ent);
+			if (ent.buildingBlock != null)
+			{
+				Grade = (BuildingGrade.Enum)ent.buildingBlock.grade;
+				Model = ent.buildingBlock.model;
+			}
+			else
+			{
+				Grade = BuildingGrade.Enum.None;
+				Model = 0uL;
+			}
+		}
+	}
+
+	[JsonModel]
+	public class SpawnMarker
+	{
+		[Flags]
+		public enum SpawnType
+		{
+			LocalPlayer = 1,
+			RemotePlayer = 2
+		}
+
+		public Vector3 Pos;
+
+		public Vector3 RotEuler;
+
+		public SpawnType Type;
+	}
+
+	public const uint InvalidBuildingId = 0u;
+
+	public uint Id;
+
+	public List<BuildingEntity> BuildingEntities;
+
+	public List<SpawnMarker> SpawnMarkers;
+
+	public Building(uint id)
+	{
+		Id = id;
+		BuildingEntities = new List<BuildingEntity>();
+		SpawnMarkers = new List<SpawnMarker>();
+	}
+
+	public override string ToString()
+	{
+		return $"{Id}: {BuildingEntities.Count} entities";
+	}
+}
+
+
+using ProtoBuf;
+using UnityEngine;
+
+[JsonModel]
+public class Entity
+{
+	public ulong NetId;
+
+	public string ResPath;
+
+	public ulong ParentNetId;
+
+	public Vector3 Pos;
+
+	public Vector3 RotEuler;
+
+	public ulong SkinID;
+
+	public virtual void FromProto(Entity ent)
+	{
+		//IL_0051: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0056: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0062: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0067: Unknown result type (might be due to invalid IL or missing references)
+		NetId = ent.baseNetworkable.uid.Value;
+		ResPath = StringPool.Get(ent.baseNetworkable.prefabID);
+		ParentNetId = ent.parent?.uid.Value ?? 0;
+		Pos = ent.baseEntity.pos;
+		RotEuler = ent.baseEntity.rot;
+		SkinID = ent.baseEntity.skinid;
+	}
+}
+
+
+using ProtoBuf;
+
+[JsonModel]
+public class BuildingEntity : Entity
+{
+	public BuildingGrade.Enum Grade;
+
+	public ulong Model;
+
+	public override void FromProto(Entity ent)
+	{
+		base.FromProto(ent);
+		if (ent.buildingBlock != null)
+		{
+			Grade = (BuildingGrade.Enum)ent.buildingBlock.grade;
+			Model = ent.buildingBlock.model;
+		}
+		else
+		{
+			Grade = BuildingGrade.Enum.None;
+			Model = 0uL;
+		}
+	}
+}
+
+
+using System;
+using UnityEngine;
+
+[JsonModel]
+public class SpawnMarker
+{
+	[Flags]
+	public enum SpawnType
+	{
+		LocalPlayer = 1,
+		RemotePlayer = 2
+	}
+
+	public Vector3 Pos;
+
+	public Vector3 RotEuler;
+
+	public SpawnType Type;
+}
+
+
+using System;
+
+[Flags]
+public enum SpawnType
+{
+	LocalPlayer = 1,
+	RemotePlayer = 2
+}
+
+
+using System;
+using AntiHackJobs;
+using BasePlayerJobs;
+using CoarseQueryGridJobs;
+using CompanionServer.Cameras;
+using Facepunch.MarchingCubes;
+using Facepunch.NativeMeshSimplification;
+using GamePhysicsJobs;
+using GenerateErosionJobs;
+using HitBoxSystemJobs;
+using Instancing;
+using OceanSimulationJobs;
+using ProjectileJobs;
+using RingGeneratorJobs;
+using Rust.Ai.Gen2;
+using Rust.Water5;
+using ServerOcclusionJobs;
+using TerrainHeightMapJobs;
+using TerrainTexturingJobs;
+using TerrainTopologyMapJobs;
+using TerrainWaterMapJobs;
+using Unity.Jobs;
+using UnityEngine;
+using UnityEngine.Jobs;
+using UtilityJobs;
+using WaterLevelJobs;
+using WaterSystemJobs;
+
+[DOTSCompilerGenerated]
+internal class __JobReflectionRegistrationOutput__1221673671587648887
+{
+	public static void CreateJobReflectionData()
+	{
+		try
+		{
+			IJobExtensions.EarlyJobInit<CrabGrouping.CrabGroundGatherJob>();
+			IJobExtensions.EarlyJobInit<CrabGrouping.CrabGroundProcessJob>();
+			IJobExtensions.EarlyJobInit<CrabGrouping.CrabObstacleProcessJob>();
+			IJobParallelForExtensions.EarlyJobInit<CrabGrouping.CrabUpdateJob>();
+			IJobExtensions.EarlyJobInit<CrabGrouping.KillCrab>();
+			IJobExtensions.EarlyJobInit<JellyfishGrouping.JellyfishWaterProcessJob>();
+			IJobParallelForExtensions.EarlyJobInit<JellyfishGrouping.JellyfishUpdateJob>();
+			IJobExtensions.EarlyJobInit<JellyfishGrouping.KillJellyfish>();
+			IJobExtensions.EarlyJobInit<FishShoal.FishCollisionGatherJob>();
+			IJobExtensions.EarlyJobInit<FishShoal.FishCollisionProcessJob>();
+			IJobParallelForExtensions.EarlyJobInit<FishShoal.FishUpdateJob>();
+			IJobExtensions.EarlyJobInit<FishShoal.KillFish>();
+			IJobParallelForTransformExtensions.EarlyJobInit<QueryVisJobs.ConstructCommandsJob>();
+			IJobParallelForTransformExtensions.EarlyJobInit<QueryVisJobs.CheckWaterLevelVisibilityJob>();
+			IJobParallelForTransformExtensions.EarlyJobInit<TransformLineRenderer.LineRendererUpdateJob>();
+			IJobParallelForExtensions.EarlyJobInit<Hopper.FillRaycastJob>();
+			IJobExtensions.EarlyJobInit<GenerateSpawnPoints>();
+			IJobExtensions.EarlyJobInit<PostCullingJob>();
+			IJobExtensions.EarlyJobInit<DistanceField.GenerateJob>();
+			IJobParallelForExtensions.EarlyJobInit<DistanceField.SobelGradientsJob>();
+			IJobExtensions.EarlyJobInit<DistanceField.FixBoundaryGradientsJob>();
+			IJobParallelForExtensions.EarlyJobInit<DistanceField.BlurHorizontalJob>();
+			IJobParallelForExtensions.EarlyJobInit<DistanceField.BlurVerticalJob>();
+			IJobExtensions.EarlyJobInit<DistanceField.GaussianBlurJob>();
+			IJobExtensions.EarlyJobInit<FlipBoolJob>();
+			IJobExtensions.EarlyJobInit<GenerateAscSeqListJob>();
+			IJobExtensions.EarlyJobInit<InvertIndexListJob>();
+			IJobExtensions.EarlyJobInit<AddVectorJob>();
+			IJobExtensions.EarlyJobInit<CheckAnyBoolInGroupJob>();
+			IJobExtensions.EarlyJobInit<CheckAnyEnvironmentTypeInGroupJob>();
+			IJobExtensions.EarlyJobInit<ScatterToAndJob>();
+			IJobExtensions.EarlyJobInit<DiffVec3Indirect>();
+			IJobParallelForExtensions.EarlyJobInit<BakePhysicsMeshesJob>();
+			IJobExtensions.EarlyJobInit<BakePhysicsMeshJob>();
+			IJobExtensions.EarlyJobInit<RaycastSamplePositionsJob>();
+			IJobExtensions.EarlyJobInit<RaycastBufferSetupJob>();
+			IJobParallelForExtensions.EarlyJobInit<RaycastRaySetupJob>();
+			IJobParallelForExtensions.EarlyJobInit<RaycastRayProcessingJob>();
+			IJobExtensions.EarlyJobInit<RaycastOutputCompressJob>();
+			IJobExtensions.EarlyJobInit<RaycastColliderProcessingJob>();
+			IJobExtensions.EarlyJobInit<GatherPlayersWithTicksJob>();
+			IJobExtensions.EarlyJobInit<BuildLayerMasksJob>();
+			IJobExtensions.EarlyJobInit<GatherHitIndicesJob>();
+			IJobExtensions.EarlyJobInit<BuildBatchLookupMapJob>();
+			IJobExtensions.EarlyJobInit<GatherNoClipBatchesJob>();
+			IJobExtensions.EarlyJobInit<FindValidIndicesJob>();
+			IJobExtensions.EarlyJobInit<InsideTerrainHeightsChecksJob>();
+			IJobExtensions.EarlyJobInit<ScatterInvertedBool>();
+			IJobForExtensions.EarlyJobInit<GenerateInsideMeshCommandsJob>();
+			IJobForExtensions.EarlyJobInit<CheckInsideMeshHitsJob>();
+			IJobForExtensions.EarlyJobInit<FilterInsideMeshHitsJob>();
+			IJobForExtensions.EarlyJobInit<ProgressSpeedingStatesJob>();
+			IJobForExtensions.EarlyJobInit<TransformStartEndTicksJob>();
+			IJobForExtensions.EarlyJobInit<CalculateRDCsJob>();
+			IJobForExtensions.EarlyJobInit<CalcDistAndBudgetJob>();
+			IJobExtensions.EarlyJobInit<AdjustDistBasedOnNormalsJob>();
+			IJobForExtensions.EarlyJobInit<TestAreSpeedingJob>();
+			IJobExtensions.EarlyJobInit<GatherFlyingBatchesJob>();
+			IJobExtensions.EarlyJobInit<BuildFlyingBatchLookupMapJob>();
+			IJobExtensions.EarlyJobInit<GatherHitColliderIndicesJob>();
+			IJobExtensions.EarlyJobInit<GatherValidWaterIndicesJob>();
+			IJobExtensions.EarlyJobInit<CacheInAirStateJob>();
+			IJobExtensions.EarlyJobInit<GatherWasInAirStatesJob>();
+			IJobExtensions.EarlyJobInit<ProcessFlyhackPauseTimeJob>();
+			IJobExtensions.EarlyJobInit<DetermineInAirJob>();
+			IJobExtensions.EarlyJobInit<TestAreFlyingJob>();
+			IJobForExtensions.EarlyJobInit<CalcSpeedHackSpeedJob>();
+			IJobExtensions.EarlyJobInit<PreCullingJob>();
+			IJobParallelForDeferExtensions.EarlyJobInit<FillFalseJobDefer>();
+			IJobParallelForDeferExtensions.EarlyJobInit<AdjustByTopologyJob>();
+			IJobParallelForDeferExtensions.EarlyJobInit<SmallDisplacementPlaneTraceJob>();
+			IJobParallelForDeferExtensions.EarlyJobInit<OceanTraceJob>();
+			IJobForExtensions.EarlyJobInit<PaintSplatJob>();
+			IJobParallelForExtensions.EarlyJobInit<PopulateDeltaHeightJob>();
+			IJobParallelForExtensions.EarlyJobInit<CopyBackFloatHeightToShortHeightJob>();
+			IJobParallelForExtensions.EarlyJobInit<EvaporationJob>();
+			IJobParallelForBatchExtensions.EarlyJobInit<PrepareMapJob>();
+			IJobParallelForExtensions.EarlyJobInit<TransportSedimentJob>();
+			IJobParallelForExtensions.EarlyJobInit<CalcMinHeightMapJob>();
+			IJobParallelForExtensions.EarlyJobInit<ErosionAndDepositionJob>();
+			IJobParallelForExtensions.EarlyJobInit<TileCalculateAngleMap>();
+			IJobParallelForExtensions.EarlyJobInit<AdjustWaterHeightByFluxJob>();
+			IJobParallelForExtensions.EarlyJobInit<CalculateOutputFluxJob>();
+			IJobParallelForExtensions.EarlyJobInit<RefillOceanJob>();
+			IJobParallelForExtensions.EarlyJobInit<WaterIncrementationJob>();
+			IJobExtensions.EarlyJobInit<GetCoarseDistsToShoreJobIndirect>();
+			IJobExtensions.EarlyJobInit<GenSamplePoints>();
+			IJobParallelForExtensions.EarlyJobInit<GenShoreVecBitMapJob>();
+			IJobExtensions.EarlyJobInit<HasLandJob>();
+			IJobParallelForExtensions.EarlyJobInit<GenTopologyRadiiJob>();
+			IJobParallelForExtensions.EarlyJobInit<ProcessTopologyJob>();
+			IJobParallelForExtensions.EarlyJobInit<FillAsOceanTopologyJob>();
+			IJobParallelForExtensions.EarlyJobInit<PopulateTextureDataJob>();
+			IJobExtensions.EarlyJobInit<GetHeightByPosJob>();
+			IJobExtensions.EarlyJobInit<GetHeightByUVJob>();
+			IJobExtensions.EarlyJobInit<GetHeightByUVJobIndirect>();
+			IJobExtensions.EarlyJobInit<GetHeightByIndexJob>();
+			IJobExtensions.EarlyJobInit<GetTopologyByPosJob>();
+			IJobExtensions.EarlyJobInit<GetTopologyByUVJob>();
+			IJobExtensions.EarlyJobInit<GetTopologyRadiusJob>();
+			IJobParallelForExtensions.EarlyJobInit<GetTopologyRadiusJobIndirect>();
+			IJobParallelForExtensions.EarlyJobInit<GetTopologyRadiusNormalizedJobIndirect>();
+			IJobExtensions.EarlyJobInit<GetTopologyByIndexJob>();
+			IJobExtensions.EarlyJobInit<GetTopologyByUVJobIndirect>();
+			IJobExtensions.EarlyJobInit<GetHeightsByUVJobIndirect>();
+			IJobParallelForExtensions.EarlyJobInit<GetHeightsJob>();
+			IJobExtensions.EarlyJobInit<TerrainHeightMapJobs.GetHeightsJobIndirect>();
+			IJobExtensions.EarlyJobInit<GetNormalsJobIndirect>();
+			IJobExtensions.EarlyJobInit<GetNormalsJobIndirectDeferred>();
+			IJobExtensions.EarlyJobInit<CheckPosRadJob>();
+			IJobExtensions.EarlyJobInit<CheckPosRadBatchJob>();
+			IJobExtensions.EarlyJobInit<CheckPosRadBatchJobIndirect>();
+			IJobExtensions.EarlyJobInit<CheckBoundsJob>();
+			IJobExtensions.EarlyJobInit<CheckBoundsJobIndirect>();
+			IJobExtensions.EarlyJobInit<CheckRayJob>();
+			IJobParallelForBatchExtensions.EarlyJobInit<SliceMeshJob>();
+			IJobExtensions.EarlyJobInit<ComputeBoundsJob>();
+			IJobParallelForExtensions.EarlyJobInit<SilhouetteSweepJob>();
+			IJobExtensions.EarlyJobInit<CalculatePathBetweenGridsJob>();
+			IJobParallelForBatchExtensions.EarlyJobInit<CalculatePathsBetweenGridsJob>();
+			IJobForExtensions.EarlyJobInit<CalculateSubGridSamplePointsJob>();
+			IJobExtensions.EarlyJobInit<GatherMaxWaterLevelsJob>();
+			IJobExtensions.EarlyJobInit<ToUVJobIndirect>();
+			IJobExtensions.EarlyJobInit<FilterPositionsJobIndirect>();
+			IJobExtensions.EarlyJobInit<GatherWavesIndicesJobIndirect>();
+			IJobExtensions.EarlyJobInit<ApplyMaxHeightsJobIndirect>();
+			IJobExtensions.EarlyJobInit<SelectMaxWaterLevelJobIndirect>();
+			IJobExtensions.EarlyJobInit<CalcCenterJobIndirect>();
+			IJobExtensions.EarlyJobInit<InitialValidateInfoJobIndirect>();
+			IJobExtensions.EarlyJobInit<InitialValidateSimpleInfoJobIndirect>();
+			IJobExtensions.EarlyJobInit<GatherValidInfosJobIndirect>();
+			IJobExtensions.EarlyJobInit<GatherInvalidInfosJobIndirect>();
+			IJobExtensions.EarlyJobInit<UpdateWaterHeightsJobIndirect>();
+			IJobExtensions.EarlyJobInit<UpdateWaterHeightsWithVolumesJobIndirect>();
+			IJobExtensions.EarlyJobInit<SetupHeadQueryJobIndirect>();
+			IJobExtensions.EarlyJobInit<ApplyHeadQueryResultsJobIndirect>();
+			IJobExtensions.EarlyJobInit<ResolveWaterInfosJobIndirect>();
+			IJobExtensions.EarlyJobInit<ResolveIgnoreWaterInfosJob>();
+			IJobExtensions.EarlyJobInit<ResolveWaterInfosSimpleJobIndirect>();
+			IJobForExtensions.EarlyJobInit<CalcPlayerSpeedJob>();
+			IJobExtensions.EarlyJobInit<UpdateWaterCache>();
+			IJobExtensions.EarlyJobInit<GatherPosToValidateJob>();
+			IJobParallelForTransformExtensions.EarlyJobInit<RecacheTransforms>();
+			IJobExtensions.EarlyJobInit<CalcWaterFactorsJobIndirect>();
+			IJobExtensions.EarlyJobInit<GetWaterFactorsParamsJobIndirect>();
+			IJobForExtensions.EarlyJobInit<TraceAllJob>();
+			IJobExtensions.EarlyJobInit<CalcMidpoingJob>();
+			IJobExtensions.EarlyJobInit<CheckHitsJob>();
+			IJobExtensions.EarlyJobInit<GenerateOverlapBoxCommandsJob>();
+			IJobExtensions.EarlyJobInit<GenerateOverlapBoxCommandsFromOBBsJob>();
+			IJobExtensions.EarlyJobInit<GatherPosFromOBBsJob>();
+			IJobExtensions.EarlyJobInit<ValidateOverlapBoxCommandsJob>();
+			IJobExtensions.EarlyJobInit<GenerateOverlapCapsuleCommandsJob>();
+			IJobExtensions.EarlyJobInit<ValidateOverlapCapsuleCommandsJob>();
+			IJobExtensions.EarlyJobInit<FindSphereCmdsInCapsuleCmdsJob>();
+			IJobExtensions.EarlyJobInit<GenerateSphereCmdsFromCapsuleCmdsJob>();
+			IJobExtensions.EarlyJobInit<GenerateOverlapSphereCommandsJob>();
+			IJobExtensions.EarlyJobInit<ValidateOverlapSphereCommandsJob>();
+			IJobExtensions.EarlyJobInit<RemoveLayerMaskJob>();
+			IJobExtensions.EarlyJobInit<ScatterColliderHitsJob>();
+			IJobExtensions.EarlyJobInit<PreProcessWaterSpheresJob>();
+			IJobExtensions.EarlyJobInit<PreProcessWaterRaysJob>();
+			IJobExtensions.EarlyJobInit<PostProcessWaterRaysJob>();
+			IJobExtensions.EarlyJobInit<AppendRaycastHitsJob>();
+			IJobExtensions.EarlyJobInit<SelectNearestHitsJob>();
+			IJobExtensions.EarlyJobInit<SelectNearestNHitsJob>();
+			IJobExtensions.EarlyJobInit<FilterRaycastHitsJob>();
+			IJobExtensions.EarlyJobInit<RemoveInvalidRaycastHitsJob>();
+			IJobParallelForTransformExtensions.EarlyJobInit<ReadPositionDataTransformJob>();
+			IJobParallelForTransformExtensions.EarlyJobInit<BatchUpdateVelocityEndJob>();
+			IJobParallelForTransformExtensions.EarlyJobInit<GenerateRaysJob>();
+			IJobParallelForTransformExtensions.EarlyJobInit<GenerateRaysMidstepJob>();
+			IJobParallelForTransformExtensions.EarlyJobInit<PosRotReadJob>();
+			IJobExtensions.EarlyJobInit<CopyBackJob>();
+			IJobExtensions.EarlyJobInit<PopulateArraysJob>();
+			IJobExtensions.EarlyJobInit<SimplifyMeshJob>();
+			IJobExtensions.EarlyJobInit<FindMaxYLayerJob>();
+			IJobParallelForBatchExtensions.EarlyJobInit<DownsampleJob>();
+			IJobParallelForBatchExtensions.EarlyJobInit<MarchFloatGenerateTrianglesJob>();
+			IJobExtensions.EarlyJobInit<ProcessTrianglesJob>();
+			IJobExtensions.EarlyJobInit<WriteMeshDataJob>();
+			IJobExtensions.EarlyJobInit<SDFChunkJobs.CleanupIslandsJob>();
+			IJobParallelForBatchExtensions.EarlyJobInit<SDFChunkJobs.AccumulateCensorBoundsJob>();
+			IJobParallelForExtensions.EarlyJobInit<SDFChunkJobs.ApplyCensorBoundsJob>();
+			IJobExtensions.EarlyJobInit<SDFChunkJobs.ClearBoundariesJob>();
+			IJobExtensions.EarlyJobInit<SDFChunkJobs.CalculateDistanceFieldJob>();
+			IJobExtensions.EarlyJobInit<GetHeightBatchedJob>();
+			IJobParallelForExtensions.EarlyJobInit<GetHeightBatchedJob>();
+			IJobExtensions.EarlyJobInit<Rust.Water5.GetHeightsJobIndirect>();
+			IJobParallelForTransformExtensions.EarlyJobInit<RustNavMeshAgent.MovementTransformJob>();
+			IJobExtensions.EarlyJobInit<FillJob<int>>();
+			IJobExtensions.EarlyJobInit<FillJobUnsafe<BasePlayer.EACTickState>>();
+			IJobExtensions.EarlyJobInit<CopyIndirect<Vector3>>();
+			IJobExtensions.EarlyJobInit<GatherJob<OverlapCapsuleCommand>>();
+			IJobExtensions.EarlyJobInit<ScatterToJob<bool>>();
+			IJobExtensions.EarlyJobInit<FillJob<bool>>();
+			IJobExtensions.EarlyJobInit<FillJob<float>>();
+			IJobForExtensions.EarlyJobInit<SortHitsJob<RaycastHitComparer>>();
+			IJobExtensions.EarlyJobInit<FillJob<Vector3>>();
+			IJobExtensions.EarlyJobInit<FillJob<WaterLevel.WaterInfo>>();
+			IJobExtensions.EarlyJobInit<FillJobIndirect<float>>();
+			IJobExtensions.EarlyJobInit<FillJobIndirect<int>>();
+			IJobExtensions.EarlyJobInit<GatherJob<Vector3>>();
+			IJobExtensions.EarlyJobInit<GatherJob<float>>();
+			IJobExtensions.EarlyJobInit<FillJob<Vector4>>();
+			IJobExtensions.EarlyJobInit<CopyArrayJob<float>>();
+			IJobExtensions.EarlyJobInit<GatherJob<int>>();
+			IJobExtensions.EarlyJobInit<FillJob<RDC>>();
+			IJobExtensions.EarlyJobInit<ScatterValueToJobDeferred<Vector3>>();
+			IJobExtensions.EarlyJobInit<ClearListJob<Shape>>();
+		}
+		catch (Exception ex)
+		{
+			EarlyInitHelpers.JobReflectionDataCreationFailed(ex);
+		}
+	}
+
+	[RuntimeInitializeOnLoadMethod(/*Could not decode attribute arguments.*/)]
+	public static void EarlyInit()
+	{
+		CreateJobReflectionData();
+	}
+}
+
+
+using Unity.Burst;
+using UnityEngine;
+
+internal static class $BurstDirectCallInitializer
+{
+	[RuntimeInitializeOnLoadMethod(/*Could not decode attribute arguments.*/)]
+	private static void Initialize()
+	{
+		BurstCompilerOptions options = BurstCompiler.Options;
+	}
+}
+
+
