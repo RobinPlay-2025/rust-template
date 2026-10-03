@@ -49,8 +49,8 @@ public class NPCVendingOrder : ScriptableObject
 		[Tooltip("Maximum price for the currency item")]
 		public int maxPrice;
 
-		[Tooltip("Chance for a very low price to occur (0 to 1)")]
 		[Range(0f, 1f)]
+		[Tooltip("Chance for a very low price to occur (0 to 1)")]
 		public float veryLowPriceChance;
 
 		[Tooltip("Minimum very low price")]
@@ -185,8 +185,8 @@ public struct EntryRandom
 	[Tooltip("Maximum price for the currency item")]
 	public int maxPrice;
 
-	[Tooltip("Chance for a very low price to occur (0 to 1)")]
 	[Range(0f, 1f)]
+	[Tooltip("Chance for a very low price to occur (0 to 1)")]
 	public float veryLowPriceChance;
 
 	[Tooltip("Minimum very low price")]
@@ -1355,8 +1355,8 @@ public class UI_VendingMachineAdminDialog : UIDialog
 	[SerializeField]
 	private UI_FakeInventory fakeInventory;
 
-	[Space]
 	[SerializeField]
+	[Space]
 	private Transform existingSellOrderParent;
 
 	[SerializeField]
@@ -10933,8 +10933,8 @@ public class ProceduralDynamicDungeon : BaseEntity
 		}
 	}
 
-	[ExecuteInEditMode]
 	[ContextMenu("Test Grid")]
+	[ExecuteInEditMode]
 	public void GenerateGrid()
 	{
 		//IL_0006: Unknown result type (might be due to invalid IL or missing references)
@@ -12518,23 +12518,19 @@ public class NPCSimpleMissionProvider : NPCTalking, IMissionProvider
 }
 
 
+using System.Collections.Generic;
 using Facepunch;
-using ProtoBuf;
 using UnityEngine;
 
 public class VehicleVendor : NPCTalking
 {
-	public EntityRef spawnerRef;
+	public const float VehicleSpawnerSearchRadius = 40f;
 
-	public VehicleSpawner vehicleSpawner;
+	private EntityRef<VehicleSpawner> spawnerRef;
 
 	public VehicleSpawner GetVehicleSpawner()
 	{
-		if (!spawnerRef.IsValid(base.isServer))
-		{
-			return null;
-		}
-		return ((Component)spawnerRef.Get(base.isServer)).GetComponent<VehicleSpawner>();
+		return spawnerRef.Get(serverside: true);
 	}
 
 	public override void UpdateFlags()
@@ -12559,23 +12555,53 @@ public class VehicleVendor : NPCTalking
 	public override void ServerInit()
 	{
 		base.ServerInit();
-		if (spawnerRef.IsValid(serverside: true) && (Object)(object)vehicleSpawner == (Object)null)
+		FindVehicleSpawner();
+	}
+
+	public void FindVehicleSpawner()
+	{
+		//IL_002c: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0076: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0082: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0087: Unknown result type (might be due to invalid IL or missing references)
+		if (spawnerRef.IsValid(serverside: true) || conversationResultActions.Length == 0)
 		{
-			vehicleSpawner = GetVehicleSpawner();
+			return;
 		}
-		else if ((Object)(object)vehicleSpawner != (Object)null && !spawnerRef.IsValid(serverside: true))
+		VehicleSpawner vehicleSpawner = null;
+		float num = float.MaxValue;
+		List<VehicleSpawner> list = Pool.Get<List<VehicleSpawner>>();
+		Vis.Entities(((Component)this).transform.position, 40f, list, 1218652417, (QueryTriggerInteraction)2);
+		foreach (VehicleSpawner item in list)
+		{
+			if (!item.isClient && item.IsValid() && SellsThrough(item))
+			{
+				float num2 = Vector3.SqrMagnitude(((Component)this).transform.position - ((Component)item).transform.position);
+				if (!(num2 >= num))
+				{
+					vehicleSpawner = item;
+					num = num2;
+				}
+			}
+		}
+		Pool.FreeUnmanaged<VehicleSpawner>(ref list);
+		if ((Object)(object)vehicleSpawner != (Object)null)
 		{
 			spawnerRef.Set(vehicleSpawner);
 		}
 	}
 
-	public override void Save(SaveInfo info)
+	private bool SellsThrough(VehicleSpawner spawner)
 	{
-		//IL_0028: Unknown result type (might be due to invalid IL or missing references)
-		//IL_002d: Unknown result type (might be due to invalid IL or missing references)
-		base.Save(info);
-		info.msg.vehicleVendor = Pool.Get<VehicleVendor>();
-		info.msg.vehicleVendor.spawnerRef = spawnerRef.uid;
+		NPCConversationResultAction[] array = conversationResultActions;
+		foreach (NPCConversationResultAction nPCConversationResultAction in array)
+		{
+			if (spawner.SpawnsFor(nPCConversationResultAction.broadcastMessage))
+			{
+				return true;
+			}
+		}
+		return false;
 	}
 
 	public override ConversationData GetConversationFor(BasePlayer player)
@@ -12587,17 +12613,6 @@ public class VehicleVendor : NPCTalking
 	{
 		base.OnDied(info);
 	}
-
-	public override void Load(LoadInfo info)
-	{
-		//IL_0025: Unknown result type (might be due to invalid IL or missing references)
-		//IL_002a: Unknown result type (might be due to invalid IL or missing references)
-		base.Load(info);
-		if (info.msg.vehicleVendor != null)
-		{
-			spawnerRef.id_cached = info.msg.vehicleVendor.spawnerRef;
-		}
-	}
 }
 
 
@@ -12606,6 +12621,7 @@ using System.Collections.Generic;
 using ConVar;
 using Facepunch;
 using Facepunch.Rust;
+using Rust;
 using UnityEngine;
 
 public class VehicleSpawner : BaseEntity
@@ -12688,6 +12704,10 @@ public class VehicleSpawner : BaseEntity
 	{
 		base.ServerInit();
 		FindRepairableVehiclePad();
+		if (!Application.isLoadingSave)
+		{
+			LinkVehicleVendors();
+		}
 	}
 
 	public bool IsPadOccupied()
@@ -12731,6 +12751,34 @@ public class VehicleSpawner : BaseEntity
 			}
 		}
 		Pool.FreeUnmanaged<RepairableVehiclePad>(ref list);
+	}
+
+	private void LinkVehicleVendors()
+	{
+		//IL_000c: Unknown result type (might be due to invalid IL or missing references)
+		List<VehicleVendor> list = Pool.Get<List<VehicleVendor>>();
+		Vis.Entities(((Component)this).transform.position, 40f, list, 1218652417, (QueryTriggerInteraction)2);
+		foreach (VehicleVendor item in list)
+		{
+			if (!item.isClient && item.IsValid())
+			{
+				item.FindVehicleSpawner();
+			}
+		}
+		Pool.FreeUnmanaged<VehicleVendor>(ref list);
+	}
+
+	public bool SpawnsFor(string message)
+	{
+		SpawnPair[] array = objectsToSpawn;
+		for (int i = 0; i < array.Length; i++)
+		{
+			if (array[i].message == message)
+			{
+				return true;
+			}
+		}
+		return false;
 	}
 
 	public override void OnEntityMessage(BaseEntity from, string msg)
@@ -17603,8 +17651,8 @@ public class EffectParent : EntityComponent<BaseEntity>, IClientComponent
 	[Tooltip("If true the effect isn't our direct child and is in another hierarchy - USE WITH CAUTION")]
 	public bool separatedEffect;
 
-	[Header("USING COLLIDERS? - COLLIDER SAFETY")]
 	[Tooltip("If true the effect will be forced to the safe layer that doesn't interact with player colliders")]
+	[Header("USING COLLIDERS? - COLLIDER SAFETY")]
 	public bool forceSafePlayerCollisionLayer;
 }
 
@@ -18567,8 +18615,8 @@ using UnityEngine.UI;
 
 public class HomingLauncherUIDialog : UIDialog
 {
-	[SerializeField]
 	[Header("Homing Launcher")]
+	[SerializeField]
 	private Canvas canvas;
 
 	[SerializeField]
@@ -22064,8 +22112,8 @@ public class CrabGrouping : IDisposable
 		[Tooltip("How far from the entity the crabs spread out. They turn back when they reach the edge rather than despawning.")]
 		public float swarmRadius;
 
-		[Tooltip("Speed while wandering around.")]
 		[Header("Movement")]
+		[Tooltip("Speed while wandering around.")]
 		public float minSpeed;
 
 		[Tooltip("Speed while startled, ie when the player gets close.")]
@@ -22083,15 +22131,15 @@ public class CrabGrouping : IDisposable
 		[Tooltip("Random speed spread per crab, on top of size. 0.25 means each crab is up to 25 percent faster or slower than its size alone suggests, so same sized crabs still differ.")]
 		public float speedRandomness;
 
-		[Tooltip("How close to the entity each crab wants to stay, as a fraction of the swarm radius. Rolled per crab, so some shadow the entity closely while others hang back near the edge.")]
 		[Header("Following")]
+		[Tooltip("How close to the entity each crab wants to stay, as a fraction of the swarm radius. Rolled per crab, so some shadow the entity closely while others hang back near the edge.")]
 		public Vector2 followTightnessRange;
 
 		[Tooltip("Random variation in how long a crab dawdles before setting off after the entity, in seconds. Stops the swarm surging as one block.")]
 		public Vector2 catchUpDelayRange;
 
-		[Tooltip("How far a crab travels in one trip, as a fraction of the swarm radius. Picked randomly per trip.")]
 		[Header("Wandering")]
+		[Tooltip("How far a crab travels in one trip, as a fraction of the swarm radius. Picked randomly per trip.")]
 		public Vector2 wanderDistanceRange;
 
 		[Tooltip("How long a crab sits still after finishing a trip, in seconds. Higher means a calmer swarm.")]
@@ -22113,8 +22161,8 @@ public class CrabGrouping : IDisposable
 		[Tooltip("How far a fleeing crab may stray outside the swarm radius, as a multiplier. It wanders back in once it calms down.")]
 		public float startleBoundsMultiplier;
 
-		[Tooltip("Speed at which the walk animation reaches full blend. Below this the legs scale down, at 0 speed the crab is still.")]
 		[Header("Animation")]
+		[Tooltip("Speed at which the walk animation reaches full blend. Below this the legs scale down, at 0 speed the crab is still.")]
 		public float fullAnimationSpeed;
 
 		[Tooltip("How quickly the walk animation blends in and out as the crab starts and stops.")]
@@ -22472,8 +22520,8 @@ public struct CrabType
 	[Tooltip("How far from the entity the crabs spread out. They turn back when they reach the edge rather than despawning.")]
 	public float swarmRadius;
 
-	[Tooltip("Speed while wandering around.")]
 	[Header("Movement")]
+	[Tooltip("Speed while wandering around.")]
 	public float minSpeed;
 
 	[Tooltip("Speed while startled, ie when the player gets close.")]
@@ -22491,15 +22539,15 @@ public struct CrabType
 	[Tooltip("Random speed spread per crab, on top of size. 0.25 means each crab is up to 25 percent faster or slower than its size alone suggests, so same sized crabs still differ.")]
 	public float speedRandomness;
 
-	[Tooltip("How close to the entity each crab wants to stay, as a fraction of the swarm radius. Rolled per crab, so some shadow the entity closely while others hang back near the edge.")]
 	[Header("Following")]
+	[Tooltip("How close to the entity each crab wants to stay, as a fraction of the swarm radius. Rolled per crab, so some shadow the entity closely while others hang back near the edge.")]
 	public Vector2 followTightnessRange;
 
 	[Tooltip("Random variation in how long a crab dawdles before setting off after the entity, in seconds. Stops the swarm surging as one block.")]
 	public Vector2 catchUpDelayRange;
 
-	[Tooltip("How far a crab travels in one trip, as a fraction of the swarm radius. Picked randomly per trip.")]
 	[Header("Wandering")]
+	[Tooltip("How far a crab travels in one trip, as a fraction of the swarm radius. Picked randomly per trip.")]
 	public Vector2 wanderDistanceRange;
 
 	[Tooltip("How long a crab sits still after finishing a trip, in seconds. Higher means a calmer swarm.")]
@@ -22521,8 +22569,8 @@ public struct CrabType
 	[Tooltip("How far a fleeing crab may stray outside the swarm radius, as a multiplier. It wanders back in once it calms down.")]
 	public float startleBoundsMultiplier;
 
-	[Tooltip("Speed at which the walk animation reaches full blend. Below this the legs scale down, at 0 speed the crab is still.")]
 	[Header("Animation")]
+	[Tooltip("Speed at which the walk animation reaches full blend. Below this the legs scale down, at 0 speed the crab is still.")]
 	public float fullAnimationSpeed;
 
 	[Tooltip("How quickly the walk animation blends in and out as the crab starts and stops.")]
@@ -24349,8 +24397,8 @@ public class JellyfishGrouping : IDisposable
 		[Tooltip("How quickly the tilt follows a change in climb rate. Low is a languid lean, high snaps to it.")]
 		public float tiltEaseRate;
 
-		[Tooltip("Pulse rate of a jellyfish sat completely still, as a fraction of its rate at full speed. 0 stops the animation dead when resting, which looks lifeless. Around 0.3 keeps it ticking over.")]
 		[Header("Pulse")]
+		[Tooltip("Pulse rate of a jellyfish sat completely still, as a fraction of its rate at full speed. 0 stops the animation dead when resting, which looks lifeless. Around 0.3 keeps it ticking over.")]
 		public float pulseRateAtRest;
 
 		[Tooltip("Speed at which a jellyfish pulses at its full authored rate. Below this the pulse slows towards pulseRateAtRest, above it does not speed up further.")]
@@ -24373,8 +24421,8 @@ public class JellyfishGrouping : IDisposable
 		[Tooltip("Give up on a destination after this long, so a stuck jellyfish doesn't push into a wall forever.")]
 		public float wanderTimeout;
 
-		[Tooltip("Where in the water column each jellyfish sits, as a fraction of local depth. 0 hugs the surface and 1 hugs the floor. Rolled per jellyfish within this range so the swarm fills the column.")]
 		[Header("Depth")]
+		[Tooltip("Where in the water column each jellyfish sits, as a fraction of local depth. 0 hugs the surface and 1 hugs the floor. Rolled per jellyfish within this range so the swarm fills the column.")]
 		public Vector2 depthFractionRange;
 
 		[Tooltip("How quickly a jellyfish eases towards its preferred depth. Low is a slow, tidal rise and fall.")]
@@ -24500,12 +24548,12 @@ public class JellyfishGrouping : IDisposable
 		[ReadOnly]
 		public uint seed;
 
-		[NativeDisableParallelForRestriction]
 		[ReadOnly]
+		[NativeDisableParallelForRestriction]
 		public NativeArray<float3> displacerPositions;
 
-		[NativeDisableParallelForRestriction]
 		[ReadOnly]
+		[NativeDisableParallelForRestriction]
 		public NativeArray<float3> displacerVelocities;
 
 		[ReadOnly]
@@ -24760,8 +24808,8 @@ public struct JellyfishType
 	[Tooltip("How quickly the tilt follows a change in climb rate. Low is a languid lean, high snaps to it.")]
 	public float tiltEaseRate;
 
-	[Tooltip("Pulse rate of a jellyfish sat completely still, as a fraction of its rate at full speed. 0 stops the animation dead when resting, which looks lifeless. Around 0.3 keeps it ticking over.")]
 	[Header("Pulse")]
+	[Tooltip("Pulse rate of a jellyfish sat completely still, as a fraction of its rate at full speed. 0 stops the animation dead when resting, which looks lifeless. Around 0.3 keeps it ticking over.")]
 	public float pulseRateAtRest;
 
 	[Tooltip("Speed at which a jellyfish pulses at its full authored rate. Below this the pulse slows towards pulseRateAtRest, above it does not speed up further.")]
@@ -24784,8 +24832,8 @@ public struct JellyfishType
 	[Tooltip("Give up on a destination after this long, so a stuck jellyfish doesn't push into a wall forever.")]
 	public float wanderTimeout;
 
-	[Tooltip("Where in the water column each jellyfish sits, as a fraction of local depth. 0 hugs the surface and 1 hugs the floor. Rolled per jellyfish within this range so the swarm fills the column.")]
 	[Header("Depth")]
+	[Tooltip("Where in the water column each jellyfish sits, as a fraction of local depth. 0 hugs the surface and 1 hugs the floor. Rolled per jellyfish within this range so the swarm fills the column.")]
 	public Vector2 depthFractionRange;
 
 	[Tooltip("How quickly a jellyfish eases towards its preferred depth. Low is a slow, tidal rise and fall.")]
@@ -24927,12 +24975,12 @@ public struct JellyfishUpdateJob : IJobParallelFor
 	[ReadOnly]
 	public uint seed;
 
-	[NativeDisableParallelForRestriction]
 	[ReadOnly]
+	[NativeDisableParallelForRestriction]
 	public NativeArray<float3> displacerPositions;
 
-	[NativeDisableParallelForRestriction]
 	[ReadOnly]
+	[NativeDisableParallelForRestriction]
 	public NativeArray<float3> displacerVelocities;
 
 	[ReadOnly]
@@ -25051,8 +25099,8 @@ public class BasePet : NPCPlayer, IThinker
 	[ServerVar]
 	public static bool onlyQueueBaseNavMovements = true;
 
-	[ServerVar]
 	[Help("How many miliseconds to budget for processing pet movements per frame")]
+	[ServerVar]
 	public static float movementupdatebudgetms = 1f;
 
 	public float BaseAttackRate = 2f;
@@ -25755,8 +25803,8 @@ public class AIThinkManager : BaseMonoBehaviour, IServerComponent
 	[Help("How many miliseconds to budget for processing animal AI entities per server frame")]
 	public static float animalframebudgetms = 2f;
 
-	[ServerVar]
 	[Help("How many miliseconds to budget for processing pet AI entities per server frame")]
+	[ServerVar]
 	public static float petframebudgetms = 1f;
 
 	private static int lastIndex = 0;

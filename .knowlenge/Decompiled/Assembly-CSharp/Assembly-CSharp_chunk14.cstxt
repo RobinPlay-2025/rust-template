@@ -1,4 +1,330 @@
 using System;
+using ConVar;
+using Facepunch;
+using ProtoBuf;
+using Rust;
+using UnityEngine;
+
+public class PlayerCorpse : LootableCorpse
+{
+	public Buoyancy buoyancy;
+
+	public const Flags Flag_Buoyant = Flags.Reserved6;
+
+	public uint underwearSkin;
+
+	private int paintballColor;
+
+	public PlayerBonePosData bonePosData;
+
+	public const Flags BlockClothingRebuild = Flags.Reserved2;
+
+	public static readonly Phrase CantLootSafeZoneError = new Phrase("error_cantlootsafezone", "Cannot loot other players in safe zones");
+
+	private Vector3 prevLocalPos;
+
+	private const float SLEEP_CHECK_FREQUENCY = 10f;
+
+	public Ragdoll CorpseRagdollScript { get; private set; }
+
+	public override bool CorpseIsRagdoll => (Object)(object)CorpseRagdollScript != (Object)null;
+
+	public override float PositionTickRate
+	{
+		protected get
+		{
+			return 0.05f;
+		}
+	}
+
+	public override bool PositionTickFixedTime
+	{
+		protected get
+		{
+			return true;
+		}
+	}
+
+	public bool IsBuoyant()
+	{
+		return HasFlag(Flags.Reserved6);
+	}
+
+	public override bool OnStartBeingLooted(BasePlayer baseEntity)
+	{
+		if ((!Player.adminsafezonelooting || !baseEntity.IsAdmin) && (baseEntity.InSafeZone() || InSafeZone()) && (ulong)baseEntity.userID != playerSteamID && (!baseEntity.InVerifiedSafeCombatZone() || !InVerifiedSafeCombatZone()))
+		{
+			baseEntity.ShowToast(GameTip.Styles.Error, CantLootSafeZoneError, false);
+			return false;
+		}
+		return base.OnStartBeingLooted(baseEntity);
+	}
+
+	public override void ServerInit()
+	{
+		base.ServerInit();
+		if ((Object)(object)buoyancy == (Object)null)
+		{
+			Debug.LogWarning((object)("Player corpse has no buoyancy assigned, searching at runtime :" + ((Object)this).name));
+			buoyancy = ((Component)this).GetComponent<Buoyancy>();
+		}
+		if ((Object)(object)buoyancy != (Object)null)
+		{
+			buoyancy.SubmergedChanged = BuoyancyChanged;
+			buoyancy.forEntity = this;
+		}
+		if (Application.isLoadingSave)
+		{
+			CorpseRagdollScript = ((Component)this).GetComponent<Ragdoll>();
+		}
+		if (CorpseIsRagdoll)
+		{
+			CorpseRagdollScript.simOnServer = true;
+			CorpseRagdollScript.ServerInit();
+			((FacepunchBehaviour)this).InvokeRandomized((Action)SleepCheck, 5f, 10f, Random.Range(-1f, 1f));
+		}
+	}
+
+	public override void ServerInitCorpse(BaseEntity pr, Vector3 posOnDeah, Quaternion rotOnDeath, BasePlayer.PlayerFlags playerFlagsOnDeath, ModelState modelState)
+	{
+		//IL_00cb: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00d6: Unknown result type (might be due to invalid IL or missing references)
+		//IL_007f: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0085: Unknown result type (might be due to invalid IL or missing references)
+		//IL_008a: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00a9: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00a6: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00ae: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00b6: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00b7: Unknown result type (might be due to invalid IL or missing references)
+		parentEnt = pr;
+		BasePlayer basePlayer = (BasePlayer)pr;
+		CorpseRagdollScript = ((Component)this).GetComponent<Ragdoll>();
+		SpawnPointInstance component = ((Component)this).GetComponent<SpawnPointInstance>();
+		if ((Object)(object)component != (Object)null)
+		{
+			spawnGroup = component.parentSpawnPointUser as SpawnGroup;
+		}
+		Skeleton component2 = ((Component)this).GetComponent<Skeleton>();
+		if ((Object)(object)component2 != (Object)null)
+		{
+			PlayerBonePosData.BonePosData bonePositionData = bonePosData.GetBonePositionData(playerFlagsOnDeath, modelState);
+			if (bonePositionData != null)
+			{
+				component2.CopyFrom(bonePositionData.bonePositions, bonePositionData.boneRotations, true);
+				Transform transform = component2.Bones[0].transform;
+				transform.localEulerAngles += bonePositionData.rootRotationOffset;
+			}
+		}
+		if (CorpseIsRagdoll)
+		{
+			Quaternion val = (((playerFlagsOnDeath & BasePlayer.PlayerFlags.Sleeping) != 0) ? Quaternion.identity : rotOnDeath);
+			((Component)this).transform.SetPositionAndRotation(posOnDeah, val);
+		}
+		else
+		{
+			((Component)this).transform.SetPositionAndRotation(parentEnt.CenterPoint(), basePlayer.eyes.bodyRotation);
+		}
+	}
+
+	public void BuoyancyChanged(bool isSubmerged)
+	{
+		if (IsBuoyant())
+		{
+			return;
+		}
+		using FlagsUpdateScope flagsUpdateScope = StartSetFlags(FlagsUpdateMode.SendNetworkUpdate_Flags);
+		flagsUpdateScope.Set(Flags.Reserved6, isSubmerged);
+	}
+
+	public void BecomeActive()
+	{
+		//IL_001b: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0020: Unknown result type (might be due to invalid IL or missing references)
+		if (CorpseIsRagdoll)
+		{
+			CorpseRagdollScript.BecomeActive();
+			prevLocalPos = ((Component)this).transform.localPosition;
+		}
+	}
+
+	public void BecomeInactive()
+	{
+		if (CorpseIsRagdoll)
+		{
+			CorpseRagdollScript.BecomeInactive();
+		}
+	}
+
+	protected override void PushRagdoll(HitInfo info)
+	{
+		//IL_001b: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0021: Unknown result type (might be due to invalid IL or missing references)
+		if (CorpseIsRagdoll)
+		{
+			BecomeActive();
+			PushRigidbodies(CorpseRagdollScript.rigidbodies, info.HitPositionWorld, info.attackNormal);
+		}
+		else
+		{
+			base.PushRagdoll(info);
+		}
+	}
+
+	private void SleepCheck()
+	{
+		//IL_0017: Unknown result type (might be due to invalid IL or missing references)
+		//IL_001c: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0021: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0097: Unknown result type (might be due to invalid IL or missing references)
+		//IL_009c: Unknown result type (might be due to invalid IL or missing references)
+		//IL_006e: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0074: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0079: Unknown result type (might be due to invalid IL or missing references)
+		if (!CorpseIsRagdoll)
+		{
+			return;
+		}
+		if (CorpseRagdollScript.IsKinematic)
+		{
+			if (!GamePhysics.Trace(new Ray(CenterPoint(), Vector3.down), 0f, out var _, 0.25f, -928830701, (QueryTriggerInteraction)1, this))
+			{
+				BecomeActive();
+			}
+		}
+		else if (!rigidBody.IsSleeping() && !buoyancy.ShouldWake() && Vector3.SqrMagnitude(((Component)this).transform.localPosition - prevLocalPos) < 0.1f)
+		{
+			BecomeInactive();
+		}
+		prevLocalPos = ((Component)this).transform.localPosition;
+	}
+
+	public override bool BuoyancySleep(bool inWater)
+	{
+		if (CorpseIsRagdoll)
+		{
+			if (!rigidBody.IsSleeping())
+			{
+				BecomeInactive();
+			}
+			return true;
+		}
+		return base.BuoyancySleep(inWater);
+	}
+
+	public override bool BuoyancyWake()
+	{
+		if (CorpseIsRagdoll)
+		{
+			BecomeActive();
+			return true;
+		}
+		return base.BuoyancyWake();
+	}
+
+	public override float AntiHackPadding()
+	{
+		return 0.9f;
+	}
+
+	public override bool FillHeadData(HeadEntity head)
+	{
+		head.SetupPlayerId(playerName, playerSteamID);
+		head.AssignClothing(containers[1]);
+		return true;
+	}
+
+	private void OnPhysicsNeighbourChanged()
+	{
+		BecomeActive();
+	}
+
+	public bool IsWornItemPresent(int itemDefId, out Item item)
+	{
+		item = null;
+		if (containers == null)
+		{
+			return false;
+		}
+		ItemContainer[] array = containers;
+		foreach (ItemContainer itemContainer in array)
+		{
+			if (itemContainer == null || itemContainer.containerVolume != 2)
+			{
+				continue;
+			}
+			for (int j = 0; j < itemContainer.itemList.Count; j++)
+			{
+				item = itemContainer.itemList[j];
+				if (item != null && !((Object)(object)item.info == (Object)null) && item.info.itemid == itemDefId)
+				{
+					return true;
+				}
+			}
+		}
+		item = null;
+		return false;
+	}
+
+	public override void OnCollision(Collision collision, BaseEntity hitEntity)
+	{
+	}
+
+	public override void Save(SaveInfo info)
+	{
+		base.Save(info);
+		if (info.msg.lootableCorpse != null)
+		{
+			info.msg.lootableCorpse.underwearSkin = underwearSkin;
+			if (IsWornItemPresent(PaintballColorLookup.instance.overallsItemDefinition.itemid, out var item))
+			{
+				info.msg.lootableCorpse.paintballColor = item.instanceData?.dataInt ?? 0;
+			}
+		}
+		if (base.isServer && containers != null && containers.Length > 1 && !info.forDisk)
+		{
+			info.msg.storageBox = Pool.Get<StorageBox>();
+			info.msg.storageBox.contents = containers[1].Save();
+		}
+	}
+
+	public override string Categorize()
+	{
+		return "playercorpse";
+	}
+}
+
+
+public class PointEntity : BaseEntity
+{
+}
+
+
+public class PointEntity<T> : PointEntity where T : PointEntity<T>
+{
+	public static T ServerInstance;
+
+	public override void PreInitShared()
+	{
+		base.PreInitShared();
+		if (base.isServer)
+		{
+			ServerInstance = this as T;
+		}
+	}
+
+	public override void DestroyShared()
+	{
+		base.DestroyShared();
+		if (base.isServer)
+		{
+			ServerInstance = null;
+		}
+	}
+}
+
+
+using System;
 using PoolPhysics;
 using UnityEngine;
 
@@ -2625,8 +2951,8 @@ public class SatelliteCrash : BaseCombatEntity
 	public GameObjectRef groundImpactEffect;
 
 	[FormerlySerializedAs("maxCratesToSpawn")]
-	[Header("Crash Config")]
 	[Tooltip("Loot budget at 1.0x mass scale, in crate-equivalents. Multiplied by the mass-to-loot curve; the result spawns as crates up to Max Crates Per Crash, with any overflow going into extra items per crate.")]
+	[Header("Crash Config")]
 	public int baselineCrateSpawnCount = 6;
 
 	public int maxFireballs = 10;
@@ -2641,8 +2967,8 @@ public class SatelliteCrash : BaseCombatEntity
 
 	public float startHeight = 200f;
 
-	[Header("Loot Scaling")]
 	[Tooltip("Maps satellite mass (kg) to the loot multiplier. The multiplier scales fireball count and the total crate loot budget (crate count up to Max Crates Per Crash, overflow into extra items per crate). Flat outside the first/last key.")]
+	[Header("Loot Scaling")]
 	public AnimationCurve massToLootScale = AnimationCurve.Linear(1000f, 0.5f, 6000f, 3f);
 
 	[Tooltip("Hard cap on crates spawned per crash, regardless of the loot multiplier. Budget beyond this goes into extra items per crate.")]
@@ -4589,8 +4915,8 @@ using UnityEngine.UI;
 
 public class SatelliteSpectatorScreenUI : MonoBehaviour
 {
-	[Header("Map")]
 	[SerializeField]
+	[Header("Map")]
 	private RawImage mapImage;
 
 	[SerializeField]
@@ -4599,8 +4925,8 @@ public class SatelliteSpectatorScreenUI : MonoBehaviour
 	[SerializeField]
 	private float mapZoom = 2f;
 
-	[SerializeField]
 	[Header("Markers (optional — created procedurally if unset)")]
+	[SerializeField]
 	private RectTransform reticleRect;
 
 	[SerializeField]
@@ -4609,8 +4935,8 @@ public class SatelliteSpectatorScreenUI : MonoBehaviour
 	[SerializeField]
 	private RectTransform lockedCrashRect;
 
-	[Header("Text")]
 	[SerializeField]
+	[Header("Text")]
 	private RustText statusText;
 
 	[SerializeField]
@@ -5426,8 +5752,8 @@ public class SiegeWeaponVehicleAudio : GroundVehicleAudio
 
 	public SoundDefinition reloadCompleteDef;
 
-	[SerializeField]
 	[Header("Rattles")]
+	[SerializeField]
 	private SoundDefinition movementRattleLoop;
 
 	[SerializeField]
@@ -5439,8 +5765,8 @@ public class SiegeWeaponVehicleAudio : GroundVehicleAudio
 	[SerializeField]
 	private float movementRattleGainChangeSpeed = 1f;
 
-	[SerializeField]
 	[Header("Wheels")]
+	[SerializeField]
 	private SoundDefinition tyreRollingSoundDef;
 
 	[SerializeField]
@@ -5664,8 +5990,8 @@ public class CatapultSounds : GroundVehicleAudio
 
 	public SoundDefinition reloadStopDef;
 
-	[Header("Suspension")]
 	[SerializeField]
+	[Header("Suspension")]
 	private SoundDefinition suspensionDef;
 
 	[SerializeField]
@@ -5717,8 +6043,8 @@ public class ConstructableEntity : StorageContainer
 
 	private int[] currentMaterials;
 
-	[Tooltip("Fewest hammer hits this can be finished in.")]
 	[Min(1f)]
+	[Tooltip("Fewest hammer hits this can be finished in.")]
 	public int hitsToComplete = 10;
 
 	public GameObjectRef entityToSpawn;
@@ -7701,8 +8027,8 @@ using UnityEngine;
 
 public class BaseVehicleMountPoint : BaseMountable
 {
-	[Tooltip("Only Set this if you definitely need a VehicleFixedUpdate tick on the seat for some reason")]
 	[Header("BaseVehicleMountPoint")]
+	[Tooltip("Only Set this if you definitely need a VehicleFixedUpdate tick on the seat for some reason")]
 	public bool RequiresVehicleFixedUpdateOnSeat;
 
 	public override bool AllowDuckToggle
@@ -8381,8 +8707,8 @@ public class BikeVehicleAudio : GroundVehicleAudio
 	[SerializeField]
 	private float suspensionMinTimeBetweenSounds = 0.25f;
 
-	[Header("Tires")]
 	[SerializeField]
+	[Header("Tires")]
 	private SoundDefinition tireDirtSoundDef;
 
 	[SerializeField]
@@ -8397,8 +8723,8 @@ public class BikeVehicleAudio : GroundVehicleAudio
 	[SerializeField]
 	private AnimationCurve tireGainCurve;
 
-	[Header("Skid")]
 	[SerializeField]
+	[Header("Skid")]
 	private SoundDefinition skidSoundLoop;
 
 	[SerializeField]
@@ -8563,8 +8889,8 @@ public class BaseBoat : BaseVehicle
 		return secondsUntilShoreDrift;
 	}
 
-	[ServerVar]
 	[Help("Seconds between shore drift teleport ticks")]
+	[ServerVar]
 	public static int seconds_between_shore_drift(Arg arg)
 	{
 		secondsBetweenShoreDrift = arg.GetInt(0, secondsBetweenShoreDrift);
@@ -9360,8 +9686,8 @@ public class Buoyancy : ListComponent<Buoyancy>, IServerComponent, IPrefabPrePro
 	public float underwaterDrag = 2f;
 
 	[FormerlySerializedAs("flatWaterLerp")]
-	[Range(0f, 1f)]
 	[Tooltip("How much this object will pay attention to the wave system, 0 = flat water, 1 = full waves (default 1)")]
+	[Range(0f, 1f)]
 	public float wavesEffect = 1f;
 
 	public Action<bool> SubmergedChanged;
@@ -10474,9 +10800,9 @@ using UnityEngine;
 public class BuoyancyBurstUtility
 {
 	[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-	internal delegate void FillPointData_00005CAF$PostfixBurstDelegate(in int pointIndexOffset, ref NativeArray<Vector2> pointPositionArray, ref NativeArray<Vector2> pointPositionUVArray, in Matrix4x4 rootToWorld, ref NativeArray<Buoyancy.BuoyancyPointData> pointData, in Bounds deepSeaBounds, in Vector3 terrainPosition, in Vector3 terrainOneOverSize, in bool isDeepSea, ref NativeArray<Vector3> allPositions3D, out int pointCount);
+	internal delegate void FillPointData_00005CB8$PostfixBurstDelegate(in int pointIndexOffset, ref NativeArray<Vector2> pointPositionArray, ref NativeArray<Vector2> pointPositionUVArray, in Matrix4x4 rootToWorld, ref NativeArray<Buoyancy.BuoyancyPointData> pointData, in Bounds deepSeaBounds, in Vector3 terrainPosition, in Vector3 terrainOneOverSize, in bool isDeepSea, ref NativeArray<Vector3> allPositions3D, out int pointCount);
 
-	internal static class FillPointData_00005CAF$BurstDirectCall
+	internal static class FillPointData_00005CB8$BurstDirectCall
 	{
 		private static IntPtr Pointer;
 
@@ -10487,7 +10813,7 @@ public class BuoyancyBurstUtility
 			//IL_001b: Unknown result type (might be due to invalid IL or missing references)
 			if (Pointer == (IntPtr)0)
 			{
-				Pointer = BurstCompiler.CompileFunctionPointer<FillPointData_00005CAF$PostfixBurstDelegate>((FillPointData_00005CAF$PostfixBurstDelegate)FillPointData).Value;
+				Pointer = BurstCompiler.CompileFunctionPointer<FillPointData_00005CB8$PostfixBurstDelegate>((FillPointData_00005CB8$PostfixBurstDelegate)FillPointData).Value;
 			}
 			P_0 = Pointer;
 		}
@@ -10514,11 +10840,11 @@ public class BuoyancyBurstUtility
 		}
 	}
 
-	[MonoPInvokeCallback(typeof(FillPointData_00005CAF$PostfixBurstDelegate))]
 	[BurstCompile]
+	[MonoPInvokeCallback(typeof(FillPointData_00005CB8$PostfixBurstDelegate))]
 	public static void FillPointData(in int pointIndexOffset, ref NativeArray<Vector2> pointPositionArray, ref NativeArray<Vector2> pointPositionUVArray, in Matrix4x4 rootToWorld, ref NativeArray<Buoyancy.BuoyancyPointData> pointData, in Bounds deepSeaBounds, in Vector3 terrainPosition, in Vector3 terrainOneOverSize, in bool isDeepSea, ref NativeArray<Vector3> allPositions3D, out int pointCount)
 	{
-		FillPointData_00005CAF$BurstDirectCall.Invoke(in pointIndexOffset, ref pointPositionArray, ref pointPositionUVArray, in rootToWorld, ref pointData, in deepSeaBounds, in terrainPosition, in terrainOneOverSize, in isDeepSea, ref allPositions3D, out pointCount);
+		FillPointData_00005CB8$BurstDirectCall.Invoke(in pointIndexOffset, ref pointPositionArray, ref pointPositionUVArray, in rootToWorld, ref pointData, in deepSeaBounds, in terrainPosition, in terrainOneOverSize, in isDeepSea, ref allPositions3D, out pointCount);
 	}
 
 	[MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -10578,7 +10904,7 @@ using Unity.Collections;
 using UnityEngine;
 
 [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-internal delegate void FillPointData_00005CAF$PostfixBurstDelegate(in int pointIndexOffset, ref NativeArray<Vector2> pointPositionArray, ref NativeArray<Vector2> pointPositionUVArray, in Matrix4x4 rootToWorld, ref NativeArray<Buoyancy.BuoyancyPointData> pointData, in Bounds deepSeaBounds, in Vector3 terrainPosition, in Vector3 terrainOneOverSize, in bool isDeepSea, ref NativeArray<Vector3> allPositions3D, out int pointCount);
+internal delegate void FillPointData_00005CB8$PostfixBurstDelegate(in int pointIndexOffset, ref NativeArray<Vector2> pointPositionArray, ref NativeArray<Vector2> pointPositionUVArray, in Matrix4x4 rootToWorld, ref NativeArray<Buoyancy.BuoyancyPointData> pointData, in Bounds deepSeaBounds, in Vector3 terrainPosition, in Vector3 terrainOneOverSize, in bool isDeepSea, ref NativeArray<Vector3> allPositions3D, out int pointCount);
 
 
 using System;
@@ -10586,7 +10912,7 @@ using Unity.Burst;
 using Unity.Collections;
 using UnityEngine;
 
-internal static class FillPointData_00005CAF$BurstDirectCall
+internal static class FillPointData_00005CB8$BurstDirectCall
 {
 	private static IntPtr Pointer;
 
@@ -10597,7 +10923,7 @@ internal static class FillPointData_00005CAF$BurstDirectCall
 		//IL_001b: Unknown result type (might be due to invalid IL or missing references)
 		if (Pointer == (IntPtr)0)
 		{
-			Pointer = BurstCompiler.CompileFunctionPointer<FillPointData_00005CAF$PostfixBurstDelegate>((FillPointData_00005CAF$PostfixBurstDelegate)FillPointData).Value;
+			Pointer = BurstCompiler.CompileFunctionPointer<FillPointData_00005CB8$PostfixBurstDelegate>((FillPointData_00005CB8$PostfixBurstDelegate)FillPointData).Value;
 		}
 		P_0 = Pointer;
 	}
@@ -10668,9 +10994,9 @@ public static class BuoyancyForceAccumulationBurst
 	}
 
 	[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-	internal delegate void Compute_00005CB1$PostfixBurstDelegate(in NativeArray<InstanceInput> instances, in NativeArray<float3> allPositions3D, in NativeArray<float> pointShoreDistance, in NativeArray<WaterLevel.WaterInfo> pointWaterInfo, in NativeArray<float> pointSize, in NativeArray<float> pointBuoyancyForce, in NativeArray<float> pointRandomOffset, in NativeArray<float> pointWaveFrequency, in NativeArray<float> pointWaveScale, in NativeArray<float3> pointFlowDirection, float time, ref NativeArray<InstanceOutput> results);
+	internal delegate void Compute_00005CBA$PostfixBurstDelegate(in NativeArray<InstanceInput> instances, in NativeArray<float3> allPositions3D, in NativeArray<float> pointShoreDistance, in NativeArray<WaterLevel.WaterInfo> pointWaterInfo, in NativeArray<float> pointSize, in NativeArray<float> pointBuoyancyForce, in NativeArray<float> pointRandomOffset, in NativeArray<float> pointWaveFrequency, in NativeArray<float> pointWaveScale, in NativeArray<float3> pointFlowDirection, float time, ref NativeArray<InstanceOutput> results);
 
-	internal static class Compute_00005CB1$BurstDirectCall
+	internal static class Compute_00005CBA$BurstDirectCall
 	{
 		private static IntPtr Pointer;
 
@@ -10681,7 +11007,7 @@ public static class BuoyancyForceAccumulationBurst
 			//IL_001b: Unknown result type (might be due to invalid IL or missing references)
 			if (Pointer == (IntPtr)0)
 			{
-				Pointer = BurstCompiler.CompileFunctionPointer<Compute_00005CB1$PostfixBurstDelegate>((Compute_00005CB1$PostfixBurstDelegate)Compute).Value;
+				Pointer = BurstCompiler.CompileFunctionPointer<Compute_00005CBA$PostfixBurstDelegate>((Compute_00005CBA$PostfixBurstDelegate)Compute).Value;
 			}
 			P_0 = Pointer;
 		}
@@ -10708,11 +11034,11 @@ public static class BuoyancyForceAccumulationBurst
 		}
 	}
 
-	[MonoPInvokeCallback(typeof(Compute_00005CB1$PostfixBurstDelegate))]
 	[BurstCompile]
+	[MonoPInvokeCallback(typeof(Compute_00005CBA$PostfixBurstDelegate))]
 	public static void Compute(in NativeArray<InstanceInput> instances, in NativeArray<float3> allPositions3D, in NativeArray<float> pointShoreDistance, in NativeArray<WaterLevel.WaterInfo> pointWaterInfo, in NativeArray<float> pointSize, in NativeArray<float> pointBuoyancyForce, in NativeArray<float> pointRandomOffset, in NativeArray<float> pointWaveFrequency, in NativeArray<float> pointWaveScale, in NativeArray<float3> pointFlowDirection, float time, ref NativeArray<InstanceOutput> results)
 	{
-		Compute_00005CB1$BurstDirectCall.Invoke(in instances, in allPositions3D, in pointShoreDistance, in pointWaterInfo, in pointSize, in pointBuoyancyForce, in pointRandomOffset, in pointWaveFrequency, in pointWaveScale, in pointFlowDirection, time, ref results);
+		Compute_00005CBA$BurstDirectCall.Invoke(in instances, in allPositions3D, in pointShoreDistance, in pointWaterInfo, in pointSize, in pointBuoyancyForce, in pointRandomOffset, in pointWaveFrequency, in pointWaveScale, in pointFlowDirection, time, ref results);
 	}
 
 	[MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -10887,7 +11213,7 @@ using Unity.Collections;
 using Unity.Mathematics;
 
 [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-internal delegate void Compute_00005CB1$PostfixBurstDelegate(in NativeArray<InstanceInput> instances, in NativeArray<float3> allPositions3D, in NativeArray<float> pointShoreDistance, in NativeArray<WaterLevel.WaterInfo> pointWaterInfo, in NativeArray<float> pointSize, in NativeArray<float> pointBuoyancyForce, in NativeArray<float> pointRandomOffset, in NativeArray<float> pointWaveFrequency, in NativeArray<float> pointWaveScale, in NativeArray<float3> pointFlowDirection, float time, ref NativeArray<InstanceOutput> results);
+internal delegate void Compute_00005CBA$PostfixBurstDelegate(in NativeArray<InstanceInput> instances, in NativeArray<float3> allPositions3D, in NativeArray<float> pointShoreDistance, in NativeArray<WaterLevel.WaterInfo> pointWaterInfo, in NativeArray<float> pointSize, in NativeArray<float> pointBuoyancyForce, in NativeArray<float> pointRandomOffset, in NativeArray<float> pointWaveFrequency, in NativeArray<float> pointWaveScale, in NativeArray<float3> pointFlowDirection, float time, ref NativeArray<InstanceOutput> results);
 
 
 using System;
@@ -10895,7 +11221,7 @@ using Unity.Burst;
 using Unity.Collections;
 using Unity.Mathematics;
 
-internal static class Compute_00005CB1$BurstDirectCall
+internal static class Compute_00005CBA$BurstDirectCall
 {
 	private static IntPtr Pointer;
 
@@ -10906,7 +11232,7 @@ internal static class Compute_00005CB1$BurstDirectCall
 		//IL_001b: Unknown result type (might be due to invalid IL or missing references)
 		if (Pointer == (IntPtr)0)
 		{
-			Pointer = BurstCompiler.CompileFunctionPointer<Compute_00005CB1$PostfixBurstDelegate>((Compute_00005CB1$PostfixBurstDelegate)Compute).Value;
+			Pointer = BurstCompiler.CompileFunctionPointer<Compute_00005CBA$PostfixBurstDelegate>((Compute_00005CBA$PostfixBurstDelegate)Compute).Value;
 		}
 		P_0 = Pointer;
 	}
@@ -11211,8 +11537,8 @@ public class TugboatSounds : MonoBehaviour, IClientComponent
 
 	private float soundCullDistanceSq;
 
-	[SerializeField]
 	[Header("Engine")]
+	[SerializeField]
 	private SoundDefinition engineLoopDef;
 
 	private Sound engineLoop;
@@ -11294,8 +11620,8 @@ public class TugboatSounds : MonoBehaviour, IClientComponent
 	[SerializeField]
 	private Vector3 sideSoundLineBow;
 
-	[Header("Ambient")]
 	[SerializeField]
+	[Header("Ambient")]
 	private SoundDefinition ambientActiveLoopDef;
 
 	private Sound ambientActiveSound;
@@ -11332,19 +11658,19 @@ public class TugboatSounds : MonoBehaviour, IClientComponent
 	[SerializeField]
 	private SoundDefinition hornStop;
 
-	[Min(0f)]
 	[SerializeField]
+	[Min(0f)]
 	[Tooltip("The maximum amount of time a looped horn can last. If 0s then this is ignored.")]
 	private float maxHornTime;
 
-	[Min(0f)]
 	[SerializeField]
+	[Min(0f)]
 	[Tooltip("Used for rate limiting. This defines the maximum number of horn spams that can be invoked one after another.")]
 	private int hornTokenCapacity = 3;
 
-	[SerializeField]
 	[Min(0f)]
 	[Tooltip("Used for rate limiting. This defines how quickly a new token regenerates, permitting another horn honk.")]
+	[SerializeField]
 	private float hornTokenRegenerationTime = 1f;
 
 	private Line leftSoundLine;
@@ -11427,8 +11753,8 @@ public class CarSettings
 	[Range(0.01f, 1f)]
 	public float handbrakeGripMultiplier = 0.55f;
 
-	[Header("Drift")]
 	[Range(0.01f, 1f)]
+	[Header("Drift")]
 	public float rearTraction = 0.7f;
 
 	[Range(0.01f, 1f)]
@@ -11438,8 +11764,8 @@ public class CarSettings
 
 	public float driftRecoverySpeed = 20f;
 
-	[Header("Front/Rear Vehicle Balance")]
 	[Range(0f, 1f)]
+	[Header("Front/Rear Vehicle Balance")]
 	public float handlingBias = 0.5f;
 }
 
@@ -12654,12 +12980,12 @@ public class DamageRenderer : MonoBehaviour, IClientComponent
 	[SerializeField]
 	private float maxDamageOpacity = 0.9f;
 
-	[SerializeField]
 	[HideInInspector]
+	[SerializeField]
 	private List<DamageShowingRenderer> damageShowingRenderers;
 
-	[SerializeField]
 	[HideInInspector]
+	[SerializeField]
 	private List<GlassPane> damageShowingGlassRenderers;
 }
 
@@ -12686,8 +13012,8 @@ using UnityEngine;
 
 public class DiverPropulsionVehicleAudio : MonoBehaviour
 {
-	[Header("Engine")]
 	[SerializeField]
+	[Header("Engine")]
 	private SoundDefinition engineStartSound;
 
 	[SerializeField]
@@ -13084,8 +13410,8 @@ public abstract class GroundVehicleAudio : MonoBehaviour, IClientComponent
 	[SerializeField]
 	protected GroundVehicle groundVehicle;
 
-	[SerializeField]
 	[Header("Engine")]
+	[SerializeField]
 	private SoundDefinition engineStartSound;
 
 	[SerializeField]
@@ -13103,8 +13429,8 @@ public abstract class GroundVehicleAudio : MonoBehaviour, IClientComponent
 	[SerializeField]
 	private float overallVolume = 1f;
 
-	[Header("Water")]
 	[SerializeField]
+	[Header("Water")]
 	private SoundDefinition waterSplashSoundDef;
 
 	[SerializeField]
@@ -13123,8 +13449,8 @@ public abstract class GroundVehicleAudio : MonoBehaviour, IClientComponent
 	[SerializeField]
 	private SoundDefinition brakeStopSoundDef;
 
-	[SerializeField]
 	[Header("Lights")]
+	[SerializeField]
 	protected SoundDefinition lightsToggleSound;
 }
 
@@ -13490,8 +13816,8 @@ using UnityEngine;
 
 public class AttackHeliUIDialog : UIDialog
 {
-	[SerializeField]
 	[Header("Attack Helicopter")]
+	[SerializeField]
 	private Material compassStripMat;
 
 	[SerializeField]
@@ -13612,8 +13938,8 @@ public abstract class BaseHelicopter : BaseVehicle, SeekerTarget.ISeekerTargetOw
 		}
 	}
 
-	[Header("Helicopter")]
 	[SerializeField]
+	[Header("Helicopter")]
 	public float engineThrustMax;
 
 	[SerializeField]
@@ -13640,13 +13966,13 @@ public abstract class BaseHelicopter : BaseVehicle, SeekerTarget.ISeekerTargetOw
 	[SerializeField]
 	public GameObjectRef crashEffect;
 
-	[Range(0.1f, 0.95f)]
 	[Tooltip("Lower values mean more lift is produced at high angles.")]
 	[SerializeField]
+	[Range(0.1f, 0.95f)]
 	public float liftDotMax = 0.75f;
 
-	[SerializeField]
 	[Range(0.1f, 0.95f)]
+	[SerializeField]
 	public float altForceDotMin = 0.85f;
 
 	[SerializeField]
@@ -16952,8 +17278,8 @@ using UnityEngine;
 
 public class ScrapTransportHelicopter : PlayerHelicopterWithFlares, TriggerHurtNotChild.IHurtTriggerUser
 {
-	[SerializeField]
 	[Header("Scrap Transport Helicopter Specific")]
+	[SerializeField]
 	private Transform searchlightEye;
 
 	[SerializeField]
@@ -17569,9 +17895,9 @@ public class RidableHorseAnimation : EntityComponent<RidableHorse>, IClientCompo
 	[SerializeField]
 	private Vector3 skiddingHipRotation;
 
-	[SerializeField]
 	[Header("Head")]
 	[Range(0f, 1f)]
+	[SerializeField]
 	private float headBlend = 1f;
 
 	[ReadOnly]
@@ -17593,9 +17919,9 @@ public class RidableHorseAnimation : EntityComponent<RidableHorse>, IClientCompo
 
 	public Vector3 headLookOffset = Vector3.zero;
 
+	[Header("Spine")]
 	[Range(0f, 1f)]
 	[SerializeField]
-	[Header("Spine")]
 	private float spineBlend = 0.5f;
 
 	[ReadOnly]
@@ -17664,22 +17990,22 @@ public class RidableHorseAudio : FacepunchBehaviour, IClientComponent
 	[SerializeField]
 	private AnimationCurve saddleMovementGainCurve;
 
-	[SerializeField]
 	[Space]
+	[SerializeField]
 	private MaterialEffect footstepEffects;
 
 	[SerializeField]
 	private Transform[] feet;
 
-	[SerializeField]
 	[Space]
+	[SerializeField]
 	private GameObjectRef swimmingSloshEffect;
 
 	[SerializeField]
 	private string BaseFolder;
 
-	[SerializeField]
 	[Space]
+	[SerializeField]
 	private SoundDefinition skidLoopSoundDef;
 
 	[SerializeField]
@@ -20501,8 +20827,8 @@ public class NPCMountable : EntityComponent<BaseEntity>
 		public float radius;
 	}
 
-	[Tooltip("The seats on this vehicle. An NPC takes the nearest free one.")]
 	[Header("NPC Mountable")]
+	[Tooltip("The seats on this vehicle. An NPC takes the nearest free one.")]
 	public NPCMountAnchor[] anchors;
 
 	[Tooltip("Where NPCs are put down when they get off. Same name and meaning as BaseMountable's.")]
@@ -21595,12 +21921,12 @@ using UnityEngine;
 
 public class SnowmobileAudio : GroundVehicleAudio
 {
-	[Header("Engine")]
 	[SerializeField]
+	[Header("Engine")]
 	private EngineAudioSet engineAudioSet;
 
-	[Header("Skis")]
 	[SerializeField]
+	[Header("Skis")]
 	private AnimationCurve skiGainCurve;
 
 	[SerializeField]
@@ -21715,8 +22041,8 @@ using UnityEngine;
 
 public class SoccerBall : BaseCombatEntity
 {
-	[Header("Soccer Ball")]
 	[SerializeField]
+	[Header("Soccer Ball")]
 	private Rigidbody rigidBody;
 
 	[SerializeField]
@@ -22048,8 +22374,8 @@ public class SubmarineAudio : MonoBehaviour
 	[SerializeField]
 	private AnimationCurve engineLoopPitchCurve;
 
-	[Header("Water")]
 	[SerializeField]
+	[Header("Water")]
 	private SoundDefinition underwaterLoopDef;
 
 	[SerializeField]
@@ -22112,8 +22438,8 @@ using UnityEngine;
 
 public class SubmarineDuo : BaseSubmarine
 {
-	[SerializeField]
 	[Header("Duo Sub Seating & Controls")]
+	[SerializeField]
 	private Transform steeringWheel;
 
 	[SerializeField]
@@ -24360,8 +24686,8 @@ using UnityEngine;
 
 public class LocomotiveExtraVisuals : MonoBehaviour
 {
-	[Header("Gauges")]
 	[SerializeField]
+	[Header("Gauges")]
 	private TrainEngine trainEngine;
 
 	[SerializeField]
@@ -24421,8 +24747,8 @@ using UnityEngine;
 
 public class TrainCarAudio : MonoBehaviour
 {
-	[Header("Train Car Audio")]
 	[SerializeField]
+	[Header("Train Car Audio")]
 	private TrainCar trainCar;
 
 	[SerializeField]
@@ -24966,8 +25292,8 @@ public class TrainEngineAudio : TrainCarAudio
 	[SerializeField]
 	private Transform hornSoundPosition;
 
-	[Header("Engine")]
 	[SerializeField]
+	[Header("Engine")]
 	private SoundDefinition engineStartSound;
 
 	[SerializeField]
@@ -25007,15 +25333,15 @@ public class TrainEngineAudio : TrainCarAudio
 	[SerializeField]
 	private float reflectionRayOffset = 0.5f;
 
-	[Header("Horn")]
 	[SerializeField]
+	[Header("Horn")]
 	private SoundDefinition hornLoop;
 
 	[SerializeField]
 	private SoundDefinition hornStart;
 
-	[Header("Other")]
 	[SerializeField]
+	[Header("Other")]
 	private SoundDefinition lightsToggleSound;
 
 	[SerializeField]
@@ -25967,8 +26293,8 @@ public class TrainWagonLootData : ScriptableObject
 	[SerializeField]
 	private LootOption[] oreOptions;
 
-	[SerializeField]
 	[ReadOnly]
+	[SerializeField]
 	private LootOption lootWagonContent;
 
 	[SerializeField]
@@ -28128,8 +28454,8 @@ public class ChargeUpIOEntity : IOEntity
 
 	public bool RequireInputToTrigger;
 
-	[Header("Charging Sounds")]
 	[Tooltip("If this entity has no sound, disable this to save on resources")]
+	[Header("Charging Sounds")]
 	public bool doSounds = true;
 
 	public SoundDefinition startChargingSound;
@@ -30822,16 +31148,16 @@ using UnityEngine;
 
 public class Powergrid : ConsoleSystem
 {
-	[Help("If disabled power grid functionality will be disabled.")]
 	[ReplicatedVar]
+	[Help("If disabled power grid functionality will be disabled.")]
 	public static bool enabled = true;
 
-	[ReplicatedVar]
 	[Help("Required powergrid stage for green recyclers to return to baseline efficiency. If < 0 then will use the default values.")]
+	[ReplicatedVar]
 	public static int greenRecyclerFullEfficiencyStage = -1;
 
-	[ServerVar]
 	[Help("Pretend there are this many additional heavy fuses currently plugged into the power plant. Can input negative numbers to negate the effect of any currently plugged in fuses.")]
+	[ServerVar]
 	public static int simulatePowerPlantFuses = 0;
 
 	[ServerVar(Help = "How long a heavy fuse plugged into the power plant lasts while it is decaying at the full rate (how long the worst fuses in the power plant survive for). If <= 0 then fuses last forever.", Saved = true)]
