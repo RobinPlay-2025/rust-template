@@ -14302,6 +14302,7 @@ public class LivestockAnimal : BaseNPC2, ISimpleHearingReceiver, INaturalDeathPo
 	private void SaveFamiliarity(LivestockAnimal save)
 	{
 		save.curious = IsCurious;
+		save.decayStarted = DecayStarted;
 		if (acquaintances == null)
 		{
 			return;
@@ -14322,6 +14323,7 @@ public class LivestockAnimal : BaseNPC2, ISimpleHearingReceiver, INaturalDeathPo
 	private void LoadFamiliarity(LivestockAnimal save)
 	{
 		IsCurious = save.curious;
+		DecayStarted = DecayStarted || save.decayStarted;
 		List<LivestockAcquaintance> list = save.acquaintances;
 		if (list != null && list.Count > 0)
 		{
@@ -19105,7 +19107,7 @@ public class BasicAnimalFsm : FSMComponent
 				{
 					Inverted = true
 				}
-			}).AddChildren(roam.AddEndTransition(sleep, new Trans_RandomChance
+			}).AddChildren(roam.AddFailureTransition(dead, new Trans_Dead()).AddEndTransition(sleep, new Trans_RandomChance
 			{
 				Chance = sleepChance
 			}).AddEndTransition(idle), sleep.AddEndTransition(roam), idle.AddEndTransition(roam)), state_Nothing7.AddTickTransition(state_Nothing2, new Trans_HasTarget
@@ -19973,6 +19975,38 @@ public class LivestockAnimalFSM : FSMComponent
 		}
 
 		protected override bool HealsWhenUndisturbed => false;
+	}
+
+	[Serializable]
+	public class Trans_Stranded : Trans_Dead
+	{
+		protected override bool EvaluateInternal(ref FSMPayload payload)
+		{
+			//IL_0037: Unknown result type (might be due to invalid IL or missing references)
+			if (AI.useUnityNavmesh)
+			{
+				NavHit hitNS;
+				if ((Object)(object)SingletonComponent<DynamicNavMesh>.Instance != (Object)null && !SingletonComponent<DynamicNavMesh>.Instance.IsBuilding)
+				{
+					return !base.Agent.SamplePosition(base.Agent.WorldToNavSpace(((Component)Owner).transform.position), out hitNS, 2f);
+				}
+				return false;
+			}
+			if (base.Agent.IsNavMeshBuilt)
+			{
+				return !base.Agent.isOnNavMesh;
+			}
+			return false;
+		}
+
+		public override void OnTransitionTaken(FSMStateBase from, FSMStateBase to)
+		{
+			base.OnTransitionTaken(from, to);
+			if (Owner is BaseNPC2 baseNPC)
+			{
+				baseNPC.DieOffNavmesh();
+			}
+		}
 	}
 
 	[Serializable]
@@ -24166,7 +24200,7 @@ public class LivestockAnimalFSM : FSMComponent
 									.AddEndTransition(foodSearch, foodSearchFailedTransition)
 									.AddEndTransition(roam, foodRoamTransition)
 									.AddEndTransition(rest, restTransition)
-									.AddEndTransition(randomIdle), graze.AddEndTransition(randomIdle), drink.AddEndTransition(randomIdle), roam.AddEndTransition(randomIdle), friskyCanter.AddEndTransition(randomIdle), rest.AddEndTransition(randomIdle), foodSearch.AddEndTransition(randomIdle), sleep.AddEndTransition(randomIdle)), follow.AddTickTransition(randomIdle, new Trans_IsFollowingPlayer
+									.AddEndTransition(randomIdle), graze.AddEndTransition(randomIdle), drink.AddEndTransition(randomIdle), roam.AddFailureTransition(dead, new Trans_Stranded()).AddEndTransition(randomIdle), friskyCanter.AddEndTransition(randomIdle), rest.AddEndTransition(randomIdle), foodSearch.AddEndTransition(randomIdle), sleep.AddEndTransition(randomIdle)), follow.AddTickTransition(randomIdle, new Trans_IsFollowingPlayer
 							{
 								Inverted = true
 							}), curiousFollow.AddTickTransition(randomIdle, new Trans_StillCuriousAboutPlayer
@@ -24698,6 +24732,44 @@ public class State_LivestockRoam : State_Roam
 	}
 
 	protected override bool HealsWhenUndisturbed => false;
+}
+
+
+using System;
+using ConVar;
+using Rust.Ai.Gen2.Nav;
+using UnityEngine;
+
+[Serializable]
+public class Trans_Stranded : Trans_Dead
+{
+	protected override bool EvaluateInternal(ref FSMPayload payload)
+	{
+		//IL_0037: Unknown result type (might be due to invalid IL or missing references)
+		if (AI.useUnityNavmesh)
+		{
+			NavHit hitNS;
+			if ((Object)(object)SingletonComponent<DynamicNavMesh>.Instance != (Object)null && !SingletonComponent<DynamicNavMesh>.Instance.IsBuilding)
+			{
+				return !base.Agent.SamplePosition(base.Agent.WorldToNavSpace(((Component)Owner).transform.position), out hitNS, 2f);
+			}
+			return false;
+		}
+		if (base.Agent.IsNavMeshBuilt)
+		{
+			return !base.Agent.isOnNavMesh;
+		}
+		return false;
+	}
+
+	public override void OnTransitionTaken(FSMStateBase from, FSMStateBase to)
+	{
+		base.OnTransitionTaken(from, to);
+		if (Owner is BaseNPC2 baseNPC)
+		{
+			baseNPC.DieOffNavmesh();
+		}
+	}
 }
 
 
