@@ -2021,8 +2021,8 @@ public class LiquidContainer : ContainerIOEntity
 
 	public ItemDefinition[] ValidItems;
 
-	[Tooltip("Replicate how full this container is. Turn it on for containers that show a water level mesh, and leave it off everywhere else: water moves through a barrel every tick and the updates are only worth paying for when something is showing the level.")]
 	[Header("Water Level Mesh")]
+	[Tooltip("Replicate how full this container is. Turn it on for containers that show a water level mesh, and leave it off everywhere else: water moves through a barrel every tick and the updates are only worth paying for when something is showing the level.")]
 	public bool replicateWaterLevel;
 
 	[Tooltip("Mesh shown while there is liquid in here, posed between the empty and full values below to match how full the container is.")]
@@ -2058,7 +2058,7 @@ public class LiquidContainer : ContainerIOEntity
 
 	private float lastOutputDrainUpdate;
 
-	private static HashSet<IOEntity> pushLiquidCheckEntityHash = new HashSet<IOEntity>();
+	protected static HashSet<IOEntity> recursiveEntityHash = new HashSet<IOEntity>();
 
 	private byte __sync_WaterLevel;
 
@@ -2314,18 +2314,23 @@ public class LiquidContainer : ContainerIOEntity
 
 	private void UpdateDrainAmount()
 	{
-		//IL_0047: Unknown result type (might be due to invalid IL or missing references)
-		//IL_004c: Unknown result type (might be due to invalid IL or missing references)
+		//IL_006e: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0073: Unknown result type (might be due to invalid IL or missing references)
 		int amount = 0;
 		Item liquidItem = GetLiquidItem();
+		recursiveEntityHash.Clear();
 		if (liquidItem != null)
 		{
 			IOSlot[] array = outputs;
 			foreach (IOSlot iOSlot in array)
 			{
-				if ((Object)(object)iOSlot.connectedTo.Get() != (Object)null)
+				if (iOSlot.type == IOType.Fluidic)
 				{
-					CalculateDrain(iOSlot.connectedTo.Get(), ((Component)this).transform.TransformPoint(iOSlot.handlePosition), IOEntity.backtracking * 2, ref amount, this, liquidItem?.info);
+					IOEntity iOEntity = iOSlot.connectedTo.Get();
+					if (!((Object)(object)iOEntity == (Object)null) && iOEntity.inputs[iOSlot.connectedToSlot].type == IOType.Fluidic)
+					{
+						CalculateDrain(iOEntity, ((Component)this).transform.TransformPoint(iOSlot.handlePosition), IOEntity.backtracking * 2, ref amount, this, liquidItem?.info, recursiveEntityHash);
+					}
 				}
 			}
 		}
@@ -2340,12 +2345,12 @@ public class LiquidContainer : ContainerIOEntity
 		}
 	}
 
-	private void CalculateDrain(IOEntity ent, Vector3 fromSlotWorld, int depth, ref int amount, IOEntity lastEntity, ItemDefinition waterType)
+	private void CalculateDrain(IOEntity ent, Vector3 fromSlotWorld, int depth, ref int amount, IOEntity lastEntity, ItemDefinition waterType, HashSet<IOEntity> checkedEntities)
 	{
-		//IL_0064: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00b8: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00bd: Unknown result type (might be due to invalid IL or missing references)
-		if ((Object)(object)ent == (Object)(object)this || depth <= 0 || (Object)(object)ent == (Object)null || (Object)(object)lastEntity == (Object)null || ent is LiquidContainer)
+		//IL_006e: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00df: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00e4: Unknown result type (might be due to invalid IL or missing references)
+		if ((Object)(object)ent == (Object)(object)this || depth <= 0 || (Object)(object)ent == (Object)null || (Object)(object)lastEntity == (Object)null || ent is LiquidContainer || checkedEntities.Contains(ent))
 		{
 			return;
 		}
@@ -2363,9 +2368,13 @@ public class LiquidContainer : ContainerIOEntity
 		IOSlot[] array = ent.outputs;
 		foreach (IOSlot iOSlot in array)
 		{
-			if ((Object)(object)iOSlot.connectedTo.Get() != (Object)null && (Object)(object)iOSlot.connectedTo.Get() != (Object)(object)ent)
+			if (iOSlot.type == IOType.Fluidic)
 			{
-				CalculateDrain(iOSlot.connectedTo.Get(), ((Component)ent).transform.TransformPoint(iOSlot.handlePosition), depth - 1, ref amount, ent, waterType);
+				IOEntity iOEntity = iOSlot.connectedTo.Get();
+				if ((Object)(object)iOEntity != (Object)null && (Object)(object)iOEntity != (Object)(object)ent && checkedEntities.Add(iOEntity) && iOEntity.inputs[iOSlot.connectedToSlot].type == IOType.Fluidic)
+				{
+					CalculateDrain(iOEntity, ((Component)ent).transform.TransformPoint(iOSlot.handlePosition), depth - 1, ref amount, ent, waterType, checkedEntities);
+				}
 			}
 		}
 	}
@@ -2467,7 +2476,7 @@ public class LiquidContainer : ContainerIOEntity
 			return;
 		}
 		Item liquidItem = GetLiquidItem();
-		pushLiquidCheckEntityHash.Clear();
+		recursiveEntityHash.Clear();
 		TimeWarning val = TimeWarning.New("UpdatePushTargets", 0);
 		try
 		{
@@ -2477,9 +2486,9 @@ public class LiquidContainer : ContainerIOEntity
 				if (iOSlot.type == IOType.Fluidic)
 				{
 					IOEntity iOEntity = iOSlot.connectedTo.Get();
-					if ((Object)(object)iOEntity != (Object)null)
+					if ((Object)(object)iOEntity != (Object)null && iOEntity.inputs[iOSlot.connectedToSlot].type == IOType.Fluidic)
 					{
-						CheckPushLiquid(iOEntity, liquidItem, this, IOEntity.backtracking * 4, pushLiquidCheckEntityHash);
+						CheckPushLiquid(iOEntity, liquidItem, this, IOEntity.backtracking * 4, recursiveEntityHash);
 					}
 				}
 			}
@@ -2573,10 +2582,10 @@ public class LiquidContainer : ContainerIOEntity
 		//IL_000f: Unknown result type (might be due to invalid IL or missing references)
 		//IL_0014: Unknown result type (might be due to invalid IL or missing references)
 		//IL_0031: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00cc: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00d1: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00d6: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00db: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00e6: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00eb: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00f0: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00f5: Unknown result type (might be due to invalid IL or missing references)
 		if (depth <= 0 || ourFuel.amount <= 0)
 		{
 			return;
@@ -2596,7 +2605,7 @@ public class LiquidContainer : ContainerIOEntity
 		foreach (IOSlot iOSlot in array)
 		{
 			IOEntity iOEntity2 = iOSlot.connectedTo.Get();
-			if (!((Object)(object)iOEntity2 != (Object)null) || !((Object)(object)iOEntity2 != (Object)(object)fromSource) || !checkEntities.Add(iOEntity2))
+			if (!((Object)(object)iOEntity2 != (Object)null) || !((Object)(object)iOEntity2 != (Object)(object)fromSource) || iOEntity2.inputs[iOSlot.connectedToSlot].type != IOType.Fluidic || !checkEntities.Add(iOEntity2))
 			{
 				continue;
 			}
@@ -8960,8 +8969,8 @@ public class MLRS : BaseMountable
 
 	public static readonly Phrase RaidWindowBlockedToast = new Phrase("mlrs.raidwindowblocked", "The MLRS can only be fired during the raid window");
 
-	[SerializeField]
 	[Header("MLRS Components")]
+	[SerializeField]
 	private GameObjectRef rocketStoragePrefab;
 
 	[SerializeField]
@@ -8980,8 +8989,8 @@ public class MLRS : BaseMountable
 	[SerializeField]
 	public float vRotSpeed = 10f;
 
-	[SerializeField]
 	[Range(50f, 90f)]
+	[SerializeField]
 	public float vRotMax = 85f;
 
 	[SerializeField]
@@ -9005,8 +9014,8 @@ public class MLRS : BaseMountable
 	[SerializeField]
 	public RocketTube[] rocketTubes;
 
-	[SerializeField]
 	[Header("MLRS Dashboard/FX")]
+	[SerializeField]
 	private GameObject screensChild;
 
 	[SerializeField]
@@ -12350,8 +12359,8 @@ public class ModularCarGarage : ContainerIOEntity
 
 	public MagnetSnap magnetSnap;
 
-	[SerializeField]
 	[Header("ModularCarGarage")]
+	[SerializeField]
 	public Transform vehicleLift;
 
 	[SerializeField]
@@ -12375,8 +12384,8 @@ public class ModularCarGarage : ContainerIOEntity
 	[SerializeField]
 	public Transform vehicleLiftPos;
 
-	[SerializeField]
 	[Range(0f, 1f)]
+	[SerializeField]
 	public float recycleEfficiency = 0.5f;
 
 	[SerializeField]
@@ -14172,8 +14181,8 @@ public class MonumentBlocker : StagedResourceEntity, LookatHealth.IHealthBarDisp
 		public string gibbablePath;
 	}
 
-	[Tooltip("Gibs spawned on the client when we move into a destruction stage.")]
 	[Header("Monument Blocker")]
+	[Tooltip("Gibs spawned on the client when we move into a destruction stage.")]
 	public GibbableStageData[] gibbableStages = Array.Empty<GibbableStageData>();
 
 	[Tooltip("Gibs spawned on the client when the blocker is fully destroyed. Falls back to the default gibbing if empty.")]
@@ -14564,8 +14573,8 @@ public class Mortar : Cannon
 {
 	public const string PlayerKillAchievement = "MORTAR_PLAYER_KILL";
 
-	[SerializeField]
 	[Header("Mortar")]
+	[SerializeField]
 	private Vector2 minMaxDistance = new Vector2(0f, 200f);
 
 	[SerializeField]
@@ -14595,8 +14604,8 @@ public class Mortar : Cannon
 	[SerializeField]
 	private float remoteAimDirSmoothSpeed;
 
-	[SerializeField]
 	[Header("Condition")]
+	[SerializeField]
 	private float conditionLossPerShot;
 
 	[Header("Recoil")]
@@ -14615,8 +14624,8 @@ public class Mortar : Cannon
 	[SerializeField]
 	private float recoilPitchDuration;
 
-	[SerializeField]
 	[Header("Mortar Handle")]
+	[SerializeField]
 	private Transform handleBone;
 
 	[SerializeField]
@@ -16338,8 +16347,8 @@ public class MountedWeapon : StorageContainer
 
 	private static readonly int Up = Animator.StringToHash("up");
 
-	[SerializeField]
 	[Header("Mounted Weapon")]
+	[SerializeField]
 	private Transform _eyes;
 
 	[SerializeField]
@@ -16358,8 +16367,8 @@ public class MountedWeapon : StorageContainer
 	[ItemSelector]
 	private ItemDefinition _ammoItem;
 
-	[Header("Mounted Weapon - Weapon")]
 	[SerializeField]
+	[Header("Mounted Weapon - Weapon")]
 	private ItemDefinition _weapon;
 
 	[SerializeField]
@@ -16380,15 +16389,15 @@ public class MountedWeapon : StorageContainer
 	[ItemSelector]
 	public ItemDefinition AmmoDef;
 
-	[SerializeField]
 	[Header("Mounted Weapon - Second Weapon")]
+	[SerializeField]
 	private ItemDefinition _weapon2;
 
 	[SerializeField]
 	private Transform _attachPoint2;
 
-	[SerializeField]
 	[Header("Mounted Weapon - Player General Animation")]
+	[SerializeField]
 	private int _turretAnimationType;
 
 	[SerializeField]
@@ -16421,8 +16430,8 @@ public class MountedWeapon : StorageContainer
 	[SerializeField]
 	private bool _forceSeatPositionUpdates;
 
-	[Header("Mounted Weapon - Player Camera Animation")]
 	[SerializeField]
+	[Header("Mounted Weapon - Player Camera Animation")]
 	private Transform _cameraAnimation;
 
 	[SerializeField]
@@ -16438,8 +16447,8 @@ public class MountedWeapon : StorageContainer
 	[SerializeField]
 	private ViewModel _viewmodel;
 
-	[SerializeField]
 	[Header("Mounted Weapon - Aim Movement Sounds")]
+	[SerializeField]
 	private SoundDefinition aimMovementSoundDef;
 
 	[SerializeField]
@@ -30231,9 +30240,9 @@ public class Pooltable : BaseCombatEntity
 	[SerializeField]
 	private WorldSpline worldSpline;
 
-	[Tooltip("Fraction of the gap between the walking spline and the table edge to close, so players stand the same bit closer everywhere on the loop.")]
 	[Range(0f, 0.75f)]
 	[SerializeField]
+	[Tooltip("Fraction of the gap between the walking spline and the table edge to close, so players stand the same bit closer everywhere on the loop.")]
 	private float splineTableCloseness = 0.25f;
 
 	[Tooltip("Block walking the mountable into geometry (e.g. an adjacent boat's hull). Turn off to restore pre-check behaviour.")]
@@ -30244,8 +30253,8 @@ public class Pooltable : BaseCombatEntity
 	[SerializeField]
 	private Bounds walkAreaCheck = new Bounds(new Vector3(0f, 0f, 0.24f), new Vector3(0.55f, 1.3f, 0.44f));
 
-	[Header("Server")]
 	[SerializeField]
+	[Header("Server")]
 	private GameObjectRef mountableRef;
 
 	[SerializeField]
@@ -30287,8 +30296,8 @@ public class Pooltable : BaseCombatEntity
 	[SerializeField]
 	private WorldSpline ballReturnPath;
 
-	[Tooltip("Preplaced basket balls enabled in order as balls arrive, independent of ball ID.")]
 	[SerializeField]
+	[Tooltip("Preplaced basket balls enabled in order as balls arrive, independent of ball ID.")]
 	private GameObject[] basketBalls;
 
 	[SerializeField]
@@ -31797,8 +31806,8 @@ public class PooltableMountable : BaseMountable
 	[Space]
 	private ViewModel poolCueViewmodel;
 
-	[Tooltip("World-space 3p cue prop, locked to the right-hand prop bone each frame (like darts' held prop).")]
 	[Header("3p Cue")]
+	[Tooltip("World-space 3p cue prop, locked to the right-hand prop bone each frame (like darts' held prop).")]
 	[SerializeField]
 	private Transform cueHeldProp;
 
@@ -31806,19 +31815,19 @@ public class PooltableMountable : BaseMountable
 	[SerializeField]
 	private Vector3 cueHeldPropPositionOffset;
 
-	[Tooltip("Cue tilt relative to the prop bone.")]
 	[SerializeField]
+	[Tooltip("Cue tilt relative to the prop bone.")]
 	private Vector3 cueHeldPropEulerOffset;
 
-	[Tooltip("One 3p cue per seat, all parented to cueHeldProp. Only the mounted player's own cue is left active.")]
 	[SerializeField]
+	[Tooltip("One 3p cue per seat, all parented to cueHeldProp. Only the mounted player's own cue is left active.")]
 	private GameObject[] seatCues;
 
 	[SerializeField]
 	private float movementSpeed;
 
-	[SerializeField]
 	[Tooltip("Max spline travel per second from mouse aim. Well above movementSpeed - the mouse is the fine aim and has to feel 1:1 - but bounded so a violent flick can't spin you round the table.")]
+	[SerializeField]
 	private float mouseAimMaxSpeed = 8f;
 
 	private static readonly int RightHash = Animator.StringToHash("right");
@@ -31840,8 +31849,8 @@ public class PooltableMountable : BaseMountable
 	[SerializeField]
 	private float strikeSpeedThreshold = 1f;
 
-	[SerializeField]
 	[Tooltip("Minimum pullback required before a fast forward movement can strike.")]
+	[SerializeField]
 	private float minimumStrikePower = 0.05f;
 
 	private float cuePullback = 0.5f;
