@@ -1,3 +1,220 @@
+using System;
+using UnityEngine;
+using UnityEngine.Rendering.PostProcessing;
+
+[Serializable]
+[PostProcess(typeof(UnderWaterEffectRenderer), PostProcessEvent.AfterStack, "Custom/UnderWaterEffect", false)]
+public class UnderwaterPostEffect : PostProcessEffectSettings
+{
+	[Header("Wiggle")]
+	public BoolParameter wiggle = new BoolParameter();
+
+	public FloatParameter speed = new FloatParameter
+	{
+		value = 1f
+	};
+
+	public FloatParameter scale = new FloatParameter
+	{
+		value = 12f
+	};
+
+	[Header("Water Line")]
+	public ColorParameter waterLineColor = new ColorParameter();
+
+	[Range(1f, 4f)]
+	public FixedIntParameter waterLineBlurIterations = new FixedIntParameter
+	{
+		value = 1
+	};
+
+	[Range(0f, 10f)]
+	public FloatParameter waterLineBlurSize = new FloatParameter
+	{
+		value = 0f
+	};
+
+	[Header("Blur")]
+	[Range(0f, 2f)]
+	public FixedIntParameter downsample = new FixedIntParameter
+	{
+		value = 0
+	};
+
+	[Range(1f, 4f)]
+	public FixedIntParameter blurIterations = new FixedIntParameter
+	{
+		value = 1
+	};
+
+	[Range(0f, 10f)]
+	public FloatParameter blurSize = new FloatParameter
+	{
+		value = 0f
+	};
+
+	public FloatParameter fadeToBlurDistance = new FloatParameter
+	{
+		value = 0f
+	};
+}
+
+
+using UnityEngine.Rendering.PostProcessing;
+
+public class UnderWaterEffectRenderer : PostProcessEffectRenderer<UnderwaterPostEffect>
+{
+	public override void Render(PostProcessRenderContext context)
+	{
+	}
+}
+
+
+using System;
+using UnityEngine.Rendering.PostProcessing;
+
+[Serializable]
+[PostProcess(typeof(WiggleRenderer), PostProcessEvent.AfterStack, "Custom/Wiggle", true)]
+public class Wiggle : PostProcessEffectSettings
+{
+	public FloatParameter speed = new FloatParameter
+	{
+		value = 1f
+	};
+
+	public FloatParameter scale = new FloatParameter
+	{
+		value = 12f
+	};
+}
+
+
+using UnityEngine;
+using UnityEngine.Rendering;
+using UnityEngine.Rendering.PostProcessing;
+
+public class WiggleRenderer : PostProcessEffectRenderer<Wiggle>
+{
+	private int timerProperty = Shader.PropertyToID("_timer");
+
+	private int scaleProperty = Shader.PropertyToID("_scale");
+
+	private Shader wiggleShader;
+
+	private float timer;
+
+	public override void Init()
+	{
+		base.Init();
+		wiggleShader = Shader.Find("Hidden/PostProcessing/Wiggle");
+	}
+
+	public override void Render(PostProcessRenderContext context)
+	{
+		//IL_0090: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0096: Unknown result type (might be due to invalid IL or missing references)
+		CommandBuffer command = context.command;
+		command.BeginSample("Wiggle");
+		timer += base.settings.speed.value * Time.deltaTime;
+		PropertySheet propertySheet = context.propertySheets.Get(wiggleShader);
+		propertySheet.properties.Clear();
+		propertySheet.properties.SetFloat(timerProperty, timer);
+		propertySheet.properties.SetFloat(scaleProperty, base.settings.scale.value);
+		context.command.BlitFullscreenTriangle(context.source, context.destination, propertySheet, 0, clear: false, null);
+		command.EndSample("Wiggle");
+	}
+}
+
+
+using UnityEngine;
+
+public class PostProcessVolumeLOD : MonoBehaviour, ILOD, IClientComponent
+{
+	public float distance;
+}
+
+
+using System;
+
+public class BoundsCheck : PrefabAttribute
+{
+	public enum BlockType
+	{
+		Tree
+	}
+
+	public BlockType IsType;
+
+	protected override Type GetIndexedType()
+	{
+		return typeof(BoundsCheck);
+	}
+}
+
+
+public enum BlockType
+{
+	Tree
+}
+
+
+using System.Collections.Generic;
+using Facepunch;
+using UnityEngine;
+
+public static class BoundsCheckEx
+{
+	public static bool ApplyBoundsChecks(this BaseEntity entity, BoundsCheck[] bounds, Vector3 pos, Quaternion rot, Vector3 scale, LayerMask rejectOnLayer)
+	{
+		//IL_000f: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0010: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0017: Unknown result type (might be due to invalid IL or missing references)
+		//IL_001c: Unknown result type (might be due to invalid IL or missing references)
+		//IL_001e: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0023: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0028: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0033: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0038: Unknown result type (might be due to invalid IL or missing references)
+		//IL_003a: Unknown result type (might be due to invalid IL or missing references)
+		//IL_003f: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0040: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0051: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0004: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0083: Unknown result type (might be due to invalid IL or missing references)
+		if (bounds.Length == 0 && LayerMask.op_Implicit(rejectOnLayer) == 0)
+		{
+			return true;
+		}
+		OBB obb = new OBB(pos + rot * Vector3.Scale(((Bounds)(ref entity.bounds)).center, scale), Vector3.Scale(((Bounds)(ref entity.bounds)).extents, scale), rot);
+		List<Collider> list = Pool.Get<List<Collider>>();
+		GamePhysics.OverlapOBB(obb, list, 0x40000 | LayerMask.op_Implicit(rejectOnLayer), (QueryTriggerInteraction)2);
+		SpawnableBoundsBlocker spawnableBoundsBlocker = default(SpawnableBoundsBlocker);
+		foreach (Collider item in list)
+		{
+			if (!item.isTrigger && (((Component)item).gameObject.layer & LayerMask.op_Implicit(rejectOnLayer)) != 0)
+			{
+				Pool.FreeUnmanaged<Collider>(ref list);
+				return false;
+			}
+			if (!((Component)item).TryGetComponent<SpawnableBoundsBlocker>(ref spawnableBoundsBlocker))
+			{
+				continue;
+			}
+			foreach (BoundsCheck boundsCheck in bounds)
+			{
+				if (spawnableBoundsBlocker.BlockType == boundsCheck.IsType)
+				{
+					Pool.FreeUnmanaged<Collider>(ref list);
+					return false;
+				}
+			}
+		}
+		Pool.FreeUnmanaged<Collider>(ref list);
+		return true;
+	}
+}
+
+
 using System.Collections.Generic;
 using Facepunch;
 using UnityEngine;
@@ -9383,8 +9600,8 @@ public class TerrainFootprint : PrefabAttribute
 	[Tooltip("Fill the whole interior of a closed ring, not just the band at its edge. Off leaves a gutter's banks raised with the trench between them, so turn it off only for arches and overhangs.")]
 	public bool FillInterior = true;
 
-	[Header("Tilt")]
 	[Tooltip("Above this tilt the footprint does nothing: a tilted rock swings out past the captured ring, so the silhouette stops describing where it meets ground. Costs coverage, not correctness.")]
+	[Header("Tilt")]
 	public float MaxTiltDegrees = 35f;
 
 	[NonSerialized]
@@ -15973,9 +16190,9 @@ using UnityEngine;
 public static class TerrainWaterFlowMapBurst
 {
 	[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-	internal delegate void GetFlowDirections_000072EA$PostfixBurstDelegate(in NativeArray<Vector3> positions3D, ref NativeArray<float3> results, in NativeArray<byte> source, in int res);
+	internal delegate void GetFlowDirections_000072F2$PostfixBurstDelegate(in NativeArray<Vector3> positions3D, ref NativeArray<float3> results, in NativeArray<byte> source, in int res);
 
-	internal static class GetFlowDirections_000072EA$BurstDirectCall
+	internal static class GetFlowDirections_000072F2$BurstDirectCall
 	{
 		private static IntPtr Pointer;
 
@@ -15986,7 +16203,7 @@ public static class TerrainWaterFlowMapBurst
 			//IL_001b: Unknown result type (might be due to invalid IL or missing references)
 			if (Pointer == (IntPtr)0)
 			{
-				Pointer = BurstCompiler.CompileFunctionPointer<GetFlowDirections_000072EA$PostfixBurstDelegate>((GetFlowDirections_000072EA$PostfixBurstDelegate)GetFlowDirections).Value;
+				Pointer = BurstCompiler.CompileFunctionPointer<GetFlowDirections_000072F2$PostfixBurstDelegate>((GetFlowDirections_000072F2$PostfixBurstDelegate)GetFlowDirections).Value;
 			}
 			P_0 = Pointer;
 		}
@@ -16013,11 +16230,11 @@ public static class TerrainWaterFlowMapBurst
 		}
 	}
 
+	[MonoPInvokeCallback(typeof(GetFlowDirections_000072F2$PostfixBurstDelegate))]
 	[BurstCompile]
-	[MonoPInvokeCallback(typeof(GetFlowDirections_000072EA$PostfixBurstDelegate))]
 	public static void GetFlowDirections(in NativeArray<Vector3> positions3D, ref NativeArray<float3> results, in NativeArray<byte> source, in int res)
 	{
-		GetFlowDirections_000072EA$BurstDirectCall.Invoke(in positions3D, ref results, in source, in res);
+		GetFlowDirections_000072F2$BurstDirectCall.Invoke(in positions3D, ref results, in source, in res);
 	}
 
 	[MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -16066,7 +16283,7 @@ using Unity.Mathematics;
 using UnityEngine;
 
 [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-internal delegate void GetFlowDirections_000072EA$PostfixBurstDelegate(in NativeArray<Vector3> positions3D, ref NativeArray<float3> results, in NativeArray<byte> source, in int res);
+internal delegate void GetFlowDirections_000072F2$PostfixBurstDelegate(in NativeArray<Vector3> positions3D, ref NativeArray<float3> results, in NativeArray<byte> source, in int res);
 
 
 using System;
@@ -16075,7 +16292,7 @@ using Unity.Collections;
 using Unity.Mathematics;
 using UnityEngine;
 
-internal static class GetFlowDirections_000072EA$BurstDirectCall
+internal static class GetFlowDirections_000072F2$BurstDirectCall
 {
 	private static IntPtr Pointer;
 
@@ -16086,7 +16303,7 @@ internal static class GetFlowDirections_000072EA$BurstDirectCall
 		//IL_001b: Unknown result type (might be due to invalid IL or missing references)
 		if (Pointer == (IntPtr)0)
 		{
-			Pointer = BurstCompiler.CompileFunctionPointer<GetFlowDirections_000072EA$PostfixBurstDelegate>((GetFlowDirections_000072EA$PostfixBurstDelegate)GetFlowDirections).Value;
+			Pointer = BurstCompiler.CompileFunctionPointer<GetFlowDirections_000072F2$PostfixBurstDelegate>((GetFlowDirections_000072F2$PostfixBurstDelegate)GetFlowDirections).Value;
 		}
 		P_0 = Pointer;
 	}
@@ -23967,372 +24184,6 @@ public class GeneratePowerlineTopology : ProceduralComponent
 {
 	public override void Process(uint seed)
 	{
-	}
-}
-
-
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using UnityEngine;
-
-public class GenerateRailBranching : ProceduralComponent
-{
-	public const float Width = 4f;
-
-	public const float InnerPadding = 1f;
-
-	public const float OuterPadding = 1f;
-
-	public const float InnerFade = 1f;
-
-	public const float OuterFade = 32f;
-
-	public const float RandomScale = 1f;
-
-	public const float MeshOffset = 0f;
-
-	public const float TerrainOffset = -0.125f;
-
-	private static Quaternion rot90 = Quaternion.Euler(0f, 90f, 0f);
-
-	private const int MaxDepth = 250000;
-
-	private PathList CreateSegment(int number, Vector3[] points)
-	{
-		return new PathList("Rail " + number, points)
-		{
-			Spline = true,
-			Width = 4f,
-			InnerPadding = 1f,
-			OuterPadding = 1f,
-			InnerFade = 1f,
-			OuterFade = 32f,
-			RandomScale = 1f,
-			MeshOffset = 0f,
-			TerrainOffset = -0.125f,
-			Topology = 524288,
-			Splat = 128,
-			Hierarchy = 1
-		};
-	}
-
-	public override void Process(uint seed)
-	{
-		//IL_00c2: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0195: Unknown result type (might be due to invalid IL or missing references)
-		//IL_019a: Unknown result type (might be due to invalid IL or missing references)
-		//IL_02c8: Unknown result type (might be due to invalid IL or missing references)
-		//IL_02cd: Unknown result type (might be due to invalid IL or missing references)
-		//IL_02d3: Unknown result type (might be due to invalid IL or missing references)
-		//IL_02d8: Unknown result type (might be due to invalid IL or missing references)
-		//IL_02da: Unknown result type (might be due to invalid IL or missing references)
-		//IL_02dc: Unknown result type (might be due to invalid IL or missing references)
-		//IL_07f3: Unknown result type (might be due to invalid IL or missing references)
-		//IL_081c: Unknown result type (might be due to invalid IL or missing references)
-		//IL_01b3: Unknown result type (might be due to invalid IL or missing references)
-		//IL_01b8: Unknown result type (might be due to invalid IL or missing references)
-		//IL_01ba: Unknown result type (might be due to invalid IL or missing references)
-		//IL_01bc: Unknown result type (might be due to invalid IL or missing references)
-		//IL_01be: Unknown result type (might be due to invalid IL or missing references)
-		//IL_01c3: Unknown result type (might be due to invalid IL or missing references)
-		//IL_02f1: Unknown result type (might be due to invalid IL or missing references)
-		//IL_02f6: Unknown result type (might be due to invalid IL or missing references)
-		//IL_02fc: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0301: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0305: Unknown result type (might be due to invalid IL or missing references)
-		//IL_01d2: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0313: Unknown result type (might be due to invalid IL or missing references)
-		//IL_031f: Unknown result type (might be due to invalid IL or missing references)
-		//IL_032a: Unknown result type (might be due to invalid IL or missing references)
-		//IL_03cf: Unknown result type (might be due to invalid IL or missing references)
-		//IL_03df: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0469: Unknown result type (might be due to invalid IL or missing references)
-		//IL_04a0: Unknown result type (might be due to invalid IL or missing references)
-		//IL_04a9: Unknown result type (might be due to invalid IL or missing references)
-		//IL_04ae: Unknown result type (might be due to invalid IL or missing references)
-		//IL_04b3: Unknown result type (might be due to invalid IL or missing references)
-		//IL_04b8: Unknown result type (might be due to invalid IL or missing references)
-		//IL_04be: Unknown result type (might be due to invalid IL or missing references)
-		//IL_04ca: Unknown result type (might be due to invalid IL or missing references)
-		//IL_04cf: Unknown result type (might be due to invalid IL or missing references)
-		//IL_04d4: Unknown result type (might be due to invalid IL or missing references)
-		//IL_04d9: Unknown result type (might be due to invalid IL or missing references)
-		//IL_04e2: Unknown result type (might be due to invalid IL or missing references)
-		//IL_04eb: Unknown result type (might be due to invalid IL or missing references)
-		//IL_04f0: Unknown result type (might be due to invalid IL or missing references)
-		//IL_04f5: Unknown result type (might be due to invalid IL or missing references)
-		//IL_04fa: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0500: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0516: Unknown result type (might be due to invalid IL or missing references)
-		//IL_051b: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0520: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0525: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0527: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0529: Unknown result type (might be due to invalid IL or missing references)
-		//IL_052b: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0537: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0539: Unknown result type (might be due to invalid IL or missing references)
-		//IL_053b: Unknown result type (might be due to invalid IL or missing references)
-		//IL_057d: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0582: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0584: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0589: Unknown result type (might be due to invalid IL or missing references)
-		//IL_058b: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0590: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0592: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0597: Unknown result type (might be due to invalid IL or missing references)
-		//IL_05a2: Unknown result type (might be due to invalid IL or missing references)
-		//IL_05a4: Unknown result type (might be due to invalid IL or missing references)
-		//IL_05a9: Unknown result type (might be due to invalid IL or missing references)
-		//IL_05b4: Unknown result type (might be due to invalid IL or missing references)
-		//IL_05b6: Unknown result type (might be due to invalid IL or missing references)
-		//IL_05bb: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0610: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0615: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0619: Unknown result type (might be due to invalid IL or missing references)
-		//IL_061e: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0638: Unknown result type (might be due to invalid IL or missing references)
-		//IL_063d: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0641: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0646: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0672: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0677: Unknown result type (might be due to invalid IL or missing references)
-		//IL_067e: Unknown result type (might be due to invalid IL or missing references)
-		if (World.Networked)
-		{
-			return;
-		}
-		int num = Mathf.RoundToInt(40f);
-		int num2 = Mathf.RoundToInt(53.333332f);
-		int num3 = Mathf.RoundToInt(40f);
-		int num4 = Mathf.RoundToInt(120f);
-		float num5 = 120f * 120f;
-		List<(PathList, PathInterpolator, int, int)> list = new List<(PathList, PathInterpolator, int, int)>();
-		int[,] array = TerrainPath.CreateRailCostmap(ref seed);
-		PathFinder pathFinder = new PathFinder(array);
-		int length = array.GetLength(0);
-		foreach (MonumentInfo monument in TerrainMeta.Path.Monuments)
-		{
-			TerrainPathConnect[] array2 = (from target in ((Component)monument).GetComponentsInChildren<TerrainPathConnect>(true)
-				where target.Type == InfrastructureType.Rail
-				select target).ToArray();
-			foreach (TerrainPathConnect terrainPathConnect in array2)
-			{
-				pathFinder.PushPointsAdditional.Add(PathFinder.GetPoint(((Component)terrainPathConnect).transform.position, length));
-			}
-		}
-		if (pathFinder.PushPointsAdditional.Count > 0)
-		{
-			pathFinder.PushDistance = 10;
-			pathFinder.PushMultiplier = int.MaxValue;
-		}
-		List<Vector3> list2 = new List<Vector3>();
-		List<Vector3> list3 = new List<Vector3>();
-		List<Vector3> list4 = new List<Vector3>();
-		HashSet<Vector3> hashSet = new HashSet<Vector3>();
-		foreach (PathList rail2 in TerrainMeta.Path.Rails)
-		{
-			foreach (PathList rail3 in TerrainMeta.Path.Rails)
-			{
-				if (rail2 == rail3)
-				{
-					continue;
-				}
-				Vector3[] points = rail2.Path.Points;
-				foreach (Vector3 val in points)
-				{
-					Vector3[] points2 = rail3.Path.Points;
-					foreach (Vector3 val2 in points2)
-					{
-						Vector3 val3 = val - val2;
-						if (((Vector3)(ref val3)).sqrMagnitude < num5)
-						{
-							hashSet.Add(val);
-							break;
-						}
-					}
-				}
-			}
-		}
-		foreach (PathList rail4 in TerrainMeta.Path.Rails)
-		{
-			PathInterpolator path = rail4.Path;
-			Vector3[] points3 = path.Points;
-			Vector3[] tangents = path.Tangents;
-			int num6 = path.MinIndex + 1 + 8;
-			int num7 = path.MaxIndex - 1 - 8;
-			for (int l = num6; l <= num7; l++)
-			{
-				list2.Clear();
-				list3.Clear();
-				list4.Clear();
-				int num8 = SeedRandom.Range(ref seed, num3, num4);
-				int num9 = SeedRandom.Range(ref seed, num, num2);
-				int num10 = l;
-				int num11 = l + num8;
-				if (num11 >= num7)
-				{
-					continue;
-				}
-				Vector3 val4 = tangents[num10];
-				Vector3 val5 = tangents[num11];
-				if (Vector3.Angle(val4, val5) > 30f)
-				{
-					continue;
-				}
-				Vector3 val6 = points3[num10];
-				Vector3 val7 = points3[num11];
-				if (hashSet.Contains(val6) || hashSet.Contains(val7))
-				{
-					continue;
-				}
-				PathFinder.Point point = PathFinder.GetPoint(val6, length);
-				PathFinder.Point point2 = PathFinder.GetPoint(val7, length);
-				l += num9;
-				PathFinder.Node node = pathFinder.FindPath(point, point2, 250000);
-				if (node == null)
-				{
-					continue;
-				}
-				PathFinder.Node node2 = null;
-				PathFinder.Node node3 = null;
-				PathFinder.Node node4 = node;
-				while (node4 != null && node4.next != null)
-				{
-					if (node4 == node.next)
-					{
-						node2 = node4;
-					}
-					if (node4.next.next == null)
-					{
-						node3 = node4;
-					}
-					node4 = node4.next;
-				}
-				if (node2 == null || node3 == null)
-				{
-					continue;
-				}
-				node = node2;
-				node3.next = null;
-				for (int m = 0; m < 8; m++)
-				{
-					int num12 = num10 + (m + 1 - 8);
-					int num13 = num11 + m;
-					list2.Add(points3[num12]);
-					list3.Add(points3[num13]);
-				}
-				list4.AddRange(list2);
-				for (PathFinder.Node node5 = node2; node5 != null; node5 = node5.next)
-				{
-					float normX = ((float)node5.point.x + 0.5f) / (float)length;
-					float normZ = ((float)node5.point.y + 0.5f) / (float)length;
-					float num14 = TerrainMeta.DenormalizeX(normX);
-					float num15 = TerrainMeta.DenormalizeZ(normZ);
-					float num16 = Mathf.Max(TerrainMeta.HeightMap.GetHeight(normX, normZ), 1f);
-					list4.Add(new Vector3(num14, num16, num15));
-				}
-				list4.AddRange(list3);
-				int num17 = 8;
-				int num18 = list4.Count - 1 - 8;
-				Vector3 val8 = Vector3.Normalize(list4[num17 + 16] - list4[num17]);
-				Vector3 val9 = Vector3.Normalize(list4[num18] - list4[num18 - 16]);
-				Vector3 val10 = Vector3.Normalize(points3[num10 + 16] - points3[num10]);
-				Vector3 val11 = Vector3.Normalize(points3[num11] - points3[(num11 - 16 + points3.Length) % points3.Length]);
-				float num19 = Vector3.SignedAngle(val10, val8, Vector3.up);
-				float num20 = 0f - Vector3.SignedAngle(val11, val9, Vector3.up);
-				if (Mathf.Sign(num19) != Mathf.Sign(num20) || Mathf.Abs(num19) > 60f || Mathf.Abs(num20) > 60f)
-				{
-					continue;
-				}
-				Vector3 val12 = rot90 * val10;
-				Vector3 val13 = rot90 * val11;
-				if (num19 < 0f)
-				{
-					val12 = -val12;
-				}
-				if (num20 < 0f)
-				{
-					val13 = -val13;
-				}
-				for (int n = 0; n < 16; n++)
-				{
-					int num21 = n;
-					int num22 = list4.Count - n - 1;
-					float num23 = Mathf.InverseLerp(0f, 8f, (float)n);
-					float num24 = Mathf.SmoothStep(0f, 2f, num23) * 4f;
-					List<Vector3> list5 = list4;
-					int j = num21;
-					list5[j] += val12 * num24;
-					list5 = list4;
-					j = num22;
-					list5[j] += val13 * num24;
-				}
-				bool flag = false;
-				bool flag2 = false;
-				foreach (Vector3 item4 in list4)
-				{
-					bool blocked = TerrainMeta.PlacementMap.GetBlocked(item4);
-					if (!flag2 && !flag && !blocked)
-					{
-						flag = true;
-					}
-					if (flag && !flag2 && blocked)
-					{
-						flag2 = true;
-					}
-					if (flag && flag2 && !blocked)
-					{
-						list4.Clear();
-						break;
-					}
-				}
-				if (list4.Count != 0)
-				{
-					if (list4.Count >= 2)
-					{
-						int number = TerrainMeta.Path.Rails.Count + list.Count;
-						PathList pathList = CreateSegment(number, list4.ToArray());
-						pathList.Start = false;
-						pathList.End = false;
-						pathList.ProcgenStartNode = node2;
-						pathList.ProcgenEndNode = node3;
-						list.Add((pathList, path, num10 + 1 - 8, num11 + 8 - 1));
-					}
-					l += num8;
-				}
-			}
-		}
-		for (int num25 = 0; num25 < list.Count; num25++)
-		{
-			(PathList, PathInterpolator, int, int) tuple = list[num25];
-			PathList rail = tuple.Item1;
-			PathInterpolator item = tuple.Item2;
-			int item2 = tuple.Item3;
-			int item3 = tuple.Item4;
-			Func<int, float> filter = delegate(int i)
-			{
-				float num26 = Mathf.InverseLerp(0f, 8f, (float)i);
-				float num27 = Mathf.InverseLerp((float)rail.Path.DefaultMaxIndex, (float)(rail.Path.DefaultMaxIndex - 8), (float)i);
-				return Mathf.SmoothStep(0f, 1f, Mathf.Min(num26, num27));
-			};
-			rail.Path.Smoothen(32, new Vector3(1f, 0f, 1f), filter);
-			rail.Path.Smoothen(64, new Vector3(0f, 1f, 0f), filter);
-			rail.Path.Resample(7.5f);
-			if (!RailJunction.TryAlignBranch(rail.Path, item, item2, item3, 4f))
-			{
-				list.RemoveAt(num25--);
-			}
-			else
-			{
-				rail.AdjustPlacementMap(20f);
-			}
-		}
-		foreach (var item5 in list)
-		{
-			TerrainMeta.Path.Rails.Add(item5.Item1);
-		}
 	}
 }
 
