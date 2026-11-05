@@ -2738,9 +2738,13 @@ public sealed class OxideMod
 		}
 		InstanceDirectory = Path.Combine(RootDirectory, "oxide");
 		Thread.CurrentThread.CurrentCulture = CultureInfo.InvariantCulture;
-		JsonConvert.DefaultSettings = () => new JsonSerializerSettings
+		Func<JsonSerializerSettings> previous = JsonConvert.DefaultSettings;
+		JsonConvert.DefaultSettings = delegate
 		{
-			Culture = CultureInfo.InvariantCulture
+			//IL_0016: Unknown result type (might be due to invalid IL or missing references)
+			object obj = ((object)previous?.Invoke()) ?? ((object)new JsonSerializerSettings());
+			((JsonSerializerSettings)obj).Culture = CultureInfo.InvariantCulture;
+			return (JsonSerializerSettings)obj;
 		};
 		CommandLine = new CommandLine(Environment.GetCommandLineArgs());
 		if (CommandLine.HasVariable("oxide.directory"))
@@ -5531,6 +5535,11 @@ public abstract class CSPlugin : Plugin
 		return result;
 	}
 
+	internal bool HasMatchingHook(string name, object[] args)
+	{
+		return FindHooks(name, args).Count > 0;
+	}
+
 	protected List<HookMethod> FindHooks(string name, object[] args)
 	{
 		HookCache cache;
@@ -5617,54 +5626,59 @@ public abstract class CSPlugin : Plugin
 }
 
 
+using System.Collections;
 using System.Collections.Generic;
 using Oxide.Core.Plugins;
 
 public class HookCache
 {
-	private string NullKey = "null";
+	private static readonly object NullKey = new object();
 
-	public Dictionary<string, HookCache> _cache = new Dictionary<string, HookCache>();
+	private readonly Hashtable _cache = new Hashtable();
 
-	public List<HookMethod> _methods;
+	private volatile List<HookMethod> _methods;
 
 	public List<HookMethod> GetHookMethod(string hookName, object[] args, out HookCache cache)
 	{
-		if (!_cache.TryGetValue(hookName, out var value))
-		{
-			value = new HookCache();
-			_cache.Add(hookName, value);
-		}
-		return value.GetHookMethod(args, 0, out cache);
+		return GetOrAdd(hookName).GetHookMethod(args, 0, out cache);
 	}
 
 	public List<HookMethod> GetHookMethod(object[] args, int index, out HookCache cache)
 	{
-		if (args == null || index >= args.Length)
+		HookCache hookCache = this;
+		if (args != null)
 		{
-			cache = this;
-			return _methods;
-		}
-		HookCache value;
-		if (args[index] == null)
-		{
-			if (!_cache.TryGetValue(NullKey, out value))
+			for (int i = index; i < args.Length; i++)
 			{
-				value = new HookCache();
-				_cache.Add(NullKey, value);
+				object obj = args[i];
+				hookCache = hookCache.GetOrAdd((obj == null) ? NullKey : obj.GetType());
 			}
 		}
-		else if (!_cache.TryGetValue(args[index].GetType().FullName, out value))
-		{
-			value = new HookCache();
-			_cache.Add(args[index].GetType().FullName, value);
-		}
-		return value.GetHookMethod(args, index + 1, out cache);
+		cache = hookCache;
+		return hookCache._methods;
 	}
 
 	public void SetupMethods(List<HookMethod> methods)
 	{
 		_methods = methods;
+	}
+
+	private HookCache GetOrAdd(object key)
+	{
+		if (_cache[key] is HookCache result)
+		{
+			return result;
+		}
+		lock (_cache)
+		{
+			HookCache hookCache = _cache[key] as HookCache;
+			if (hookCache == null)
+			{
+				hookCache = new HookCache();
+				_cache[key] = hookCache;
+			}
+			return hookCache;
+		}
 	}
 }
 
@@ -6782,7 +6796,20 @@ public sealed class PluginManager
 		if (!lastDeprecatedWarningAt.TryGetValue(oldHook, out var value2) || now - value2 > 3600f)
 		{
 			lastDeprecatedWarningAt[oldHook] = now;
-			Interface.Oxide.LogWarning(string.Format("'{0} v{1}' is using deprecated hook '{2}', which will stop working on {3}. Please ask the author to update to '{4}'", value.Plugins[0].Name, value.Plugins[0].Version, oldHook, expireDate.ToString("D"), newHook));
+			string text = null;
+			for (int i = 0; i < value.Plugins.Count; i++)
+			{
+				Plugin plugin = value.Plugins[i];
+				if (!plugin.IsCorePlugin && plugin is CSPlugin cSPlugin && cSPlugin.HasMatchingHook(oldHook, args))
+				{
+					string text2 = $"'{plugin.Name} v{plugin.Version}'";
+					text = ((text == null) ? text2 : (text + ", " + text2));
+				}
+			}
+			if (text != null)
+			{
+				Interface.Oxide.LogWarning(text + " using deprecated hook '" + oldHook + "', which will stop working on " + expireDate.ToString("D") + ". Please ask the author to update to '" + newHook + "'");
+			}
 		}
 		return CallHook(oldHook, args);
 	}

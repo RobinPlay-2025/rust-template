@@ -18,69 +18,6 @@ public static class KeyEx
 }
 
 
-using System.CodeDom.Compiler;
-using System.ComponentModel;
-using System.Runtime.CompilerServices;
-
-[CompilerGenerated]
-[EditorBrowsable(EditorBrowsableState.Never)]
-[GeneratedCode("Unity.MonoScriptGenerator.MonoScriptInfoGenerator", null)]
-internal class UnitySourceGeneratedAssemblyMonoScriptTypes_v1
-{
-	private struct MonoScriptData
-	{
-		public byte[] FilePathsData;
-
-		public byte[] TypesData;
-
-		public int TotalTypes;
-
-		public int TotalFiles;
-
-		public bool IsEditorOnly;
-	}
-
-	[MethodImpl(MethodImplOptions.AggressiveInlining)]
-	private static MonoScriptData Get()
-	{
-		MonoScriptData result = default(MonoScriptData);
-		result.FilePathsData = new byte[149]
-		{
-			0, 0, 0, 2, 0, 0, 0, 41, 92, 65,
-			115, 115, 101, 116, 115, 92, 80, 108, 117, 103,
-			105, 110, 115, 92, 70, 97, 99, 101, 112, 117,
-			110, 99, 104, 46, 73, 110, 112, 117, 116, 92,
-			66, 117, 116, 116, 111, 110, 46, 99, 115, 0,
-			0, 0, 1, 0, 0, 0, 40, 92, 65, 115,
-			115, 101, 116, 115, 92, 80, 108, 117, 103, 105,
-			110, 115, 92, 70, 97, 99, 101, 112, 117, 110,
-			99, 104, 46, 73, 110, 112, 117, 116, 92, 73,
-			110, 112, 117, 116, 46, 99, 115, 0, 0, 0,
-			1, 0, 0, 0, 44, 92, 65, 115, 115, 101,
-			116, 115, 92, 80, 108, 117, 103, 105, 110, 115,
-			92, 70, 97, 99, 101, 112, 117, 110, 99, 104,
-			46, 73, 110, 112, 117, 116, 92, 75, 101, 121,
-			67, 111, 100, 101, 69, 120, 46, 99, 115
-		};
-		result.TypesData = new byte[78]
-		{
-			1, 0, 0, 0, 15, 70, 97, 99, 101, 112,
-			117, 110, 99, 104, 124, 73, 110, 112, 117, 116,
-			0, 0, 0, 0, 22, 70, 97, 99, 101, 112,
-			117, 110, 99, 104, 46, 73, 110, 112, 117, 116,
-			124, 66, 117, 116, 116, 111, 110, 1, 0, 0,
-			0, 15, 70, 97, 99, 101, 112, 117, 110, 99,
-			104, 124, 73, 110, 112, 117, 116, 0, 0, 0,
-			0, 6, 124, 75, 101, 121, 69, 120
-		};
-		result.TotalFiles = 3;
-		result.TotalTypes = 4;
-		result.IsEditorOnly = false;
-		return result;
-	}
-}
-
-
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -100,6 +37,12 @@ public static class Input
 
 		public bool LastValue;
 
+		private bool consumedUntilRelease;
+
+		private Func<string, bool> releaseTest;
+
+		private string releaseAction;
+
 		public string[] Binds;
 
 		public bool Transient;
@@ -110,16 +53,37 @@ public static class Input
 
 		public ButtonControl Control;
 
+		public int LastPressedFrame { get; private set; } = -1;
+
 		public virtual void Update()
 		{
 			LastValue = CurrentValue;
-			CurrentValue = TestFunction();
+			bool flag = TestFunction();
+			if (consumedUntilRelease && ((releaseTest != null) ? releaseTest(releaseAction) : (!flag)))
+			{
+				consumedUntilRelease = false;
+			}
+			CurrentValue = flag && !consumedUntilRelease;
 			if (CurrentValue && !LastValue)
 			{
+				LastPressedFrame = Time.frameCount;
 				RunBinds(pressed: true);
 			}
 			if (!CurrentValue && LastValue)
 			{
+				RunBinds(pressed: false);
+			}
+		}
+
+		public void ConsumeUntilRelease(Func<string, bool> isReleased = null, string action = null)
+		{
+			if (CurrentValue)
+			{
+				consumedUntilRelease = true;
+				releaseTest = isReleased;
+				releaseAction = action;
+				CurrentValue = (LastValue = false);
+				LastPressedFrame = -1;
 				RunBinds(pressed: false);
 			}
 		}
@@ -179,6 +143,8 @@ public static class Input
 		new string[1] { "+focusmap" },
 		new string[1] { "+snapping" }
 	};
+
+	public static Func<string, bool> HideFromKeyNames;
 
 	public static event Action<string> OnKeybindChanged;
 
@@ -336,19 +302,18 @@ public static class Input
 
 	private static bool BindMatchesCommand(string storedBind, string command, bool strict)
 	{
-		if (!strict)
-		{
-			storedBind = StripFactoryPrefix(storedBind);
-			command = StripFactoryPrefix(command);
-		}
-		if (storedBind.Equals(command, StringComparison.OrdinalIgnoreCase))
+		int num = ((!strict) ? (storedBind.IndexOf('.') + 1) : 0);
+		int num2 = ((!strict) ? (command.IndexOf('.') + 1) : 0);
+		int num3 = storedBind.Length - num;
+		int num4 = command.Length - num2;
+		if (num3 == num4 && string.Compare(storedBind, num, command, num2, num4, StringComparison.OrdinalIgnoreCase) == 0)
 		{
 			return true;
 		}
-		int num = storedBind.IndexOf(' ');
-		if (num > 0)
+		int num5 = storedBind.IndexOf(' ', num);
+		if (num5 > num && num5 - num == num4)
 		{
-			return storedBind.Substring(0, num).Equals(command, StringComparison.OrdinalIgnoreCase);
+			return string.Compare(storedBind, num, command, num2, num4, StringComparison.OrdinalIgnoreCase) == 0;
 		}
 		return false;
 	}
@@ -367,6 +332,21 @@ public static class Input
 	public static bool IsBindInUse(string bind)
 	{
 		return buttons.Exists((Button x) => x.Binds != null && x.Binds.Contains(bind));
+	}
+
+	public static bool IsBindInUse(string bind, Func<Button, bool> filter)
+	{
+		return buttons.Exists((Button x) => x.Binds != null && x.Binds.Contains(bind) && filter(x));
+	}
+
+	public static bool HasAnyBind(string name)
+	{
+		Button button = GetButton(name);
+		if (button != null && button.Binds != null)
+		{
+			return button.Binds.Length != 0;
+		}
+		return false;
 	}
 
 	public static bool KeyHasBindInRealm(string name, string bind)
@@ -388,11 +368,14 @@ public static class Input
 	public static string GetButtonWithBind(string bind, bool strict = true)
 	{
 		string[] buttonsWithBind = GetButtonsWithBind(bind, strict);
-		if (buttonsWithBind.Length == 0)
+		foreach (string text in buttonsWithBind)
 		{
-			return "UNSET";
+			if (HideFromKeyNames == null || !HideFromKeyNames(text))
+			{
+				return text;
+			}
 		}
-		return buttonsWithBind[0];
+		return "UNSET";
 	}
 
 	public static Button GetButtonObjectWithBind(string bind, bool strict = true)
@@ -419,30 +402,26 @@ public static class Input
 	{
 		foreach (Button button in buttons)
 		{
-			if (button.Binds != null && button.Binds.Any((string s) => BindMatchesCommand(s, bind, strict)))
+			if (button.Binds == null)
 			{
-				results.Add(button);
+				continue;
+			}
+			string[] binds = button.Binds;
+			for (int i = 0; i < binds.Length; i++)
+			{
+				if (BindMatchesCommand(binds[i], bind, strict))
+				{
+					results.Add(button);
+					break;
+				}
 			}
 		}
 	}
 }
 
 
-private struct MonoScriptData
-{
-	public byte[] FilePathsData;
-
-	public byte[] TypesData;
-
-	public int TotalTypes;
-
-	public int TotalFiles;
-
-	public bool IsEditorOnly;
-}
-
-
 using System;
+using UnityEngine;
 using UnityEngine.InputSystem.Controls;
 
 public class Button
@@ -455,6 +434,12 @@ public class Button
 
 	public bool LastValue;
 
+	private bool consumedUntilRelease;
+
+	private Func<string, bool> releaseTest;
+
+	private string releaseAction;
+
 	public string[] Binds;
 
 	public bool Transient;
@@ -465,16 +450,37 @@ public class Button
 
 	public ButtonControl Control;
 
+	public int LastPressedFrame { get; private set; } = -1;
+
 	public virtual void Update()
 	{
 		LastValue = CurrentValue;
-		CurrentValue = TestFunction();
+		bool flag = TestFunction();
+		if (consumedUntilRelease && ((releaseTest != null) ? releaseTest(releaseAction) : (!flag)))
+		{
+			consumedUntilRelease = false;
+		}
+		CurrentValue = flag && !consumedUntilRelease;
 		if (CurrentValue && !LastValue)
 		{
+			LastPressedFrame = Time.frameCount;
 			RunBinds(pressed: true);
 		}
 		if (!CurrentValue && LastValue)
 		{
+			RunBinds(pressed: false);
+		}
+	}
+
+	public void ConsumeUntilRelease(Func<string, bool> isReleased = null, string action = null)
+	{
+		if (CurrentValue)
+		{
+			consumedUntilRelease = true;
+			releaseTest = isReleased;
+			releaseAction = action;
+			CurrentValue = (LastValue = false);
+			LastPressedFrame = -1;
 			RunBinds(pressed: false);
 		}
 	}
