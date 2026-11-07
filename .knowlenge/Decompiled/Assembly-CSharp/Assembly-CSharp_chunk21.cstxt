@@ -1580,8 +1580,8 @@ public struct FillJobUnsafe<T> : IJob where T : unmanaged
 	[WriteOnly]
 	public NativeArray<T> Values;
 
-	[NativeDisableUnsafePtrRestriction]
 	[ReadOnly]
+	[NativeDisableUnsafePtrRestriction]
 	public T Value;
 
 	public void Execute()
@@ -2079,45 +2079,17 @@ public static class BackhaulProtocol
 
 	public const int HeaderSize = 5;
 
+	public const int MaxFrameSize = 2097152;
+
+	public const int MaxPayloadSize = 2097147;
+
+	public const int MaxPlayerMessageSize = 1048576;
+
 	public const byte OpData = 0;
 
 	public const byte OpOpen = 1;
 
 	public const byte OpClose = 2;
-}
-
-
-using System.Net;
-using CompanionServer;
-using Fleck;
-
-public sealed class ChannelTransport : IConnectionTransport
-{
-	private readonly BackhaulConnection _backhaul;
-
-	private readonly uint _channelId;
-
-	public IPAddress Address { get; }
-
-	public bool IsAvailable => _backhaul.IsAvailable;
-
-	public ChannelTransport(BackhaulConnection backhaul, uint channelId, IPAddress address)
-	{
-		_backhaul = backhaul;
-		_channelId = channelId;
-		Address = address;
-	}
-
-	public void Send(MemoryBuffer data)
-	{
-		//IL_000c: Unknown result type (might be due to invalid IL or missing references)
-		_backhaul.SendData(_channelId, data);
-	}
-
-	public void Close()
-	{
-		_backhaul.CloseChannelLocal(_channelId);
-	}
 }
 
 
@@ -2128,8 +2100,8 @@ using System.Collections.Generic;
 using System.Net;
 using System.Threading;
 using CompanionServer;
-using ConVar;
 using Fleck;
+using UnityEngine;
 
 public sealed class BackhaulConnection
 {
@@ -2139,9 +2111,11 @@ public sealed class BackhaulConnection
 
 	private readonly SynchronizationContext _syncContext;
 
-	private readonly IPAddress _address;
-
 	private readonly ConcurrentDictionary<uint, Connection> _channels = new ConcurrentDictionary<uint, Connection>();
+
+	public IPAddress Address { get; }
+
+	public int ChannelCount => _channels.Count;
 
 	public bool IsAvailable
 	{
@@ -2160,12 +2134,12 @@ public sealed class BackhaulConnection
 		_listener = listener;
 		_connection = connection;
 		_syncContext = syncContext;
-		_address = connection.ConnectionInfo.ClientIpAddress;
+		Address = connection.ConnectionInfo.ClientIpAddress;
 	}
 
 	public void OnMessage(Span<byte> data)
 	{
-		if (App.update && App.queuelimit > 0 && data.Length >= 5)
+		if (data.Length >= 5)
 		{
 			byte b = data[0];
 			uint channelId = BinaryPrimitives.ReadUInt32LittleEndian(data.Slice(1, 4));
@@ -2187,11 +2161,30 @@ public sealed class BackhaulConnection
 
 	private void HandleOpen(uint channelId, Span<byte> payload)
 	{
-		if (payload.Length >= 8)
+		//IL_000f: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0015: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0055: Unknown result type (might be due to invalid IL or missing references)
+		//IL_005b: Unknown result type (might be due to invalid IL or missing references)
+		if (payload.Length < 8)
 		{
-			ulong channelSteamId = BinaryPrimitives.ReadUInt64LittleEndian(payload.Slice(0, 8));
-			Connection value = new Connection(_listener.NextConnectionId(), _listener, new ChannelTransport(this, channelId, _address), channelSteamId);
-			_channels[channelId] = value;
+			SendFramed(2, channelId, default(MemoryBuffer));
+			return;
+		}
+		ulong num = BinaryPrimitives.ReadUInt64LittleEndian(payload.Slice(0, 8));
+		if (_channels.ContainsKey(channelId))
+		{
+			return;
+		}
+		if (num == 0L || !_listener.TryAddPlayerChannel(num))
+		{
+			SendFramed(2, channelId, default(MemoryBuffer));
+			return;
+		}
+		long connectionId = _listener.NextConnectionId();
+		_channels[channelId] = new Connection(connectionId, _listener, this, channelId, num);
+		if (!IsAvailable && TryRemoveChannel(channelId, out var connection))
+		{
+			PostClose(connection);
 		}
 	}
 
@@ -2199,7 +2192,7 @@ public sealed class BackhaulConnection
 	{
 		//IL_0030: Unknown result type (might be due to invalid IL or missing references)
 		//IL_004b: Unknown result type (might be due to invalid IL or missing references)
-		if (payload.Length <= App.maxmessagesize && _channels.TryGetValue(channelId, out var value))
+		if (payload.Length <= 1048576 && _channels.TryGetValue(channelId, out var value))
 		{
 			MemoryBuffer val = default(MemoryBuffer);
 			((MemoryBuffer)(ref val))..ctor(payload.Length);
@@ -2210,9 +2203,9 @@ public sealed class BackhaulConnection
 
 	private void HandleClose(uint channelId)
 	{
-		if (_channels.TryRemove(channelId, out var value))
+		if (TryRemoveChannel(channelId, out var connection))
 		{
-			PostClose(value);
+			PostClose(connection);
 		}
 	}
 
@@ -2220,50 +2213,67 @@ public sealed class BackhaulConnection
 	{
 		foreach (KeyValuePair<uint, Connection> channel in _channels)
 		{
-			if (_channels.TryRemove(channel.Key, out var value))
+			if (TryRemoveChannel(channel.Key, out var connection))
 			{
-				value.OnClose();
+				connection.OnClose();
 			}
 		}
+	}
+
+	private bool TryRemoveChannel(uint channelId, out Connection connection)
+	{
+		if (!_channels.TryRemove(channelId, out connection))
+		{
+			return false;
+		}
+		_listener.RemovePlayerChannel(connection.SteamId);
+		return true;
 	}
 
 	internal void SendData(uint channelId, MemoryBuffer payload)
 	{
-		try
-		{
-			SendFramed(0, channelId, ((MemoryBuffer)(ref payload)).Data, ((MemoryBuffer)(ref payload)).Length);
-		}
-		finally
-		{
-			((MemoryBuffer)(ref payload)).Dispose();
-		}
+		//IL_0003: Unknown result type (might be due to invalid IL or missing references)
+		SendFramed(0, channelId, payload);
 	}
 
 	internal void CloseChannelLocal(uint channelId)
 	{
-		if (_channels.TryRemove(channelId, out var value))
+		//IL_0010: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0016: Unknown result type (might be due to invalid IL or missing references)
+		if (TryRemoveChannel(channelId, out var connection))
 		{
-			SendFramed(2, channelId, null, 0);
-			PostClose(value);
+			SendFramed(2, channelId, default(MemoryBuffer));
+			PostClose(connection);
 		}
 	}
 
-	private void SendFramed(byte opcode, uint channelId, byte[] payload, int payloadLength)
+	public void Close()
 	{
-		//IL_0060: Unknown result type (might be due to invalid IL or missing references)
-		if (_connection != null && _connection.IsAvailable)
+		IWebSocketConnection connection = _connection;
+		if (connection != null)
 		{
-			int num = 5 + payloadLength;
-			MemoryBuffer val = default(MemoryBuffer);
-			((MemoryBuffer)(ref val))..ctor(num);
-			((MemoryBuffer)(ref val)).Data[0] = opcode;
-			BinaryPrimitives.WriteUInt32LittleEndian(((MemoryBuffer)(ref val)).Data.AsSpan(1, 4), channelId);
-			if (payloadLength > 0)
-			{
-				Array.Copy(payload, 0, ((MemoryBuffer)(ref val)).Data, 5, payloadLength);
-			}
-			_connection.Send(((MemoryBuffer)(ref val)).Slice(num));
+			connection.Close();
 		}
+	}
+
+	private void SendFramed(byte opcode, uint channelId, MemoryBuffer payload)
+	{
+		//IL_007e: Unknown result type (might be due to invalid IL or missing references)
+		if (_connection == null || !_connection.IsAvailable)
+		{
+			((MemoryBuffer)(ref payload)).Dispose();
+			return;
+		}
+		if (((MemoryBuffer)(ref payload)).Length > 2097147)
+		{
+			Debug.LogError((object)$"Rust+ message is too large to send ({((MemoryBuffer)(ref payload)).Length} bytes), dropping it");
+			((MemoryBuffer)(ref payload)).Dispose();
+			return;
+		}
+		Span<byte> span = stackalloc byte[5];
+		span[0] = opcode;
+		BinaryPrimitives.WriteUInt32LittleEndian(span.Slice(1, 4), channelId);
+		_connection.Send((ReadOnlySpan<byte>)span, payload);
 	}
 
 	private void PostClose(Connection connection)
@@ -2272,73 +2282,6 @@ public sealed class BackhaulConnection
 		{
 			((Connection)c).OnClose();
 		}, connection);
-	}
-}
-
-
-using System;
-using System.Collections.Generic;
-using Facepunch;
-using Network;
-
-public class BanList<TKey>
-{
-	private readonly Dictionary<TKey, double> _bans;
-
-	public BanList()
-	{
-		_bans = new Dictionary<TKey, double>();
-	}
-
-	public void Ban(TKey key, double timeInSeconds)
-	{
-		lock (_bans)
-		{
-			double num = TimeEx.realtimeSinceStartup + timeInSeconds;
-			if (_bans.TryGetValue(key, out var value))
-			{
-				num = Math.Max(num, value);
-			}
-			_bans[key] = num;
-		}
-	}
-
-	public bool IsBanned(TKey key)
-	{
-		lock (_bans)
-		{
-			if (!_bans.TryGetValue(key, out var value))
-			{
-				return false;
-			}
-			if (TimeEx.realtimeSinceStartup < value)
-			{
-				return true;
-			}
-			_bans.Remove(key);
-			return false;
-		}
-	}
-
-	public void Cleanup()
-	{
-		double realtimeSinceStartup = TimeEx.realtimeSinceStartup;
-		List<TKey> list = Pool.Get<List<TKey>>();
-		lock (_bans)
-		{
-			foreach (KeyValuePair<TKey, double> ban in _bans)
-			{
-				if (realtimeSinceStartup >= ban.Value)
-				{
-					list.Add(ban.Key);
-				}
-			}
-			foreach (TKey item in list)
-			{
-				_bans.Remove(item);
-			}
-		}
-		Pool.FreeUnmanaged<TKey>(ref list);
 	}
 }
 
@@ -2737,9 +2680,7 @@ public struct ClanTarget : IEquatable<ClanTarget>
 
 using System;
 using System.Collections.Generic;
-using System.Net;
 using CompanionServer;
-using ConVar;
 using Facepunch;
 using Fleck;
 using ProtoBuf;
@@ -2749,7 +2690,9 @@ public class Connection : IConnection
 {
 	private readonly Listener _listener;
 
-	private readonly IConnectionTransport _transport;
+	private readonly BackhaulConnection _backhaul;
+
+	private readonly uint _channelId;
 
 	private CompanionServer.PlayerTarget? _subscribedPlayer;
 
@@ -2765,32 +2708,73 @@ public class Connection : IConnection
 
 	public long ConnectionId { get; private set; }
 
-	public IPAddress Address => _transport.Address;
+	public bool IsClosed { get; private set; }
 
 	public ulong SubscribedSteamId => _subscribedPlayer?.SteamId ?? 0;
 
-	public ulong ChannelSteamId { get; }
+	public ulong SteamId { get; }
 
-	public IRemoteControllable CurrentCamera => _currentCamera;
+	public IRemoteControllable CurrentCamera
+	{
+		get
+		{
+			if (!IsCameraAlive)
+			{
+				return null;
+			}
+			return _currentCamera;
+		}
+	}
 
-	public bool IsControllingCamera => _isControllingCamera;
+	public bool IsControllingCamera
+	{
+		get
+		{
+			if (IsCameraAlive)
+			{
+				return _isControllingCamera;
+			}
+			return false;
+		}
+	}
 
-	public ulong ControllingSteamId => _cameraViewerSteamId;
+	public ulong ControllingSteamId
+	{
+		get
+		{
+			if (!IsCameraAlive)
+			{
+				return 0uL;
+			}
+			return _cameraViewerSteamId;
+		}
+	}
+
+	private bool IsCameraAlive
+	{
+		get
+		{
+			CameraTarget target;
+			return TryGetCameraTarget(_currentCamera, out target);
+		}
+	}
 
 	public InputState InputState { get; set; }
 
-	public Connection(long connectionId, Listener listener, IConnectionTransport transport, ulong channelSteamId = 0uL)
+	public Connection(long connectionId, Listener listener, BackhaulConnection backhaul, uint channelId, ulong steamId)
 	{
 		ConnectionId = connectionId;
 		_listener = listener;
-		_transport = transport;
-		ChannelSteamId = channelSteamId;
+		_backhaul = backhaul;
+		_channelId = channelId;
+		SteamId = steamId;
 		_subscribedEntities = new HashSet<EntityTarget>();
 		_subscribedClans = new HashSet<ClanTarget>();
 	}
 
 	public void OnClose()
 	{
+		IsClosed = true;
 		if (_subscribedPlayer.HasValue)
 		{
 			_listener.PlayerSubscribers.Remove(_subscribedPlayer.Value, this);
@@ -2806,39 +2790,24 @@ public class Connection : IConnection
 			_listener.ClanSubscribers.Remove(subscribedClan, this);
 		}
 		_subscribedClans.Clear();
-		_currentCamera?.StopControl(new CameraViewerId(_cameraViewerSteamId, ConnectionId));
-		if (TryGetCameraTarget(_currentCamera, out var target))
-		{
-			_listener.CameraSubscribers.Remove(target, this);
-		}
-		_currentCamera = null;
-		_cameraViewerSteamId = 0uL;
-		_isControllingCamera = false;
-	}
-
-	public void OnMessage(Span<byte> data)
-	{
-		//IL_002e: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0049: Unknown result type (might be due to invalid IL or missing references)
-		if (App.update && App.queuelimit > 0 && data.Length <= App.maxmessagesize)
-		{
-			MemoryBuffer val = default(MemoryBuffer);
-			((MemoryBuffer)(ref val))..ctor(data.Length);
-			data.CopyTo(MemoryBuffer.op_Implicit(val));
-			_listener.Enqueue(this, ((MemoryBuffer)(ref val)).Slice(data.Length));
-		}
+		EndViewing();
 	}
 
 	public void Close()
 	{
-		_transport?.Close();
+		_backhaul.CloseChannelLocal(_channelId);
 	}
 
 	public void Send(AppResponse response)
 	{
-		//IL_0025: Unknown result type (might be due to invalid IL or missing references)
-		//IL_002a: Unknown result type (might be due to invalid IL or missing references)
-		//IL_004a: Unknown result type (might be due to invalid IL or missing references)
+		//IL_007b: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0080: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00a0: Unknown result type (might be due to invalid IL or missing references)
+		if (IsClosed || !_backhaul.IsAvailable)
+		{
+			response.ResetToPool();
+			return;
+		}
 		BufferStream val = Pool.Get<BufferStream>().Initialize();
 		try
 		{
@@ -2847,9 +2816,17 @@ public class Connection : IConnection
 			{
 				val2.response = response;
 				val2.WriteToStream(val);
-				MemoryBuffer val3 = new MemoryBuffer(val.Length);
-				val.GetBuffer().CopyTo(((MemoryBuffer)(ref val3)).Data, 0);
-				SendRaw(((MemoryBuffer)(ref val3)).Slice(val.Length));
+				if (val.Length > 2097147)
+				{
+					Debug.LogError((object)$"Rust+ response is too large to send ({val.Length} bytes), replying with an error instead");
+					Listener.SendError(this, response.seq, "server_error");
+				}
+				else
+				{
+					MemoryBuffer val3 = new MemoryBuffer(val.Length);
+					val.GetBuffer().CopyTo(((MemoryBuffer)(ref val3)).Data, 0);
+					SendRaw(((MemoryBuffer)(ref val3)).Slice(val.Length));
+				}
 			}
 			finally
 			{
@@ -2864,7 +2841,7 @@ public class Connection : IConnection
 
 	public void Subscribe(CompanionServer.PlayerTarget target)
 	{
-		if (!(_subscribedPlayer == target))
+		if (!IsClosed && !(_subscribedPlayer == target))
 		{
 			EndViewing();
 			if (_subscribedPlayer.HasValue)
@@ -2879,7 +2856,7 @@ public class Connection : IConnection
 
 	public void Subscribe(EntityTarget target)
 	{
-		if (_subscribedEntities.Add(target))
+		if (!IsClosed && _subscribedEntities.Add(target))
 		{
 			_listener.EntitySubscribers.Add(target, this);
 		}
@@ -2887,19 +2864,12 @@ public class Connection : IConnection
 
 	public bool BeginViewing(IRemoteControllable camera)
 	{
-		if (!_subscribedPlayer.HasValue)
+		if (IsClosed || !_subscribedPlayer.HasValue)
 		{
 			return false;
 		}
 		if (!TryGetCameraTarget(camera, out var target))
 		{
-			if (_currentCamera == camera)
-			{
-				_currentCamera?.StopControl(new CameraViewerId(_cameraViewerSteamId, ConnectionId));
-				_currentCamera = null;
-				_isControllingCamera = false;
-				_cameraViewerSteamId = 0uL;
-			}
 			return false;
 		}
 		if (_currentCamera == camera)
@@ -2907,14 +2877,7 @@ public class Connection : IConnection
 			_listener.CameraSubscribers.Add(target, this);
 			return true;
 		}
-		if (TryGetCameraTarget(_currentCamera, out var target2))
-		{
-			_listener.CameraSubscribers.Remove(target2, this);
-			_currentCamera.StopControl(new CameraViewerId(_cameraViewerSteamId, ConnectionId));
-			_currentCamera = null;
-			_isControllingCamera = false;
-			_cameraViewerSteamId = 0uL;
-		}
+		EndViewing();
 		ulong steamId = _subscribedPlayer.Value.SteamId;
 		if (!camera.CanControl(steamId))
 		{
@@ -2933,8 +2896,8 @@ public class Connection : IConnection
 		if (TryGetCameraTarget(_currentCamera, out var target))
 		{
 			_listener.CameraSubscribers.Remove(target, this);
+			_currentCamera.StopControl(new CameraViewerId(_cameraViewerSteamId, ConnectionId));
 		}
-		_currentCamera?.StopControl(new CameraViewerId(_cameraViewerSteamId, ConnectionId));
 		_currentCamera = null;
 		_isControllingCamera = false;
 		_cameraViewerSteamId = 0uL;
@@ -2942,7 +2905,7 @@ public class Connection : IConnection
 
 	public void Subscribe(ClanTarget target)
 	{
-		if (_subscribedClans.Contains(target))
+		if (IsClosed || _subscribedClans.Contains(target))
 		{
 			return;
 		}
@@ -2967,32 +2930,31 @@ public class Connection : IConnection
 
 	public void SendRaw(MemoryBuffer data)
 	{
-		//IL_0072: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0034: Unknown result type (might be due to invalid IL or missing references)
 		if (((MemoryBuffer)(ref data)).Length == 0)
 		{
 			return;
 		}
-		if (!_transport.IsAvailable)
+		if (IsClosed || !_backhaul.IsAvailable)
 		{
-			DebugEx.LogWarning((object)$"Ignoring Rust+ message send to disconnected client (connectionID={ConnectionId} steamID={_subscribedPlayer?.SteamId})", (StackTraceLogType)0);
 			((MemoryBuffer)(ref data)).Dispose();
 			return;
 		}
 		try
 		{
-			_transport.Send(data);
+			_backhaul.SendData(_channelId, data);
 		}
 		catch (Exception arg)
 		{
-			Debug.LogError((object)$"Failed to send message to app client {_transport.Address}: {arg}");
+			Debug.LogError((object)$"Failed to send message to app client (connectionID={ConnectionId} steamID={SteamId}): {arg}");
 		}
 	}
 
 	private static bool TryGetCameraTarget(IRemoteControllable camera, out CameraTarget target)
 	{
-		//IL_0036: Unknown result type (might be due to invalid IL or missing references)
-		BaseEntity baseEntity = camera?.GetEnt();
-		if (camera.IsUnityNull() || (Object)(object)baseEntity == (Object)null || !baseEntity.IsValid())
+		//IL_002a: Unknown result type (might be due to invalid IL or missing references)
+		BaseEntity baseEntity = (camera.IsUnityNull() ? null : camera.GetEnt());
+		if (!baseEntity.IsValid())
 		{
 			target = default(CameraTarget);
 			return false;
@@ -3060,7 +3022,7 @@ public interface IConnection
 {
 	long ConnectionId { get; }
 
-	ulong ChannelSteamId { get; }
+	ulong SteamId { get; }
 
 	IRemoteControllable CurrentCamera { get; }
 
@@ -3083,65 +3045,6 @@ public interface IConnection
 	bool BeginViewing(IRemoteControllable camera);
 
 	void EndViewing();
-}
-
-
-using System.Net;
-using Fleck;
-
-public interface IConnectionTransport
-{
-	IPAddress Address { get; }
-
-	bool IsAvailable { get; }
-
-	void Send(MemoryBuffer data);
-
-	void Close();
-}
-
-
-using System.Net;
-using CompanionServer;
-using Fleck;
-
-public sealed class FleckTransport : IConnectionTransport
-{
-	private readonly IWebSocketConnection _connection;
-
-	public IPAddress Address => _connection.ConnectionInfo.ClientIpAddress;
-
-	public bool IsAvailable
-	{
-		get
-		{
-			if (_connection != null)
-			{
-				return _connection.IsAvailable;
-			}
-			return false;
-		}
-	}
-
-	public FleckTransport(IWebSocketConnection connection)
-	{
-		_connection = connection;
-	}
-
-	public void Send(MemoryBuffer data)
-	{
-		//IL_0006: Unknown result type (might be due to invalid IL or missing references)
-		_connection.Send(data);
-	}
-
-	public void Close()
-	{
-		IWebSocketConnection connection = _connection;
-		if (connection != null)
-		{
-			connection.Close();
-		}
-	}
 }
 
 
@@ -3180,9 +3083,11 @@ public class Listener : IDisposable, IBroadcastSender<AppBroadcast>
 
 	private static readonly ByteArrayStream Stream = new ByteArrayStream();
 
-	private readonly TokenBucketList<IPAddress> _ipTokenBuckets;
+	private const int MaxQueuedMessages = 100;
 
-	private readonly BanList<IPAddress> _ipBans;
+	private const int MaxQueuedMessagesPerPlayer = 25;
+
+	private const int MaxDroppedRequests = 1000;
 
 	private readonly TokenBucketList<ulong> _playerTokenBuckets;
 
@@ -3196,9 +3101,21 @@ public class Listener : IDisposable, IBroadcastSender<AppBroadcast>
 
 	private readonly SynchronizationContext _syncContext;
 
+	private readonly HashSet<BackhaulConnection> _backhauls = new HashSet<BackhaulConnection>();
+
+	private readonly Dictionary<ulong, int> _playerChannelCounts = new Dictionary<ulong, int>();
+
+	private readonly Dictionary<ulong, int> _queuedMessageCounts = new Dictionary<ulong, int>();
+
+	private readonly Queue<(Connection Connection, uint Seq)> _droppedRequests = new Queue<(Connection, uint)>();
+
+	private readonly Dictionary<ulong, int> _droppedRequestCounts = new Dictionary<ulong, int>();
+
 	private RealTimeSince _lastCleanup;
 
 	private long _nextConnectionId;
+
+	private bool _disposed;
 
 	public readonly IPAddress Address;
 
@@ -3214,28 +3131,25 @@ public class Listener : IDisposable, IBroadcastSender<AppBroadcast>
 
 	public Listener(IPAddress ipAddress, int port)
 	{
-		//IL_00b5: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00bf: Expected O, but got Unknown
+		//IL_00ce: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00d8: Expected O, but got Unknown
 		Address = ipAddress;
 		Port = port;
-		_ipTokenBuckets = new TokenBucketList<IPAddress>(50.0, 15.0);
-		_ipBans = new BanList<IPAddress>();
 		_playerTokenBuckets = new TokenBucketList<ulong>(25.0, 3.0);
 		_pairingTokenBuckets = new TokenBucketList<ulong>(5.0, 0.1);
 		_messageQueue = new Queue<Message>();
 		_syncContext = SynchronizationContext.Current;
-		_server = new WebSocketServer($"ws://{Address}:{Port}/", true, 100, App.maxconnections, App.maxconnectionsperip);
+		_server = new WebSocketServer($"ws://{Address}:{Port}/", true, 100, FleckLimit(App.maxconnections), FleckLimit(App.maxconnectionsperip));
 		_server.RestartAfterListenError = true;
+		_server.MaxMessageSize = 2097152;
 		_server.Start((Action<IWebSocketConnection>)delegate(IWebSocketConnection socket)
 		{
-			//IL_004c: Unknown result type (might be due to invalid IL or missing references)
-			//IL_0056: Expected O, but got Unknown
-			//IL_017e: Unknown result type (might be due to invalid IL or missing references)
-			//IL_0188: Expected O, but got Unknown
-			//IL_00ee: Unknown result type (might be due to invalid IL or missing references)
-			//IL_00f8: Expected O, but got Unknown
-			IPAddress clientIpAddress = socket.ConnectionInfo.ClientIpAddress;
-			if (_ipBans.IsBanned(clientIpAddress))
+			//IL_0066: Unknown result type (might be due to invalid IL or missing references)
+			//IL_0070: Expected O, but got Unknown
+			//IL_00c9: Unknown result type (might be due to invalid IL or missing references)
+			//IL_00d3: Expected O, but got Unknown
+			string path = socket.ConnectionInfo.Path;
+			if (path == null || !path.StartsWith("/backhaul/", StringComparison.Ordinal) || !IsValidBackhaulSecret(path.Substring("/backhaul/".Length)))
 			{
 				socket.Close();
 			}
@@ -3250,41 +3164,24 @@ public class Listener : IDisposable, IBroadcastSender<AppBroadcast>
 					data.CopyTo(MemoryBuffer.op_Implicit(val));
 					socket.SendPong(((MemoryBuffer)(ref val)).Slice(data.Length));
 				};
-				string path = socket.ConnectionInfo.Path;
-				if (path != null && path.StartsWith("/backhaul/", StringComparison.Ordinal))
+				BackhaulConnection backhaul = new BackhaulConnection(this, socket, _syncContext);
+				lock (_backhauls)
 				{
-					if (!IsValidBackhaulSecret(path.Substring("/backhaul/".Length)))
-					{
-						socket.Close();
-					}
-					else
-					{
-						BackhaulConnection backhaul = new BackhaulConnection(this, socket, _syncContext);
-						socket.OnBinary = new BinaryDataHandler(backhaul.OnMessage);
-						socket.OnClose = delegate
-						{
-							_syncContext.Post(delegate(object c)
-							{
-								((BackhaulConnection)c).OnBackhaulClosed();
-							}, backhaul);
-						};
-						socket.OnError = LogSocketError;
-					}
+					_backhauls.Add(backhaul);
 				}
-				else
+				socket.OnBinary = new BinaryDataHandler(backhaul.OnMessage);
+				socket.OnClose = delegate
 				{
-					long connectionId = NextConnectionId();
-					Connection conn = new Connection(connectionId, this, new FleckTransport(socket), 0uL);
-					socket.OnClose = delegate
+					lock (_backhauls)
 					{
-						_syncContext.Post(delegate(object c)
-						{
-							((Connection)c).OnClose();
-						}, conn);
-					};
-					socket.OnBinary = new BinaryDataHandler(conn.OnMessage);
-					socket.OnError = LogSocketError;
-				}
+						_backhauls.Remove(backhaul);
+					}
+					_syncContext.Post(delegate(object c)
+					{
+						((BackhaulConnection)c).OnBackhaulClosed();
+					}, backhaul);
+				};
+				socket.OnError = LogSocketError;
 			}
 		});
 		_stopwatch = new Stopwatch();
@@ -3297,6 +3194,56 @@ public class Listener : IDisposable, IBroadcastSender<AppBroadcast>
 	internal long NextConnectionId()
 	{
 		return Interlocked.Increment(ref _nextConnectionId);
+	}
+
+	public void GetBackhauls(List<BackhaulConnection> results)
+	{
+		lock (_backhauls)
+		{
+			results.AddRange(_backhauls);
+		}
+	}
+
+	internal bool TryAddPlayerChannel(ulong steamId)
+	{
+		lock (_playerChannelCounts)
+		{
+			int maxconnectionsperip = App.maxconnectionsperip;
+			_playerChannelCounts.TryGetValue(steamId, out var value);
+			if (maxconnectionsperip >= 0 && value >= maxconnectionsperip)
+			{
+				return false;
+			}
+			_playerChannelCounts[steamId] = value + 1;
+			return true;
+		}
+	}
+
+	internal void RemovePlayerChannel(ulong steamId)
+	{
+		lock (_playerChannelCounts)
+		{
+			if (_playerChannelCounts.TryGetValue(steamId, out var value))
+			{
+				if (value <= 1)
+				{
+					_playerChannelCounts.Remove(steamId);
+				}
+				else
+				{
+					_playerChannelCounts[steamId] = value - 1;
+				}
+			}
+		}
+	}
+
+	private static int FleckLimit(int limit)
+	{
+		if (limit >= 0)
+		{
+			return limit;
+		}
+		return -1;
 	}
 
 	private static bool IsValidBackhaulSecret(string provided)
@@ -3328,51 +3275,159 @@ public class Listener : IDisposable, IBroadcastSender<AppBroadcast>
 
 	public void Dispose()
 	{
+		//IL_0078: Unknown result type (might be due to invalid IL or missing references)
+		//IL_007d: Unknown result type (might be due to invalid IL or missing references)
 		WebSocketServer server = _server;
 		if (server != null)
 		{
 			server.Dispose();
 		}
+		List<BackhaulConnection> list = Pool.Get<List<BackhaulConnection>>();
+		GetBackhauls(list);
+		foreach (BackhaulConnection item in list)
+		{
+			item.Close();
+		}
+		Pool.FreeUnmanaged<BackhaulConnection>(ref list);
+		lock (_messageQueue)
+		{
+			_disposed = true;
+			while (_messageQueue.Count > 0)
+			{
+				MemoryBuffer buffer = _messageQueue.Dequeue().Buffer;
+				((MemoryBuffer)(ref buffer)).Dispose();
+			}
+			_queuedMessageCounts.Clear();
+			_droppedRequests.Clear();
+			_droppedRequestCounts.Clear();
+		}
 	}
 
 	internal void Enqueue(Connection connection, MemoryBuffer data)
 	{
-		//IL_0036: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00ca: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0095: Unknown result type (might be due to invalid IL or missing references)
 		lock (_messageQueue)
 		{
-			if (!App.update || _messageQueue.Count >= App.queuelimit)
+			if (_disposed)
 			{
 				((MemoryBuffer)(ref data)).Dispose();
 				return;
 			}
-			Message item = new Message(connection, data);
-			_messageQueue.Enqueue(item);
+			_queuedMessageCounts.TryGetValue(connection.SteamId, out var value);
+			if (_messageQueue.Count >= 100 || value >= 25)
+			{
+				_droppedRequestCounts.TryGetValue(connection.SteamId, out var value2);
+				if (value2 < 25 && _droppedRequests.Count < 1000)
+				{
+					_droppedRequestCounts[connection.SteamId] = value2 + 1;
+					_droppedRequests.Enqueue((connection, ReadSeq(MemoryBuffer.op_Implicit(data))));
+				}
+				((MemoryBuffer)(ref data)).Dispose();
+			}
+			else
+			{
+				_queuedMessageCounts[connection.SteamId] = value + 1;
+				Message item = new Message(connection, data);
+				_messageQueue.Enqueue(item);
+			}
 		}
+	}
+
+	private static uint ReadSeq(Span<byte> request)
+	{
+		if (request.Length == 0 || request[0] != 8)
+		{
+			return 0u;
+		}
+		uint num = 0u;
+		int num2 = 1;
+		int num3 = 0;
+		while (num2 < request.Length && num3 < 32)
+		{
+			num |= (uint)((request[num2] & 0x7F) << num3);
+			if ((request[num2] & 0x80) == 0)
+			{
+				return num;
+			}
+			num2++;
+			num3 += 7;
+		}
+		return 0u;
+	}
+
+	private bool TryDequeueMessage(out Message message)
+	{
+		lock (_messageQueue)
+		{
+			if (_messageQueue.Count == 0)
+			{
+				message = default(Message);
+				return false;
+			}
+			message = _messageQueue.Dequeue();
+			ulong steamId = message.Connection.SteamId;
+			int num = _queuedMessageCounts[steamId];
+			if (num <= 1)
+			{
+				_queuedMessageCounts.Remove(steamId);
+			}
+			else
+			{
+				_queuedMessageCounts[steamId] = num - 1;
+			}
+			return true;
+		}
+	}
+
+	private bool ReplyToDroppedRequests()
+	{
+		List<(Connection, uint)> list;
+		lock (_messageQueue)
+		{
+			if (_droppedRequests.Count == 0)
+			{
+				return false;
+			}
+			list = Pool.Get<List<(Connection, uint)>>();
+			list.AddRange(_droppedRequests);
+			_droppedRequests.Clear();
+			_droppedRequestCounts.Clear();
+		}
+		foreach (var (connection, seq) in list)
+		{
+			SendError(connection, seq, ValidationResult.RateLimit.ToErrorCode());
+		}
+		Pool.FreeUnmanaged<(Connection, uint)>(ref list);
+		return true;
+	}
+
+	internal static void SendError(IConnection connection, uint seq, string error)
+	{
+		AppResponse val = Pool.Get<AppResponse>();
+		val.seq = seq;
+		val.error = Pool.Get<AppError>();
+		val.error.error = error;
+		connection.Send(val);
 	}
 
 	public bool Update()
 	{
-		//IL_0090: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00a7: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00ac: Unknown result type (might be due to invalid IL or missing references)
-		if (!App.update)
-		{
-			return false;
-		}
-		bool result = false;
+		//IL_0062: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0079: Unknown result type (might be due to invalid IL or missing references)
+		//IL_007e: Unknown result type (might be due to invalid IL or missing references)
+		bool flag = false;
 		TimeWarning val = TimeWarning.New("CompanionServer.MessageQueue", 0);
 		try
 		{
-			lock (_messageQueue)
+			_stopwatch.Restart();
+			Message message;
+			while (_stopwatch.Elapsed.TotalMilliseconds < 5.0 && TryDequeueMessage(out message))
 			{
-				_stopwatch.Restart();
-				while (_messageQueue.Count > 0 && _stopwatch.Elapsed.TotalMilliseconds < 5.0)
-				{
-					Message message = _messageQueue.Dequeue();
-					Dispatch(message);
-					result = true;
-				}
+				Dispatch(message);
+				flag = true;
 			}
+			flag |= ReplyToDroppedRequests();
 		}
 		finally
 		{
@@ -3381,23 +3436,26 @@ public class Listener : IDisposable, IBroadcastSender<AppBroadcast>
 		if (RealTimeSince.op_Implicit(_lastCleanup) >= 3f)
 		{
 			_lastCleanup = RealTimeSince.op_Implicit(0f);
-			_ipTokenBuckets.Cleanup();
-			_ipBans.Cleanup();
 			_playerTokenBuckets.Cleanup();
 			_pairingTokenBuckets.Cleanup();
 		}
-		return result;
+		return flag;
 	}
 
 	private void Dispatch(Message message)
 	{
 		//IL_0001: Unknown result type (might be due to invalid IL or missing references)
 		//IL_0006: Unknown result type (might be due to invalid IL or missing references)
-		//IL_000d: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0012: Unknown result type (might be due to invalid IL or missing references)
-		//IL_001c: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0021: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0023: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0028: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0032: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0037: Unknown result type (might be due to invalid IL or missing references)
 		MemoryBuffer buffer = message.Buffer;
+		if (message.Connection.IsClosed)
+		{
+			((MemoryBuffer)(ref buffer)).Dispose();
+			return;
+		}
 		AppRequest val;
 		try
 		{
@@ -3411,9 +3469,9 @@ public class Listener : IDisposable, IBroadcastSender<AppBroadcast>
 		}
 		catch
 		{
-			DebugEx.LogWarning((object)$"Malformed companion packet from {message.Connection.Address}", (StackTraceLogType)0);
+			DebugEx.LogWarning((object)$"Malformed companion packet from connectionID={message.Connection.ConnectionId} steamID={message.Connection.SteamId}", (StackTraceLogType)0);
 			message.Connection.Close();
-			throw;
+			return;
 		}
 		finally
 		{
@@ -3421,11 +3479,7 @@ public class Listener : IDisposable, IBroadcastSender<AppBroadcast>
 		}
 		if (!Handle<AppEmpty, Info>(val.getInfo, message.Connection, val) && !Handle<AppEmpty, CompanionServer.Handlers.Time>(val.getTime, message.Connection, val) && !Handle<AppEmpty, Map>(val.getMap, message.Connection, val) && !Handle<AppEmpty, TeamInfo>(val.getTeamInfo, message.Connection, val) && !Handle<AppEmpty, TeamChat>(val.getTeamChat, message.Connection, val) && !Handle<AppSendMessage, SendTeamChat>(val.sendTeamMessage, message.Connection, val) && !Handle<AppEmpty, EntityInfo>(val.getEntityInfo, message.Connection, val) && !Handle<AppSetEntityValue, SetEntityValue>(val.setEntityValue, message.Connection, val) && !Handle<AppEmpty, CheckSubscription>(val.checkSubscription, message.Connection, val) && !Handle<AppFlag, SetSubscription>(val.setSubscription, message.Connection, val) && !Handle<AppEmpty, MapMarkers>(val.getMapMarkers, message.Connection, val) && !Handle<AppPromoteToLeader, PromoteToLeader>(val.promoteToLeader, message.Connection, val) && !Handle<AppEmpty, ClanInfo>(val.getClanInfo, message.Connection, val) && !Handle<AppEmpty, ClanChat>(val.getClanChat, message.Connection, val) && !Handle<AppSendMessage, SetClanMotd>(val.setClanMotd, message.Connection, val) && !Handle<AppSendMessage, SendClanChat>(val.sendClanMessage, message.Connection, val) && !Handle<AppGetNexusAuth, NexusAuth>(val.getNexusAuth, message.Connection, val) && !Handle<AppCameraSubscribe, CameraSubscribe>(val.cameraSubscribe, message.Connection, val) && !Handle<AppEmpty, CameraUnsubscribe>(val.cameraUnsubscribe, message.Connection, val) && !Handle<AppCameraInput, CameraInput>(val.cameraInput, message.Connection, val) && !Handle<AppTeamKick, TeamKick>(val.kickFromTeam, message.Connection, val))
 		{
-			AppResponse val2 = Pool.Get<AppResponse>();
-			val2.seq = val.seq;
-			val2.error = Pool.Get<AppError>();
-			val2.error.error = "unhandled";
-			message.Connection.Send(val2);
+			SendError(message.Connection, val.seq, "unhandled");
 			val.Dispose();
 		}
 	}
@@ -3494,24 +3548,25 @@ public class Listener : IDisposable, IBroadcastSender<AppBroadcast>
 
 	public void BroadcastTo(List<Connection> targets, AppBroadcast broadcast)
 	{
-		//IL_0001: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0006: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0019: Unknown result type (might be due to invalid IL or missing references)
-		MemoryBuffer broadcastBuffer = GetBroadcastBuffer(broadcast);
+		//IL_001d: Unknown result type (might be due to invalid IL or missing references)
+		if (!TryGetBroadcastBuffer(broadcast, out var buffer))
+		{
+			return;
+		}
 		foreach (Connection target in targets)
 		{
-			target.SendRaw(((MemoryBuffer)(ref broadcastBuffer)).DontDispose());
+			target.SendRaw(((MemoryBuffer)(ref buffer)).DontDispose());
 		}
-		((MemoryBuffer)(ref broadcastBuffer)).Dispose();
+		((MemoryBuffer)(ref buffer)).Dispose();
 	}
 
-	private static MemoryBuffer GetBroadcastBuffer(AppBroadcast broadcast)
+	private static bool TryGetBroadcastBuffer(AppBroadcast broadcast, out MemoryBuffer buffer)
 	{
-		//IL_0025: Unknown result type (might be due to invalid IL or missing references)
-		//IL_002a: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0049: Unknown result type (might be due to invalid IL or missing references)
-		//IL_004e: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0066: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0058: Unknown result type (might be due to invalid IL or missing references)
+		//IL_005d: Unknown result type (might be due to invalid IL or missing references)
+		//IL_007f: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0084: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0047: Unknown result type (might be due to invalid IL or missing references)
 		BufferStream val = Pool.Get<BufferStream>().Initialize();
 		try
 		{
@@ -3520,9 +3575,16 @@ public class Listener : IDisposable, IBroadcastSender<AppBroadcast>
 			{
 				val2.broadcast = broadcast;
 				val2.WriteToStream(val);
-				MemoryBuffer val3 = new MemoryBuffer(val.Length);
-				val.GetBuffer().CopyTo(((MemoryBuffer)(ref val3)).Data, 0);
-				return ((MemoryBuffer)(ref val3)).Slice(val.Length);
+				if (val.Length > 2097147)
+				{
+					Debug.LogError((object)$"Rust+ broadcast is too large to send ({val.Length} bytes), dropping it");
+					buffer = default(MemoryBuffer);
+					return false;
+				}
+				buffer = new MemoryBuffer(val.Length);
+				val.GetBuffer().CopyTo(((MemoryBuffer)(ref buffer)).Data, 0);
+				buffer = ((MemoryBuffer)(ref buffer)).Slice(val.Length);
+				return true;
 			}
 			finally
 			{
@@ -3904,6 +3966,7 @@ using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 using CompanionServer;
 using CompanionServer.Handlers;
@@ -3936,7 +3999,11 @@ public static class Server
 
 	internal static string Secret;
 
+	private static CancellationTokenSource _registrationCancellation;
+
 	private static readonly Func<AppIOEntity, Connection, bool> CanReceiveEntityBroadcast = (AppIOEntity entity, Connection connection) => entity.CanAppAccess(connection.SubscribedSteamId);
+
+	public static bool IsRegistering { get; private set; }
 
 	public static Listener Listener { get; private set; }
 
@@ -3964,31 +4031,38 @@ public static class Server
 			return;
 		}
 		BaseGameMode activeGameMode = BaseGameMode.GetActiveGameMode(serverside: true);
-		if (!((Object)(object)activeGameMode != (Object)null) || activeGameMode.rustPlus)
+		if ((Object)(object)activeGameMode != (Object)null && !activeGameMode.rustPlus)
 		{
-			Shutdown();
-			Map.PopulateCache();
-			if (App.port == 0)
-			{
-				App.port = Math.Max(ConVar.Server.port, RCon.Port) + 67;
-			}
-			try
-			{
-				Listener = new Listener(App.GetListenIP(), App.port);
-			}
-			catch (Exception arg)
-			{
-				Debug.LogError((object)$"Companion server failed to start: {arg}");
-			}
-			if (!minimal)
-			{
-				PostInitializeServer();
-			}
+			return;
+		}
+		if (IsRegistering)
+		{
+			Debug.LogWarning((object)"Rust+ registration is already in progress, try again once it finishes");
+			return;
+		}
+		Shutdown();
+		Map.PopulateCache();
+		if (App.port == 0)
+		{
+			App.port = Math.Max(ConVar.Server.port, RCon.Port) + 67;
+		}
+		try
+		{
+			Listener = new Listener(App.GetListenIP(), App.port);
+		}
+		catch (Exception arg)
+		{
+			Debug.LogError((object)$"Companion server failed to start: {arg}");
+		}
+		if (!minimal)
+		{
+			PostInitializeServer();
 		}
 	}
 
 	public static void Shutdown()
 	{
+		_registrationCancellation?.Cancel();
 		SetServerId(null);
 		Listener?.Dispose();
 		Listener = null;
@@ -4038,20 +4112,34 @@ public static class Server
 
 	private static async void PostInitializeServer()
 	{
-		string text = await App.GetPublicIPAsync();
-		if (string.IsNullOrEmpty(text))
+		IsRegistering = true;
+		_registrationCancellation = new CancellationTokenSource();
+		CancellationToken cancellationToken = _registrationCancellation.Token;
+		try
 		{
-			Debug.LogError((object)"Failed to determine public IP address for Rust+ while setting up registration. Disabling Rust+ features because we wouldn't know what IP to tell Rust+ to connect to.");
-			SetServerId(null);
+			string text = await App.GetPublicIPAsync(cancellationToken);
+			if (string.IsNullOrEmpty(text))
+			{
+				Debug.LogError((object)"Failed to determine public IP address for Rust+ while setting up registration. Disabling Rust+ features because we wouldn't know what IP to tell Rust+ to connect to.");
+				SetServerId(null);
+			}
+			else
+			{
+				await SetupServerRegistration(text, App.port, cancellationToken);
+				await CheckConnectivity(cancellationToken);
+			}
 		}
-		else
+		catch (Exception) when (cancellationToken.IsCancellationRequested)
 		{
-			await SetupServerRegistration(text, App.port);
-			await CheckConnectivity();
+		}
+		finally
+		{
+			_registrationCancellation = null;
+			IsRegistering = false;
 		}
 	}
 
-	private static async Task SetupServerRegistration(string address, int port)
+	private static async Task SetupServerRegistration(string address, int port, CancellationToken cancellationToken)
 	{
 		string arg = Uri.EscapeDataString(ConVar.Server.hostname ?? string.Empty);
 		string query = $"?address={address}&port={port}&name={arg}";
@@ -4060,19 +4148,19 @@ public static class Server
 			if (TryLoadServerRegistration(out var _, out var serverToken))
 			{
 				StringContent refreshContent = new StringContent(serverToken, Encoding.UTF8, "text/plain");
-				HttpResponseMessage val = await AutoRetry(() => WebUtil.HttpClient.PostAsync(App.endpoint + "/server/refresh" + query, (HttpContent)(object)refreshContent));
+				HttpResponseMessage val = await AutoRetry(() => WebUtil.HttpClient.PostAsync(App.endpoint + "/server/refresh" + query, (HttpContent)(object)refreshContent), cancellationToken);
 				if (val.IsSuccessStatusCode)
 				{
-					SetServerRegistration(await val.Content.ReadAsStringAsync());
+					SetServerRegistration(await val.Content.ReadAsStringAsync(), cancellationToken);
 					return;
 				}
 				Debug.LogWarning((object)"Failed to refresh server ID - registering a new one");
 			}
-			HttpResponseMessage obj = await AutoRetry(() => WebUtil.HttpClient.GetAsync(App.endpoint + "/server/register" + query));
+			HttpResponseMessage obj = await AutoRetry(() => WebUtil.HttpClient.GetAsync(App.endpoint + "/server/register" + query), cancellationToken);
 			obj.EnsureSuccessStatusCode();
-			SetServerRegistration(await obj.Content.ReadAsStringAsync());
+			SetServerRegistration(await obj.Content.ReadAsStringAsync(), cancellationToken);
 		}
-		catch (Exception arg2)
+		catch (Exception arg2) when (!cancellationToken.IsCancellationRequested)
 		{
 			Debug.LogError((object)$"Failed to setup companion server registration: {arg2}");
 		}
@@ -4101,7 +4189,7 @@ public static class Server
 		}
 	}
 
-	private static void SetServerRegistration(string responseJson)
+	private static void SetServerRegistration(string responseJson, CancellationToken cancellationToken)
 	{
 		RegisterResponse registerResponse = null;
 		try
@@ -4112,7 +4200,15 @@ public static class Server
 		{
 			Debug.LogError((object)$"Failed to parse registration response JSON: {responseJson}\n\n{arg}");
 		}
-		SetServerId(registerResponse?.ServerId);
+		if (registerResponse != null && string.IsNullOrEmpty(registerResponse.Secret))
+		{
+			Debug.LogError((object)"Rust+ registration response has no backhaul secret, disabling Rust+ features because the backend won't be able to connect.");
+			registerResponse = null;
+		}
+		if (!cancellationToken.IsCancellationRequested)
+		{
+			SetServerId(registerResponse?.ServerId);
+		}
 		Token = registerResponse?.ServerToken;
 		Secret = registerResponse?.Secret;
 		if (registerResponse == null)
@@ -4129,7 +4225,7 @@ public static class Server
 		}
 	}
 
-	private static async Task CheckConnectivity()
+	private static async Task CheckConnectivity(CancellationToken cancellationToken)
 	{
 		if (!IsEnabled)
 		{
@@ -4144,7 +4240,7 @@ public static class Server
 				return;
 			}
 			StringContent testContent = new StringContent(Token, Encoding.UTF8, "text/plain");
-			HttpResponseMessage testResponse = await AutoRetry(() => WebUtil.HttpClient.PostAsync(App.endpoint + "/server/test_connection", (HttpContent)(object)testContent));
+			HttpResponseMessage testResponse = await AutoRetry(() => WebUtil.HttpClient.PostAsync(App.endpoint + "/server/test_connection", (HttpContent)(object)testContent), cancellationToken);
 			string text = await testResponse.Content.ReadAsStringAsync();
 			TestConnectionResponse testConnectionResponse = null;
 			try
@@ -4173,17 +4269,18 @@ public static class Server
 				Debug.LogWarning((object)("Rust+ companion server connectivity test has warnings:\n" + text2));
 			}
 		}
-		catch (Exception arg2)
+		catch (Exception arg2) when (!cancellationToken.IsCancellationRequested)
 		{
 			Debug.LogError((object)$"Failed to check connectivity to the companion server: {arg2}");
 		}
 	}
 
-	private static async Task<HttpResponseMessage> AutoRetry(Func<Task<HttpResponseMessage>> action)
+	private static async Task<HttpResponseMessage> AutoRetry(Func<Task<HttpResponseMessage>> action, CancellationToken cancellationToken)
 	{
 		Exception lastException = null;
 		for (int i = 0; i < 5; i++)
 		{
+			cancellationToken.ThrowIfCancellationRequested();
 			try
 			{
 				HttpResponseMessage val = await action();
@@ -4198,7 +4295,10 @@ public static class Server
 			{
 				lastException = ex;
 			}
-			await Task.Delay(30000);
+			if (i < 4)
+			{
+				await Task.Delay(30000, cancellationToken);
+			}
 		}
 		throw lastException ?? new Exception("Exceeded maximum number of retries");
 	}
@@ -4812,8 +4912,7 @@ public static class Util
 
 	public static Dictionary<string, string> TryGetServerPairingData()
 	{
-		string value = App.GetPublicIP() ?? "";
-		if (string.IsNullOrWhiteSpace(value) || string.IsNullOrWhiteSpace(App.serverid))
+		if (string.IsNullOrWhiteSpace(App.serverid))
 		{
 			return null;
 		}
@@ -4825,8 +4924,6 @@ public static class Util
 		dictionary.Add("img", StringExtensions.Truncate(ConVar.Server.headerimage, 128, (string)null));
 		dictionary.Add("logo", StringExtensions.Truncate(ConVar.Server.logoimage, 128, (string)null));
 		dictionary.Add("url", StringExtensions.Truncate(ConVar.Server.url, 128, (string)null));
-		dictionary.Add("ip", value);
-		dictionary.Add("port", App.port.ToString("G", CultureInfo.InvariantCulture));
 		if (NexusServer.Started)
 		{
 			int? nexusId = NexusServer.NexusId;
@@ -5123,6 +5220,10 @@ public abstract class BaseHandler<T> : IHandler, IPooled where T : class
 
 	public virtual ValidationResult Validate()
 	{
+		if (Client.SteamId != Request.playerId)
+		{
+			return ValidationResult.NotFound;
+		}
 		return ValidationResult.Success;
 	}
 
@@ -5138,11 +5239,7 @@ public abstract class BaseHandler<T> : IHandler, IPooled where T : class
 
 	public void SendError(string code)
 	{
-		AppError val = Pool.Get<AppError>();
-		val.error = code;
-		AppResponse val2 = Pool.Get<AppResponse>();
-		val2.error = val;
-		Send(val2);
+		Listener.SendError(Client, Request.seq, code);
 	}
 
 	public void SendFlag(bool value)
@@ -5184,10 +5281,6 @@ public abstract class BasePlayerHandler<T> : BaseHandler<T> where T : class
 		if (validationResult != 0)
 		{
 			return validationResult;
-		}
-		if (base.Client.ChannelSteamId != 0L && base.Client.ChannelSteamId != base.Request.playerId)
-		{
-			return ValidationResult.NotFound;
 		}
 		bool locked;
 		int orGenerateAppToken = SingletonComponent<ServerMgr>.Instance.persistance.GetOrGenerateAppToken(base.Request.playerId, out locked);
@@ -5233,18 +5326,25 @@ public class CameraInput : BaseHandler<AppCameraInput>
 
 	public override ValueTask Execute()
 	{
-		//IL_008a: Unknown result type (might be due to invalid IL or missing references)
-		//IL_008f: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0094: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0099: Unknown result type (might be due to invalid IL or missing references)
-		//IL_009f: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00a4: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00ac: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00b1: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00b6: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00bb: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00c1: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00c6: Unknown result type (might be due to invalid IL or missing references)
 		if (!CameraRenderer.enabled)
 		{
 			SendError("not_enabled");
 			return default(ValueTask);
 		}
-		if (base.Client.CurrentCamera == null || !base.Client.IsControllingCamera)
+		IRemoteControllable currentCamera = base.Client.CurrentCamera;
+		if (currentCamera == null)
+		{
+			base.Client.EndViewing();
+			SendError("no_camera");
+			return default(ValueTask);
+		}
+		if (!base.Client.IsControllingCamera)
 		{
 			SendError("no_camera");
 			return default(ValueTask);
@@ -5262,7 +5362,7 @@ public class CameraInput : BaseHandler<AppCameraInput>
 		inputState.Flip(val);
 		val.Dispose();
 		val = null;
-		base.Client.CurrentCamera.UserInput(inputState, new CameraViewerId(base.Client.ControllingSteamId, base.Client.ConnectionId));
+		currentCamera.UserInput(inputState, new CameraViewerId(base.Client.ControllingSteamId, base.Client.ConnectionId));
 		SendSuccess();
 		return default(ValueTask);
 	}
@@ -5775,11 +5875,6 @@ public class NexusAuth : BaseHandler<AppGetNexusAuth>
 
 	public override async ValueTask Execute()
 	{
-		if (base.Request.playerId == 0L)
-		{
-			SendError("invalid_playerid");
-			return;
-		}
 		NexusPlayer val = await NexusServer.ZoneClient.GetPlayer(base.Request.playerId);
 		Variable val2 = default(Variable);
 		if (val == null || !val.TryGetVariable("appKey", ref val2) || (int)val2.Type != 1 || base.Proto.appKey != val2.GetAsString())
@@ -6700,8 +6795,8 @@ public struct RaycastRaySetupJob : IJobParallelFor
 	[ReadOnly]
 	public NativeArray<int2> samplePositions;
 
-	[NativeMatchesParallelForLength]
 	[WriteOnly]
+	[NativeMatchesParallelForLength]
 	public NativeArray<RaycastCommand> raycastCommands;
 
 	public void Execute(int index)
@@ -6788,8 +6883,8 @@ public struct RaycastRayProcessingJob : IJobParallelFor
 	[ReadOnly]
 	public NativeArray<byte> colliderMaterials;
 
-	[NativeDisableParallelForRestriction]
 	[WriteOnly]
+	[NativeDisableParallelForRestriction]
 	public NativeArray<int> colliderHits;
 
 	[WriteOnly]
@@ -8291,8 +8386,8 @@ public struct TransformStartEndTicksJob : IJobFor
 	[WriteOnly]
 	public NativeArray<Vector3> Starts;
 
-	[WriteOnly]
 	[NativeDisableParallelForRestriction]
+	[WriteOnly]
 	public NativeArray<Vector3> Ends;
 
 	public ReadOnly<Matrix4x4> Matrices;
@@ -8368,8 +8463,8 @@ using UnityEngine;
 [BurstCompile]
 public struct CalcDistAndBudgetJob : IJobFor
 {
-	[NativeDisableParallelForRestriction]
 	[WriteOnly]
+	[NativeDisableParallelForRestriction]
 	public NativeArray<(float Dist, float Budget)> DistAndBudget;
 
 	[WriteOnly]
@@ -13283,18 +13378,18 @@ internal struct OceanTraceJob : IJobParallelForDefer
 
 	public ReadOnly<float> MaxDists;
 
-	[WriteOnly]
 	[NativeDisableParallelForRestriction]
+	[WriteOnly]
 	public NativeArray<bool> HitResults;
 
-	[WriteOnly]
 	[NativeDisableParallelForRestriction]
+	[WriteOnly]
 	public NativeArray<Vector3> HitPositions;
 
 	public float OneOverOctave0Scale;
 
-	[ReadOnly]
 	[NativeDisableParallelForRestriction]
+	[ReadOnly]
 	public NativeOceanDisplacementShort3 SimData;
 
 	public int Spectrum0;
@@ -15111,9 +15206,9 @@ using Unity.Collections;
 public static class TerrainTopologyMapJobUtil
 {
 	[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-	internal delegate int OrRadius_00008E13$PostfixBurstDelegate(in TerrainTopologyHierarchy.Query topology, int x_min, int x_mid, int x_max, int z_min, int z_mid, int z_max, float radius, int mask);
+	internal delegate int OrRadius_00008E07$PostfixBurstDelegate(in TerrainTopologyHierarchy.Query topology, int x_min, int x_mid, int x_max, int z_min, int z_mid, int z_max, float radius, int mask);
 
-	internal static class OrRadius_00008E13$BurstDirectCall
+	internal static class OrRadius_00008E07$BurstDirectCall
 	{
 		private static IntPtr Pointer;
 
@@ -15124,7 +15219,7 @@ public static class TerrainTopologyMapJobUtil
 			//IL_001b: Unknown result type (might be due to invalid IL or missing references)
 			if (Pointer == (IntPtr)0)
 			{
-				Pointer = BurstCompiler.CompileFunctionPointer<OrRadius_00008E13$PostfixBurstDelegate>((OrRadius_00008E13$PostfixBurstDelegate)OrRadius).Value;
+				Pointer = BurstCompiler.CompileFunctionPointer<OrRadius_00008E07$PostfixBurstDelegate>((OrRadius_00008E07$PostfixBurstDelegate)OrRadius).Value;
 			}
 			P_0 = Pointer;
 		}
@@ -15151,9 +15246,9 @@ public static class TerrainTopologyMapJobUtil
 	}
 
 	[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-	internal delegate int AnyRadius_00008E14$PostfixBurstDelegate(in TerrainTopologyHierarchy.Query topology, int x_min, int x_mid, int x_max, int z_min, int z_mid, int z_max, float radius, int mask);
+	internal delegate int AnyRadius_00008E08$PostfixBurstDelegate(in TerrainTopologyHierarchy.Query topology, int x_min, int x_mid, int x_max, int z_min, int z_mid, int z_max, float radius, int mask);
 
-	internal static class AnyRadius_00008E14$BurstDirectCall
+	internal static class AnyRadius_00008E08$BurstDirectCall
 	{
 		private static IntPtr Pointer;
 
@@ -15164,7 +15259,7 @@ public static class TerrainTopologyMapJobUtil
 			//IL_001b: Unknown result type (might be due to invalid IL or missing references)
 			if (Pointer == (IntPtr)0)
 			{
-				Pointer = BurstCompiler.CompileFunctionPointer<AnyRadius_00008E14$PostfixBurstDelegate>((AnyRadius_00008E14$PostfixBurstDelegate)AnyRadius).Value;
+				Pointer = BurstCompiler.CompileFunctionPointer<AnyRadius_00008E08$PostfixBurstDelegate>((AnyRadius_00008E08$PostfixBurstDelegate)AnyRadius).Value;
 			}
 			P_0 = Pointer;
 		}
@@ -15191,17 +15286,17 @@ public static class TerrainTopologyMapJobUtil
 	}
 
 	[BurstCompile(/*Could not decode attribute arguments.*/)]
-	[MonoPInvokeCallback(typeof(TerrainTopologyMapJobs.OrRadius_00008E13$PostfixBurstDelegate))]
+	[MonoPInvokeCallback(typeof(TerrainTopologyMapJobs.OrRadius_00008E07$PostfixBurstDelegate))]
 	public static int OrRadius(in TerrainTopologyHierarchy.Query topology, int x_min, int x_mid, int x_max, int z_min, int z_mid, int z_max, float radius, int mask)
 	{
-		return OrRadius_00008E13$BurstDirectCall.Invoke(in topology, x_min, x_mid, x_max, z_min, z_mid, z_max, radius, mask);
+		return OrRadius_00008E07$BurstDirectCall.Invoke(in topology, x_min, x_mid, x_max, z_min, z_mid, z_max, radius, mask);
 	}
 
+	[MonoPInvokeCallback(typeof(TerrainTopologyMapJobs.AnyRadius_00008E08$PostfixBurstDelegate))]
 	[BurstCompile(/*Could not decode attribute arguments.*/)]
-	[MonoPInvokeCallback(typeof(TerrainTopologyMapJobs.AnyRadius_00008E14$PostfixBurstDelegate))]
 	public static int AnyRadius(in TerrainTopologyHierarchy.Query topology, int x_min, int x_mid, int x_max, int z_min, int z_mid, int z_max, float radius, int mask)
 	{
-		return AnyRadius_00008E14$BurstDirectCall.Invoke(in topology, x_min, x_mid, x_max, z_min, z_mid, z_max, radius, mask);
+		return AnyRadius_00008E08$BurstDirectCall.Invoke(in topology, x_min, x_mid, x_max, z_min, z_mid, z_max, radius, mask);
 	}
 
 	public static int GetTopologyRadius(in TerrainTopologyHierarchy.Query topology, float terrainOneOverSizeX, float radius, float normX, float normZ, int mask = -1, bool stopOnAny = false)
@@ -15270,13 +15365,13 @@ public static class TerrainTopologyMapJobUtil
 using System.Runtime.InteropServices;
 
 [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-internal delegate int OrRadius_00008E13$PostfixBurstDelegate(in TerrainTopologyHierarchy.Query topology, int x_min, int x_mid, int x_max, int z_min, int z_mid, int z_max, float radius, int mask);
+internal delegate int OrRadius_00008E07$PostfixBurstDelegate(in TerrainTopologyHierarchy.Query topology, int x_min, int x_mid, int x_max, int z_min, int z_mid, int z_max, float radius, int mask);
 
 
 using System;
 using Unity.Burst;
 
-internal static class OrRadius_00008E13$BurstDirectCall
+internal static class OrRadius_00008E07$BurstDirectCall
 {
 	private static IntPtr Pointer;
 
@@ -15287,7 +15382,7 @@ internal static class OrRadius_00008E13$BurstDirectCall
 		//IL_001b: Unknown result type (might be due to invalid IL or missing references)
 		if (Pointer == (IntPtr)0)
 		{
-			Pointer = BurstCompiler.CompileFunctionPointer<OrRadius_00008E13$PostfixBurstDelegate>((OrRadius_00008E13$PostfixBurstDelegate)OrRadius).Value;
+			Pointer = BurstCompiler.CompileFunctionPointer<OrRadius_00008E07$PostfixBurstDelegate>((OrRadius_00008E07$PostfixBurstDelegate)OrRadius).Value;
 		}
 		P_0 = Pointer;
 	}
@@ -15317,13 +15412,13 @@ internal static class OrRadius_00008E13$BurstDirectCall
 using System.Runtime.InteropServices;
 
 [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-internal delegate int AnyRadius_00008E14$PostfixBurstDelegate(in TerrainTopologyHierarchy.Query topology, int x_min, int x_mid, int x_max, int z_min, int z_mid, int z_max, float radius, int mask);
+internal delegate int AnyRadius_00008E08$PostfixBurstDelegate(in TerrainTopologyHierarchy.Query topology, int x_min, int x_mid, int x_max, int z_min, int z_mid, int z_max, float radius, int mask);
 
 
 using System;
 using Unity.Burst;
 
-internal static class AnyRadius_00008E14$BurstDirectCall
+internal static class AnyRadius_00008E08$BurstDirectCall
 {
 	private static IntPtr Pointer;
 
@@ -15334,7 +15429,7 @@ internal static class AnyRadius_00008E14$BurstDirectCall
 		//IL_001b: Unknown result type (might be due to invalid IL or missing references)
 		if (Pointer == (IntPtr)0)
 		{
-			Pointer = BurstCompiler.CompileFunctionPointer<AnyRadius_00008E14$PostfixBurstDelegate>((AnyRadius_00008E14$PostfixBurstDelegate)AnyRadius).Value;
+			Pointer = BurstCompiler.CompileFunctionPointer<AnyRadius_00008E08$PostfixBurstDelegate>((AnyRadius_00008E08$PostfixBurstDelegate)AnyRadius).Value;
 		}
 		P_0 = Pointer;
 	}
@@ -16174,8 +16269,8 @@ public struct CheckBoundsJobIndirect : IJob
 	[WriteOnly]
 	public NativeList<int> OverlapIndices;
 
-	[ReadOnly]
 	[NativeDisableContainerSafetyRestriction]
+	[ReadOnly]
 	public CoarseQueryGrid Grid;
 
 	[ReadOnly]
@@ -16278,8 +16373,8 @@ public struct SliceMeshJob : IJobParallelForBatch
 	[ReadOnly]
 	public NativeArray<float3> Vertices;
 
-	[NativeDisableParallelForRestriction]
 	[ReadOnly]
+	[NativeDisableParallelForRestriction]
 	public NativeArray<int> Indices;
 
 	public float4x4 ToLocal;
@@ -17722,9 +17817,9 @@ using System;
 using UnityEngine;
 using UnityStandardAssets.CinematicEffects;
 
+[ImageEffectAllowedInSceneView]
 [ExecuteInEditMode]
 [AddComponentMenu("Image Effects/Cinematic/Tonemapping and Color Grading")]
-[ImageEffectAllowedInSceneView]
 public class TonemappingColorGrading : MonoBehaviour
 {
 	[AttributeUsage(AttributeTargets.Field)]
@@ -17834,8 +17929,8 @@ public class TonemappingColorGrading : MonoBehaviour
 		[Tooltip("Tonemapping technique to use. ACES is the recommended one.")]
 		public Tonemapper tonemapper;
 
-		[Min(0f)]
 		[Tooltip("Adjusts the overall exposure of the scene.")]
+		[Min(0f)]
 		public float exposure;
 
 		[Tooltip("Custom tonemapping curve.")]
@@ -17887,8 +17982,8 @@ public class TonemappingColorGrading : MonoBehaviour
 		[Tooltip("Custom lookup texture (strip format, e.g. 256x16).")]
 		public Texture texture;
 
-		[Tooltip("Blending factor.")]
 		[Range(0f, 1f)]
+		[Tooltip("Blending factor.")]
 		public float contribution;
 
 		public static LUTSettings defaultSettings
@@ -17942,34 +18037,34 @@ public class TonemappingColorGrading : MonoBehaviour
 		[Tooltip("Sets the white balance to a custom color temperature.")]
 		public float temperatureShift;
 
-		[Tooltip("Sets the white balance to compensate for a green or magenta tint.")]
 		[Range(-2f, 2f)]
+		[Tooltip("Sets the white balance to compensate for a green or magenta tint.")]
 		public float tint;
 
-		[Tooltip("Shift the hue of all colors.")]
 		[Range(-0.5f, 0.5f)]
+		[Tooltip("Shift the hue of all colors.")]
 		[Space]
 		public float hue;
 
-		[Range(0f, 2f)]
 		[Tooltip("Pushes the intensity of all colors.")]
+		[Range(0f, 2f)]
 		public float saturation;
 
 		[Range(-1f, 1f)]
 		[Tooltip("Adjusts the saturation so that clipping is minimized as colors approach full saturation.")]
 		public float vibrance;
 
-		[Range(0f, 10f)]
 		[Tooltip("Brightens or darkens all colors.")]
+		[Range(0f, 10f)]
 		public float value;
 
-		[Space]
 		[Range(0f, 2f)]
 		[Tooltip("Expands or shrinks the overall range of tonal values.")]
+		[Space]
 		public float contrast;
 
-		[Tooltip("Contrast gain curve. Controls the steepness of the curve.")]
 		[Range(0.01f, 5f)]
+		[Tooltip("Contrast gain curve. Controls the steepness of the curve.")]
 		public float gain;
 
 		[Tooltip("Applies a pow function to the source.")]
@@ -18082,16 +18177,16 @@ public class TonemappingColorGrading : MonoBehaviour
 		[IndentedGroup]
 		public BasicsSettings basics;
 
-		[Space]
 		[ChannelMixer]
+		[Space]
 		public ChannelMixerSettings channelMixer;
 
 		[Space]
 		[IndentedGroup]
 		public CurvesSettings curves;
 
-		[Space]
 		[Tooltip("Use dithering to try and minimize color banding in dark areas.")]
+		[Space]
 		public bool useDithering;
 
 		[Tooltip("Displays the generated LUT in the top left corner of the GameView.")]
@@ -18124,8 +18219,8 @@ public class TonemappingColorGrading : MonoBehaviour
 	[SettingsGroup]
 	private EyeAdaptationSettings m_EyeAdaptation = EyeAdaptationSettings.defaultSettings;
 
-	[SettingsGroup]
 	[SerializeField]
+	[SettingsGroup]
 	private TonemappingSettings m_Tonemapping = TonemappingSettings.defaultSettings;
 
 	[SerializeField]
@@ -18271,8 +18366,8 @@ public struct TonemappingSettings
 	[Tooltip("Tonemapping technique to use. ACES is the recommended one.")]
 	public Tonemapper tonemapper;
 
-	[Min(0f)]
 	[Tooltip("Adjusts the overall exposure of the scene.")]
+	[Min(0f)]
 	public float exposure;
 
 	[Tooltip("Custom tonemapping curve.")]
@@ -18328,8 +18423,8 @@ public struct LUTSettings
 	[Tooltip("Custom lookup texture (strip format, e.g. 256x16).")]
 	public Texture texture;
 
-	[Tooltip("Blending factor.")]
 	[Range(0f, 1f)]
+	[Tooltip("Blending factor.")]
 	public float contribution;
 
 	public static LUTSettings defaultSettings
@@ -18391,34 +18486,34 @@ public struct BasicsSettings
 	[Tooltip("Sets the white balance to a custom color temperature.")]
 	public float temperatureShift;
 
-	[Tooltip("Sets the white balance to compensate for a green or magenta tint.")]
 	[Range(-2f, 2f)]
+	[Tooltip("Sets the white balance to compensate for a green or magenta tint.")]
 	public float tint;
 
-	[Tooltip("Shift the hue of all colors.")]
 	[Range(-0.5f, 0.5f)]
+	[Tooltip("Shift the hue of all colors.")]
 	[Space]
 	public float hue;
 
-	[Range(0f, 2f)]
 	[Tooltip("Pushes the intensity of all colors.")]
+	[Range(0f, 2f)]
 	public float saturation;
 
 	[Range(-1f, 1f)]
 	[Tooltip("Adjusts the saturation so that clipping is minimized as colors approach full saturation.")]
 	public float vibrance;
 
-	[Range(0f, 10f)]
 	[Tooltip("Brightens or darkens all colors.")]
+	[Range(0f, 10f)]
 	public float value;
 
-	[Space]
 	[Range(0f, 2f)]
 	[Tooltip("Expands or shrinks the overall range of tonal values.")]
+	[Space]
 	public float contrast;
 
-	[Tooltip("Contrast gain curve. Controls the steepness of the curve.")]
 	[Range(0.01f, 5f)]
+	[Tooltip("Contrast gain curve. Controls the steepness of the curve.")]
 	public float gain;
 
 	[Tooltip("Applies a pow function to the source.")]
@@ -18544,16 +18639,16 @@ public struct ColorGradingSettings
 	[IndentedGroup]
 	public BasicsSettings basics;
 
-	[Space]
 	[ChannelMixer]
+	[Space]
 	public ChannelMixerSettings channelMixer;
 
 	[Space]
 	[IndentedGroup]
 	public CurvesSettings curves;
 
-	[Space]
 	[Tooltip("Use dithering to try and minimize color banding in dark areas.")]
+	[Space]
 	public bool useDithering;
 
 	[Tooltip("Displays the generated LUT in the top left corner of the GameView.")]
@@ -18586,8 +18681,8 @@ public struct ColorGradingSettings
 using UnityEngine;
 using UnityStandardAssets.ImageEffects;
 
-[AddComponentMenu("Image Effects/Other/Scope Overlay")]
 [ExecuteInEditMode]
+[AddComponentMenu("Image Effects/Other/Scope Overlay")]
 public class ScopeEffect : PostEffectsBase, IImageEffect
 {
 	public Material overlayMaterial;
@@ -18629,9 +18724,9 @@ using WaterLevelJobs;
 public static class WaterLevelBurst
 {
 	[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-	internal delegate void GetBuoyancyWaterInfoBatched_00008E62$PostfixBurstDelegate(in NativeArray<Vector3> allPositions, in NativeArray<Vector2> allUVPositions, in NativeArray<float> pointTerrainHeightNativeArray, in NativeArray<float> pointWaterHeightNativeArray, in NativeArray<bool> doDeepWaterChecksStateNativeArray, ref NativeArray<WaterLevel.WaterInfo> pointWaterInfoNativeArray, in NativeArray<int> instancePointCountNativeArray, in int instanceCount, in TerrainTopologyMap.TopologyQueryStructure topologyMap, in NativeArray<bool> waterIgnoreStates, ref NativeArray<bool> needsDeepWaterChecks, bool isDeepSea, out bool hasAnyDeepWaterChecks);
+	internal delegate void GetBuoyancyWaterInfoBatched_00008E56$PostfixBurstDelegate(in NativeArray<Vector3> allPositions, in NativeArray<Vector2> allUVPositions, in NativeArray<float> pointTerrainHeightNativeArray, in NativeArray<float> pointWaterHeightNativeArray, in NativeArray<bool> doDeepWaterChecksStateNativeArray, ref NativeArray<WaterLevel.WaterInfo> pointWaterInfoNativeArray, in NativeArray<int> instancePointCountNativeArray, in int instanceCount, in TerrainTopologyMap.TopologyQueryStructure topologyMap, in NativeArray<bool> waterIgnoreStates, ref NativeArray<bool> needsDeepWaterChecks, bool isDeepSea, out bool hasAnyDeepWaterChecks);
 
-	internal static class GetBuoyancyWaterInfoBatched_00008E62$BurstDirectCall
+	internal static class GetBuoyancyWaterInfoBatched_00008E56$BurstDirectCall
 	{
 		private static IntPtr Pointer;
 
@@ -18642,7 +18737,7 @@ public static class WaterLevelBurst
 			//IL_001b: Unknown result type (might be due to invalid IL or missing references)
 			if (Pointer == (IntPtr)0)
 			{
-				Pointer = BurstCompiler.CompileFunctionPointer<GetBuoyancyWaterInfoBatched_00008E62$PostfixBurstDelegate>((GetBuoyancyWaterInfoBatched_00008E62$PostfixBurstDelegate)GetBuoyancyWaterInfoBatched).Value;
+				Pointer = BurstCompiler.CompileFunctionPointer<GetBuoyancyWaterInfoBatched_00008E56$PostfixBurstDelegate>((GetBuoyancyWaterInfoBatched_00008E56$PostfixBurstDelegate)GetBuoyancyWaterInfoBatched).Value;
 			}
 			P_0 = Pointer;
 		}
@@ -18670,9 +18765,9 @@ public static class WaterLevelBurst
 	}
 
 	[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-	internal delegate void ConstructDeepWaterCommands_00008E63$PostfixBurstDelegate(in NativeArray<Vector3> allPositions, in NativeArray<WaterLevel.WaterInfo> pointWaterInfoNativeArray, in NativeArray<bool> needsDeepWaterChecks, out NativeList<RaycastCommand> deepWaterCasts, out NativeList<int> raycastPointIndices, Allocator allocator);
+	internal delegate void ConstructDeepWaterCommands_00008E57$PostfixBurstDelegate(in NativeArray<Vector3> allPositions, in NativeArray<WaterLevel.WaterInfo> pointWaterInfoNativeArray, in NativeArray<bool> needsDeepWaterChecks, out NativeList<RaycastCommand> deepWaterCasts, out NativeList<int> raycastPointIndices, Allocator allocator);
 
-	internal static class ConstructDeepWaterCommands_00008E63$BurstDirectCall
+	internal static class ConstructDeepWaterCommands_00008E57$BurstDirectCall
 	{
 		private static IntPtr Pointer;
 
@@ -18683,7 +18778,7 @@ public static class WaterLevelBurst
 			//IL_001b: Unknown result type (might be due to invalid IL or missing references)
 			if (Pointer == (IntPtr)0)
 			{
-				Pointer = BurstCompiler.CompileFunctionPointer<ConstructDeepWaterCommands_00008E63$PostfixBurstDelegate>((ConstructDeepWaterCommands_00008E63$PostfixBurstDelegate)ConstructDeepWaterCommands).Value;
+				Pointer = BurstCompiler.CompileFunctionPointer<ConstructDeepWaterCommands_00008E57$PostfixBurstDelegate>((ConstructDeepWaterCommands_00008E57$PostfixBurstDelegate)ConstructDeepWaterCommands).Value;
 			}
 			P_0 = Pointer;
 		}
@@ -18713,18 +18808,18 @@ public static class WaterLevelBurst
 	}
 
 	[BurstCompile]
-	[MonoPInvokeCallback(typeof(WaterLevelJobs.GetBuoyancyWaterInfoBatched_00008E62$PostfixBurstDelegate))]
+	[MonoPInvokeCallback(typeof(WaterLevelJobs.GetBuoyancyWaterInfoBatched_00008E56$PostfixBurstDelegate))]
 	public static void GetBuoyancyWaterInfoBatched(in NativeArray<Vector3> allPositions, in NativeArray<Vector2> allUVPositions, in NativeArray<float> pointTerrainHeightNativeArray, in NativeArray<float> pointWaterHeightNativeArray, in NativeArray<bool> doDeepWaterChecksStateNativeArray, ref NativeArray<WaterLevel.WaterInfo> pointWaterInfoNativeArray, in NativeArray<int> instancePointCountNativeArray, in int instanceCount, in TerrainTopologyMap.TopologyQueryStructure topologyMap, in NativeArray<bool> waterIgnoreStates, ref NativeArray<bool> needsDeepWaterChecks, bool isDeepSea, out bool hasAnyDeepWaterChecks)
 	{
-		GetBuoyancyWaterInfoBatched_00008E62$BurstDirectCall.Invoke(in allPositions, in allUVPositions, in pointTerrainHeightNativeArray, in pointWaterHeightNativeArray, in doDeepWaterChecksStateNativeArray, ref pointWaterInfoNativeArray, in instancePointCountNativeArray, in instanceCount, in topologyMap, in waterIgnoreStates, ref needsDeepWaterChecks, isDeepSea, out hasAnyDeepWaterChecks);
+		GetBuoyancyWaterInfoBatched_00008E56$BurstDirectCall.Invoke(in allPositions, in allUVPositions, in pointTerrainHeightNativeArray, in pointWaterHeightNativeArray, in doDeepWaterChecksStateNativeArray, ref pointWaterInfoNativeArray, in instancePointCountNativeArray, in instanceCount, in topologyMap, in waterIgnoreStates, ref needsDeepWaterChecks, isDeepSea, out hasAnyDeepWaterChecks);
 	}
 
+	[MonoPInvokeCallback(typeof(WaterLevelJobs.ConstructDeepWaterCommands_00008E57$PostfixBurstDelegate))]
 	[BurstCompile]
-	[MonoPInvokeCallback(typeof(WaterLevelJobs.ConstructDeepWaterCommands_00008E63$PostfixBurstDelegate))]
 	public static void ConstructDeepWaterCommands(in NativeArray<Vector3> allPositions, in NativeArray<WaterLevel.WaterInfo> pointWaterInfoNativeArray, in NativeArray<bool> needsDeepWaterChecks, out NativeList<RaycastCommand> deepWaterCasts, out NativeList<int> raycastPointIndices, Allocator allocator)
 	{
 		//IL_0006: Unknown result type (might be due to invalid IL or missing references)
-		ConstructDeepWaterCommands_00008E63$BurstDirectCall.Invoke(in allPositions, in pointWaterInfoNativeArray, in needsDeepWaterChecks, out deepWaterCasts, out raycastPointIndices, allocator);
+		ConstructDeepWaterCommands_00008E57$BurstDirectCall.Invoke(in allPositions, in pointWaterInfoNativeArray, in needsDeepWaterChecks, out deepWaterCasts, out raycastPointIndices, allocator);
 	}
 
 	[MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -18856,7 +18951,7 @@ using Unity.Collections;
 using UnityEngine;
 
 [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-internal delegate void GetBuoyancyWaterInfoBatched_00008E62$PostfixBurstDelegate(in NativeArray<Vector3> allPositions, in NativeArray<Vector2> allUVPositions, in NativeArray<float> pointTerrainHeightNativeArray, in NativeArray<float> pointWaterHeightNativeArray, in NativeArray<bool> doDeepWaterChecksStateNativeArray, ref NativeArray<WaterLevel.WaterInfo> pointWaterInfoNativeArray, in NativeArray<int> instancePointCountNativeArray, in int instanceCount, in TerrainTopologyMap.TopologyQueryStructure topologyMap, in NativeArray<bool> waterIgnoreStates, ref NativeArray<bool> needsDeepWaterChecks, bool isDeepSea, out bool hasAnyDeepWaterChecks);
+internal delegate void GetBuoyancyWaterInfoBatched_00008E56$PostfixBurstDelegate(in NativeArray<Vector3> allPositions, in NativeArray<Vector2> allUVPositions, in NativeArray<float> pointTerrainHeightNativeArray, in NativeArray<float> pointWaterHeightNativeArray, in NativeArray<bool> doDeepWaterChecksStateNativeArray, ref NativeArray<WaterLevel.WaterInfo> pointWaterInfoNativeArray, in NativeArray<int> instancePointCountNativeArray, in int instanceCount, in TerrainTopologyMap.TopologyQueryStructure topologyMap, in NativeArray<bool> waterIgnoreStates, ref NativeArray<bool> needsDeepWaterChecks, bool isDeepSea, out bool hasAnyDeepWaterChecks);
 
 
 using System;
@@ -18864,7 +18959,7 @@ using Unity.Burst;
 using Unity.Collections;
 using UnityEngine;
 
-internal static class GetBuoyancyWaterInfoBatched_00008E62$BurstDirectCall
+internal static class GetBuoyancyWaterInfoBatched_00008E56$BurstDirectCall
 {
 	private static IntPtr Pointer;
 
@@ -18875,7 +18970,7 @@ internal static class GetBuoyancyWaterInfoBatched_00008E62$BurstDirectCall
 		//IL_001b: Unknown result type (might be due to invalid IL or missing references)
 		if (Pointer == (IntPtr)0)
 		{
-			Pointer = BurstCompiler.CompileFunctionPointer<GetBuoyancyWaterInfoBatched_00008E62$PostfixBurstDelegate>((GetBuoyancyWaterInfoBatched_00008E62$PostfixBurstDelegate)GetBuoyancyWaterInfoBatched).Value;
+			Pointer = BurstCompiler.CompileFunctionPointer<GetBuoyancyWaterInfoBatched_00008E56$PostfixBurstDelegate>((GetBuoyancyWaterInfoBatched_00008E56$PostfixBurstDelegate)GetBuoyancyWaterInfoBatched).Value;
 		}
 		P_0 = Pointer;
 	}
@@ -18908,7 +19003,7 @@ using Unity.Collections;
 using UnityEngine;
 
 [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-internal delegate void ConstructDeepWaterCommands_00008E63$PostfixBurstDelegate(in NativeArray<Vector3> allPositions, in NativeArray<WaterLevel.WaterInfo> pointWaterInfoNativeArray, in NativeArray<bool> needsDeepWaterChecks, out NativeList<RaycastCommand> deepWaterCasts, out NativeList<int> raycastPointIndices, Allocator allocator);
+internal delegate void ConstructDeepWaterCommands_00008E57$PostfixBurstDelegate(in NativeArray<Vector3> allPositions, in NativeArray<WaterLevel.WaterInfo> pointWaterInfoNativeArray, in NativeArray<bool> needsDeepWaterChecks, out NativeList<RaycastCommand> deepWaterCasts, out NativeList<int> raycastPointIndices, Allocator allocator);
 
 
 using System;
@@ -18916,7 +19011,7 @@ using Unity.Burst;
 using Unity.Collections;
 using UnityEngine;
 
-internal static class ConstructDeepWaterCommands_00008E63$BurstDirectCall
+internal static class ConstructDeepWaterCommands_00008E57$BurstDirectCall
 {
 	private static IntPtr Pointer;
 
@@ -18927,7 +19022,7 @@ internal static class ConstructDeepWaterCommands_00008E63$BurstDirectCall
 		//IL_001b: Unknown result type (might be due to invalid IL or missing references)
 		if (Pointer == (IntPtr)0)
 		{
-			Pointer = BurstCompiler.CompileFunctionPointer<ConstructDeepWaterCommands_00008E63$PostfixBurstDelegate>((ConstructDeepWaterCommands_00008E63$PostfixBurstDelegate)ConstructDeepWaterCommands).Value;
+			Pointer = BurstCompiler.CompileFunctionPointer<ConstructDeepWaterCommands_00008E57$PostfixBurstDelegate>((ConstructDeepWaterCommands_00008E57$PostfixBurstDelegate)ConstructDeepWaterCommands).Value;
 		}
 		P_0 = Pointer;
 	}
@@ -23727,10 +23822,10 @@ using UnityEngine.Events;
 using UnityEngine.EventSystems;
 using UnityEngine.UI;
 
-[AddComponentMenu("UI/Scroll Rect Ex", 37)]
 [SelectionBase]
-[ExecuteInEditMode]
+[AddComponentMenu("UI/Scroll Rect Ex", 37)]
 [RequireComponent(typeof(RectTransform))]
+[ExecuteInEditMode]
 public class ScrollRectEx : UIBehaviour, IInitializePotentialDragHandler, IEventSystemHandler, IBeginDragHandler, IEndDragHandler, IDragHandler, IScrollHandler, ICanvasElement, ILayoutGroup, ILayoutController
 {
 	public enum MovementType
@@ -25376,8 +25471,8 @@ public class UICircle : UIPrimitiveBase
 	[Range(0f, 360f)]
 	public int ArcRotation;
 
-	[Tooltip("The Progress property allows the primitive to be used as a progression indicator.")]
 	[Range(0f, 1f)]
+	[Tooltip("The Progress property allows the primitive to be used as a progression indicator.")]
 	public float Progress;
 
 	private float _progress;
@@ -25880,8 +25975,8 @@ public class UICornerCut : UIPrimitiveBase
 {
 	public Vector2 cornerSize = new Vector2(16f, 16f);
 
-	[Header("Corners to cut")]
 	[SerializeField]
+	[Header("Corners to cut")]
 	private bool m_cutUL = true;
 
 	[SerializeField]
@@ -26557,8 +26652,8 @@ using UnityEngine.Sprites;
 using UnityEngine.UI;
 using UnityEngine.UI.Extensions;
 
-[AddComponentMenu("UI/Extensions/Primitives/UILineRenderer")]
 [RequireComponent(typeof(RectTransform))]
+[AddComponentMenu("UI/Extensions/Primitives/UILineRenderer")]
 public class UILineRenderer : UIPrimitiveBase
 {
 	private enum SegmentType
@@ -26612,28 +26707,28 @@ public class UILineRenderer : UIPrimitiveBase
 
 	private static Vector2[] fullUvs;
 
-	[Tooltip("Points to draw lines between\n Can be improved using the Resolution Option")]
 	[SerializeField]
+	[Tooltip("Points to draw lines between\n Can be improved using the Resolution Option")]
 	internal Vector2[] m_points;
 
-	[SerializeField]
 	[Tooltip("Segments to be drawn\n This is a list of arrays of points")]
+	[SerializeField]
 	internal List<Vector2[]> m_segments;
 
-	[SerializeField]
 	[Tooltip("Thickness of the line")]
+	[SerializeField]
 	internal float lineThickness = 2f;
 
-	[Tooltip("Use the relative bounds of the Rect Transform (0,0 -> 0,1) or screen space coordinates")]
 	[SerializeField]
+	[Tooltip("Use the relative bounds of the Rect Transform (0,0 -> 0,1) or screen space coordinates")]
 	internal bool relativeSize;
 
 	[SerializeField]
 	[Tooltip("Do the points identify a single line or split pairs of lines")]
 	internal bool lineList;
 
-	[SerializeField]
 	[Tooltip("Add end caps to each line\nMultiple caps when used with Line List")]
+	[SerializeField]
 	internal bool lineCaps;
 
 	[Tooltip("Resolution of the Bezier curve, different to line Resolution")]
@@ -27370,8 +27465,8 @@ using UnityEngine.Sprites;
 using UnityEngine.UI;
 using UnityEngine.UI.Extensions;
 
-[RequireComponent(typeof(RectTransform))]
 [AddComponentMenu("UI/Extensions/Primitives/UILineRendererList")]
+[RequireComponent(typeof(RectTransform))]
 public class UILineRendererList : UIPrimitiveBase
 {
 	private enum SegmentType
@@ -27433,8 +27528,8 @@ public class UILineRendererList : UIPrimitiveBase
 	[SerializeField]
 	internal float lineThickness = 2f;
 
-	[Tooltip("Use the relative bounds of the Rect Transform (0,0 -> 0,1) or screen space coordinates")]
 	[SerializeField]
+	[Tooltip("Use the relative bounds of the Rect Transform (0,0 -> 0,1) or screen space coordinates")]
 	internal bool relativeSize;
 
 	[SerializeField]
