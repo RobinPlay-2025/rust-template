@@ -4503,6 +4503,10 @@ public static class EACServer
 		//IL_005e: Unknown result type (might be due to invalid IL or missing references)
 		//IL_006b: Unknown result type (might be due to invalid IL or missing references)
 		//IL_0070: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00d5: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00db: Invalid comparison between Unknown and I4
+		//IL_0100: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0105: Unknown result type (might be due to invalid IL or missing references)
 		if (!Server.anticheattoken)
 		{
 			Debug.LogWarning((object)"[EAC] Verify ID token skipped: server.anticheattoken == false");
@@ -4513,30 +4517,47 @@ public static class EACServer
 		if (connection == null)
 		{
 			Debug.LogError((object)("[EAC] Verify ID token for invalid client: " + client));
-			return;
 		}
-		if (connection.IsDevelopmentBuild())
+		else if (connection.IsDevelopmentBuild())
 		{
 			Debug.LogWarning((object)("[EAC] Verify ID token skipped for unprotected client: " + ((object)connection).ToString()));
-			return;
 		}
-		if ((int)((VerifyIdTokenCallbackInfo)(ref data)).ResultCode != 0)
+		else if ((int)((VerifyIdTokenCallbackInfo)(ref data)).ResultCode != 0)
 		{
 			Result resultCode = ((VerifyIdTokenCallbackInfo)(ref data)).ResultCode;
 			string text = "Verify ID token " + ((object)(Result)(ref resultCode)/*cast due to .constrained prefix*/).ToString();
 			Debug.Log((object)$"[EAC] Kicking {connection.userid} / {connection.username} ({text})");
 			connection.authStatusEAC = "eactoken";
 			Net.sv.Kick(connection, "EAC: " + text, false);
-			return;
 		}
-		string text2 = ((object)((VerifyIdTokenCallbackInfo)(ref data)).AccountId).ToString();
-		string text3 = connection.userid.ToString();
-		if (text2 != text3)
+		else if (!((VerifyIdTokenCallbackInfo)(ref data)).IsAccountInfoPresent || (int)((VerifyIdTokenCallbackInfo)(ref data)).AccountIdType != 1 || ((VerifyIdTokenCallbackInfo)(ref data)).AccountId == (Utf8String)null)
 		{
-			string text4 = "Verify ID token account mismatch with " + text2 + " != " + text3;
-			Debug.Log((object)$"[EAC] Kicking {connection.userid} / {connection.username} ({text4})");
+			object obj;
+			if (!((VerifyIdTokenCallbackInfo)(ref data)).IsAccountInfoPresent)
+			{
+				obj = "none";
+			}
+			else
+			{
+				ExternalAccountType accountIdType = ((VerifyIdTokenCallbackInfo)(ref data)).AccountIdType;
+				obj = ((object)(ExternalAccountType)(ref accountIdType)/*cast due to .constrained prefix*/).ToString();
+			}
+			string text2 = "Verify ID token missing Steam account (" + (string?)obj + ")";
+			Debug.Log((object)$"[EAC] Kicking {connection.userid} / {connection.username} ({text2})");
 			connection.authStatusEAC = "eactoken";
-			Net.sv.Kick(connection, "EAC: " + text4, false);
+			Net.sv.Kick(connection, "EAC: " + text2, false);
+		}
+		else
+		{
+			string text3 = ((object)((VerifyIdTokenCallbackInfo)(ref data)).AccountId).ToString();
+			string text4 = connection.userid.ToString();
+			if (text3 != text4)
+			{
+				string text5 = "Verify ID token account mismatch with " + text3 + " != " + text4;
+				Debug.Log((object)$"[EAC] Kicking {connection.userid} / {connection.username} ({text5})");
+				connection.authStatusEAC = "eactoken";
+				Net.sv.Kick(connection, "EAC: " + text5, false);
+			}
 		}
 	}
 
@@ -11785,6 +11806,7 @@ public class ServerMgr : SingletonComponent<ServerMgr>, IServerCallback
 				try
 				{
 					methodTimer.Restart();
+					Net.sv.ProcessPendingKicks();
 					((BaseNetwork)Net.sv).Cycle();
 					RuntimeProfiler.Net_Cycle = methodTimer.Elapsed;
 				}
@@ -15978,7 +16000,7 @@ public class GameManifest : ScriptableObject
 				return null;
 			}
 		}
-		guidToObject.Add(guid, val);
+		guidToObject[guid] = val;
 		return val;
 	}
 
@@ -19281,6 +19303,7 @@ private struct Key4 : IEquatable<Key4>
 
 using System;
 using System.Collections.Generic;
+using System.IO;
 using UnityEngine;
 
 public class StringPool
@@ -19288,6 +19311,8 @@ public class StringPool
 	public static Dictionary<uint, string> toString;
 
 	public static Dictionary<string, uint> toNumber;
+
+	private static Dictionary<uint, string> toShortName;
 
 	public static bool initialized;
 
@@ -19301,6 +19326,7 @@ public class StringPool
 		}
 		toString = new Dictionary<uint, string>();
 		toNumber = new Dictionary<string, uint>(StringComparer.OrdinalIgnoreCase);
+		toShortName = new Dictionary<uint, string>();
 		GameManifest gameManifest = FileSystem.Load<GameManifest>("Assets/manifest.asset", true);
 		for (uint num = 0u; num < gameManifest.pooledStrings.Length; num++)
 		{
@@ -19315,8 +19341,7 @@ public class StringPool
 			}
 			else
 			{
-				toString.Add(hash, str);
-				toNumber.Add(str, hash);
+				Add(hash, str);
 			}
 		}
 		initialized = true;
@@ -19349,6 +19374,21 @@ public class StringPool
 		return toString.TryGetValue(i, out str);
 	}
 
+	public static string GetShortName(uint i)
+	{
+		if (i == 0)
+		{
+			return string.Empty;
+		}
+		Init();
+		if (toShortName.TryGetValue(i, out var value))
+		{
+			return value;
+		}
+		Debug.LogWarning((object)("StringPool.GetShortName - no short name for ID" + i));
+		return "";
+	}
+
 	public static uint Get(string str)
 	{
 		if (string.IsNullOrEmpty(str))
@@ -19370,10 +19410,16 @@ public class StringPool
 		if (!toNumber.TryGetValue(str, out value))
 		{
 			value = StringEx.ManifestHash(str);
-			toString.Add(value, str);
-			toNumber.Add(str, value);
+			Add(value, str);
 		}
 		return value;
+	}
+
+	private static void Add(uint hash, string str)
+	{
+		toString.Add(hash, str);
+		toNumber.Add(str, hash);
+		toShortName.Add(hash, Path.GetFileNameWithoutExtension(str));
 	}
 }
 
@@ -20164,8 +20210,8 @@ public class UI_ApartmentPlotRow : BaseMonoBehaviour
 	[SerializeField]
 	private RustText valueText;
 
-	[SerializeField]
 	[Space]
+	[SerializeField]
 	private GameObject[] occupiedVisuals;
 
 	[SerializeField]
@@ -20210,9 +20256,9 @@ public class UI_ApartmentTerminal : UI_Window
 	[SerializeField]
 	private RustText occupiedText;
 
-	[Space]
-	[Header("Opening")]
 	[SerializeField]
+	[Header("Opening")]
+	[Space]
 	private RectTransform crtScreen;
 
 	[SerializeField]
@@ -20227,9 +20273,9 @@ public class UI_ApartmentTerminal : UI_Window
 	[SerializeField]
 	private RustText subtitleText;
 
+	[SerializeField]
 	[Header("CCTV")]
 	[Space]
-	[SerializeField]
 	private RawImage feedImage;
 
 	[SerializeField]
@@ -20239,16 +20285,16 @@ public class UI_ApartmentTerminal : UI_Window
 	private GameObject feedNoSignal;
 
 	[Header("Tabs")]
-	[SerializeField]
 	[Space]
+	[SerializeField]
 	private GameObject apartmentsPanel;
 
 	[SerializeField]
 	private GameObject shopsPanel;
 
 	[Space]
-	[Header("Shops")]
 	[SerializeField]
+	[Header("Shops")]
 	private RectTransform shopList;
 
 	[SerializeField]
@@ -21059,8 +21105,8 @@ public class UIChat : PriorityListComponent<UIChat>
 
 	public UI_FriendsList friendsList;
 
-	[Header("Disable Settings")]
 	[Tooltip("Disable the text input field rather than hiding it.")]
+	[Header("Disable Settings")]
 	public bool useDisable;
 
 	public RustInput rustInput;
@@ -22808,8 +22854,8 @@ public class CardGameUI : UIDialog
 		void UpdateInGameUI_NoPlayer(CardGameUI ui);
 	}
 
-	[Header("Card Game")]
 	[SerializeField]
+	[Header("Card Game")]
 	private InfoTextUI primaryInfo;
 
 	[SerializeField]
@@ -27936,8 +27982,8 @@ public class LivestockAnimalStatusWidget : MonoBehaviour, IClientComponent
 
 	public GameObject NoOwnerAlert;
 
-	[Header("Facts")]
 	[Tooltip("The age row, text with no bar. Gated behind livestock.panelAge, and hidden on an animal nobody owns, which does not age.")]
+	[Header("Facts")]
 	public GameObject AgeRow;
 
 	public RustText AgeText;
@@ -29551,8 +29597,8 @@ public class VehicleEditingPanel : LootPanel
 		}
 	}
 
-	[Range(0f, 1f)]
 	[SerializeField]
+	[Range(0f, 1f)]
 	private float disabledAlpha = 0.25f;
 
 	[Header("Edit Vehicle")]
@@ -29670,8 +29716,8 @@ public class VehicleEditingPanel : LootPanel
 	[SerializeField]
 	private Phrase phraseEmptyStorage;
 
-	[Header("Create Chassis")]
 	[SerializeField]
+	[Header("Create Chassis")]
 	private CreateChassisEntry[] chassisOptions;
 }
 
@@ -31627,8 +31673,8 @@ public struct Preset
 using UnityEngine;
 using UnityEngine.UI;
 
-[RequireComponent(typeof(RawImage))]
 [ExecuteAlways]
+[RequireComponent(typeof(RawImage))]
 public class RawImagePreserveAspect : MonoBehaviour, IClientComponent
 {
 	public RawImage rawImage;
@@ -31674,19 +31720,19 @@ public class UI_FullscreenSkinViewer : UI_Window
 	[SerializeField]
 	private RustButton animatorToggleButton;
 
-	[SerializeField]
 	[Space]
+	[SerializeField]
 	private UI_SkinInfoPanel skinInfoPanel;
 
 	[SerializeField]
 	private UI_StoreAddCartButton cartButton;
 
-	[Space]
 	[SerializeField]
+	[Space]
 	private GameObject navButtonsGroup;
 
-	[Header("Drag")]
 	[SerializeField]
+	[Header("Drag")]
 	private float inertiaDecay = 5f;
 
 	[Header("Pan")]
@@ -31699,15 +31745,15 @@ public class UI_FullscreenSkinViewer : UI_Window
 	[SerializeField]
 	private float panSpeed = 0.0001f;
 
-	[SerializeField]
 	[Header("Zoom")]
+	[SerializeField]
 	private float zoomSpeed = 0.1f;
 
 	[SerializeField]
 	private Vector2 minMaxFov = new Vector2(20f, 8f);
 
-	[SerializeField]
 	[Header("Idle")]
+	[SerializeField]
 	private float idleSwaySpeed = 0.1f;
 
 	[SerializeField]
@@ -31736,8 +31782,8 @@ public class UI_SkinViewerControls : MonoBehaviour
 	[SerializeField]
 	private CoverImage coverImage;
 
-	[Header("Parallax")]
 	[SerializeField]
+	[Header("Parallax")]
 	private float maxYaw = 8f;
 
 	[SerializeField]
@@ -31749,8 +31795,8 @@ public class UI_SkinViewerControls : MonoBehaviour
 	[SerializeField]
 	private float responseCurve = 1.5f;
 
-	[SerializeField]
 	[Space]
+	[SerializeField]
 	private bool fullScreenOnly;
 }
 
@@ -31912,11 +31958,31 @@ public class UI_LoadingScreen : SingletonComponent<UI_LoadingScreen>
 	{
 		get
 		{
-			if ((Object)(object)SingletonComponent<UI_LoadingScreen>.Instance != (Object)null)
+			UI_LoadingScreen instance = SingletonComponent<UI_LoadingScreen>.Instance;
+			if ((Object)(object)instance == (Object)null)
 			{
-				return SingletonComponent<UI_LoadingScreen>.Instance._isOpen;
+				return false;
 			}
-			return false;
+			if (!instance._isOpen)
+			{
+				return false;
+			}
+			Canvas val = instance.canvas;
+			if (!((Behaviour)val).enabled)
+			{
+				return false;
+			}
+			GameObject gameObject = ((Component)instance).gameObject;
+			CanvasGroup val2 = instance.panel;
+			if ((Object)(object)((Component)val).gameObject != (Object)(object)gameObject)
+			{
+				return false;
+			}
+			if ((Object)(object)((Component)val2).gameObject != (Object)(object)gameObject)
+			{
+				return false;
+			}
+			return val2.alpha > 0f;
 		}
 	}
 
@@ -33742,8 +33808,8 @@ using UnityEngine;
 using UnityEngine.UI;
 
 [ExecuteAlways]
-[RequireComponent(typeof(RectTransform))]
 [DisallowMultipleComponent]
+[RequireComponent(typeof(RectTransform))]
 public class UIBorder : MonoBehaviour
 {
 	private const string ChildName = "_UIBorder";
@@ -33775,8 +33841,8 @@ public class UIBorder : MonoBehaviour
 	[SerializeField]
 	private float bottomLeftRadius;
 
-	[Range(1f, 32f)]
 	[SerializeField]
+	[Range(1f, 32f)]
 	private int segmentsPerCorner = 8;
 
 	[HideInInspector]
@@ -34055,9 +34121,9 @@ using UnityEngine;
 using UnityEngine.EventSystems;
 using UnityEngine.UI;
 
+[AddComponentMenu("UI/Effects/Rounded Corners")]
 [DisallowMultipleComponent]
 [RequireComponent(typeof(Graphic))]
-[AddComponentMenu("UI/Effects/Rounded Corners")]
 public class UIRoundedCorners : BaseMeshEffect
 {
 	[SerializeField]
@@ -34452,128 +34518,6 @@ public class SetMemorySlider : MonoBehaviour
 	private void Awake()
 	{
 		((Component)this).GetComponent<Slider>().maxValue = Mathf.Min(4096, SystemInfo.systemMemorySize / 8);
-	}
-}
-
-
-using Rust.UI;
-using TMPro;
-using UnityEngine;
-using UnityEngine.UI;
-
-public class SleepingBagButton : MonoBehaviour
-{
-	public GameObject TimeLockRoot;
-
-	public GameObject LockRoot;
-
-	public GameObject UnavailableRoot;
-
-	public Tooltip unavailableTooltip;
-
-	public Phrase occupied;
-
-	public Phrase underwater;
-
-	public Phrase noRespawnZone;
-
-	public Button ClickButton;
-
-	public TextMeshProUGUI BagName;
-
-	public TextMeshProUGUI ZoneName;
-
-	public TextMeshProUGUI LockTime;
-
-	public Image Icon;
-
-	public Sprite SleepingBagSprite;
-
-	public Sprite BedSprite;
-
-	public Sprite BeachTowelSprite;
-
-	public Sprite CamperSprite;
-
-	public Sprite ToolCupboardSprite;
-
-	public Image CircleRim;
-
-	public Image CircleFill;
-
-	public Image Background;
-
-	public RustButton DeleteButton;
-
-	public Image ConfirmSlider;
-
-	public GameObject FavouriteActiveRoot;
-
-	public GameObject FavouriteInactiveRoot;
-
-	public Button FavouriteButton;
-
-	public static Phrase toastHoldToUnclaimBag = new Phrase("hold_unclaim_bag", "Hold down the delete button to unclaim a sleeping bag");
-
-	public static Phrase toolCupboardPhrase = new Phrase("map.cluster.toolcupboard", "Tool Cupboard");
-
-	public GameObject CorpseRoot;
-
-	public Image CorpseBackground;
-
-	public GameObject DeepSeaRoot;
-}
-
-
-using System.Globalization;
-using Facepunch;
-using Rust;
-using Rust.UI;
-using UnityEngine;
-using UnityEngine.Events;
-
-public class SliderCookie : MonoBehaviour
-{
-	public string MaxValueConvarName;
-
-	private Command Command;
-
-	public void OnEnable()
-	{
-		//IL_0021: Unknown result type (might be due to invalid IL or missing references)
-		RustSlider val = default(RustSlider);
-		if (!((Component)this).TryGetComponent<RustSlider>(ref val))
-		{
-			return;
-		}
-		if (!string.IsNullOrEmpty(MaxValueConvarName))
-		{
-			Command = Client.Find(StringView.op_Implicit(MaxValueConvarName));
-			if (Command != null)
-			{
-				val.SetMaxValue(Command.AsFloat);
-			}
-		}
-		float result;
-		float num = (float.TryParse(PlayerPrefs.GetString("SliderCookie_" + ((Object)this).name), NumberStyles.Float, CultureInfo.InvariantCulture, out result) ? result : val.ValueInternal);
-		val.ValueInternal = num + 1f;
-		val.Value = num;
-		((UnityEvent<float>)(object)val.OnChanged).AddListener((UnityAction<float>)OnSliderChanged);
-	}
-
-	public void OnDisable()
-	{
-		RustSlider val = default(RustSlider);
-		if (!Application.isQuitting && ((Component)this).TryGetComponent<RustSlider>(ref val))
-		{
-			((UnityEvent<float>)(object)val.OnChanged).RemoveListener((UnityAction<float>)OnSliderChanged);
-		}
-	}
-
-	[UnityEvent]
-	private void OnSliderChanged(float v)
-	{
-		PlayerPrefs.SetString("SliderCookie_" + ((Object)this).name, v.ToString(CultureInfo.InvariantCulture));
 	}
 }
 

@@ -7356,7 +7356,7 @@ public class BaseAnimalNPC : BaseNpc, IAIAttack, IAITirednessAbove, IAISleep, IA
 		{
 			return false;
 		}
-		return entity.prefabID == prefabID;
+		return entity.prefabID == base.prefabID;
 	}
 
 	public float GetAmmoFraction()
@@ -7519,7 +7519,7 @@ public class BaseFishNPC : BaseNpc, IAIAttack, IAISenses, IThinker
 		{
 			return false;
 		}
-		return entity.prefabID == prefabID;
+		return entity.prefabID == base.prefabID;
 	}
 
 	public float GetAmmoFraction()
@@ -9569,15 +9569,15 @@ public class BoatAI : BaseEntity
 	[SerializeField]
 	private float _searchRange = 50f;
 
-	[SerializeField]
 	[Header("Boat AI - Collision Avoidance")]
+	[SerializeField]
 	private float _awarenessAngle;
 
 	[SerializeField]
 	private float _awarenessDistance;
 
-	[Header("Boat AI - Debug")]
 	[SerializeField]
+	[Header("Boat AI - Debug")]
 	private Transform _debugMoveTo;
 
 	[ServerVar(Help = "(Generated) When enabled, draws DDraw visualisations of boat AI steering, avoidance, and pathfinding state")]
@@ -15931,6 +15931,517 @@ public class MusicZone : MonoBehaviour, IClientComponent
 }
 
 
+using System;
+using System.IO;
+
+public static class OggVorbisLength
+{
+	private class BitReader
+	{
+		private readonly byte[] data;
+
+		private readonly long end;
+
+		private long position;
+
+		public bool Failed { get; private set; }
+
+		public BitReader(byte[] data, int length, int startByte)
+		{
+			this.data = data;
+			end = (long)length * 8L;
+			position = (long)startByte * 8L;
+		}
+
+		public int Read(int count)
+		{
+			if (!Advance(count))
+			{
+				return 0;
+			}
+			int num = 0;
+			for (int i = 0; i < count; i++)
+			{
+				long num2 = position - count + i;
+				num |= ((data[num2 >> 3] >> (int)(num2 & 7)) & 1) << i;
+			}
+			return num;
+		}
+
+		public void Skip(long count)
+		{
+			Advance(count);
+		}
+
+		private bool Advance(long count)
+		{
+			if (Failed || count > end - position)
+			{
+				Failed = true;
+				return false;
+			}
+			position += count;
+			return true;
+		}
+	}
+
+	private const int MaxHeaderBytes = 65536;
+
+	private const int MaxCodebookSize = 32768;
+
+	private static readonly uint[] CrcTable = BuildCrcTable();
+
+	public static bool TryGetSampleCount(byte[] data, out int channels, out int sampleRate, out long samples)
+	{
+		channels = (sampleRate = 0);
+		samples = 0L;
+		MemoryStream memoryStream = new MemoryStream();
+		int num = 0;
+		int num2 = 0;
+		int num3 = 0;
+		int num4 = 0;
+		int num5 = 0;
+		bool[] array = null;
+		int num6 = 0;
+		int num7 = 0;
+		bool flag = false;
+		bool flag2 = false;
+		uint num8 = 0u;
+		uint num9 = 0u;
+		while (num6 < data.Length)
+		{
+			if (flag2 || !TryReadPage(data, num6, out var segments, out var pageEnd))
+			{
+				return false;
+			}
+			byte b = data[num6 + 5];
+			uint num10 = BitConverter.ToUInt32(data, num6 + 14);
+			uint num11 = BitConverter.ToUInt32(data, num6 + 18);
+			bool flag3 = num6 == 0;
+			if ((b & 2) != 0 != flag3 || (b & 1) != 0 != flag)
+			{
+				return false;
+			}
+			if (!flag3 && (num10 != num8 || num11 != num9 + 1))
+			{
+				return false;
+			}
+			num8 = num10;
+			num9 = num11;
+			flag2 = (b & 4) != 0;
+			int num12 = num6 + 27 + segments;
+			for (int i = 0; i < segments; i++)
+			{
+				byte b2 = data[num6 + 27 + i];
+				if (!flag)
+				{
+					num7 = ((b2 <= 0) ? 1 : data[num12]);
+				}
+				if (num < 3)
+				{
+					if (memoryStream.Length + b2 > 65536)
+					{
+						return false;
+					}
+					memoryStream.Write(data, num12, b2);
+				}
+				num12 += b2;
+				flag = b2 == byte.MaxValue;
+				if (flag)
+				{
+					continue;
+				}
+				if (num < 3)
+				{
+					byte[] buffer = memoryStream.GetBuffer();
+					int num13 = (int)memoryStream.Length;
+					if (num13 < 7 || buffer[0] != 1 + 2 * num || !HasVorbisTag(buffer))
+					{
+						return false;
+					}
+					switch (num)
+					{
+					case 0:
+						if (num13 < 30 || BitConverter.ToUInt32(buffer, 7) != 0 || (buffer[29] & 1) == 0)
+						{
+							return false;
+						}
+						channels = buffer[11];
+						sampleRate = BitConverter.ToInt32(buffer, 12);
+						num2 = 1 << (buffer[28] & 0xF);
+						num3 = 1 << (buffer[28] >> 4);
+						if (channels < 1 || sampleRate < 1 || num2 < 256 || num3 < num2 || num3 > 8192)
+						{
+							return false;
+						}
+						break;
+					case 2:
+						array = ReadLongModes(buffer, num13, channels);
+						if (array == null)
+						{
+							return false;
+						}
+						num4 = ILog(array.Length - 1);
+						break;
+					}
+					memoryStream.SetLength(0L);
+					num++;
+				}
+				else
+				{
+					int num14 = (num7 >> 1) & ((1 << num4) - 1);
+					if ((num7 & 1) != 0 || num14 >= array.Length)
+					{
+						return false;
+					}
+					int num15 = (array[num14] ? num3 : num2);
+					if (num5 > 0)
+					{
+						samples += (num5 + num15) / 4;
+					}
+					num5 = num15;
+				}
+			}
+			num6 = pageEnd;
+		}
+		if (flag2 && !flag && num == 3)
+		{
+			return samples > 0;
+		}
+		return false;
+	}
+
+	private static bool TryReadPage(byte[] data, int position, out int segments, out int pageEnd)
+	{
+		segments = (pageEnd = 0);
+		if (data.Length - position < 27 || data[position] != 79 || data[position + 1] != 103 || data[position + 2] != 103 || data[position + 3] != 83 || data[position + 4] != 0)
+		{
+			return false;
+		}
+		segments = data[position + 26];
+		pageEnd = position + 27 + segments;
+		if (pageEnd > data.Length)
+		{
+			return false;
+		}
+		for (int i = 0; i < segments; i++)
+		{
+			pageEnd += data[position + 27 + i];
+		}
+		if (pageEnd > data.Length)
+		{
+			return false;
+		}
+		uint num = 0u;
+		for (int j = position; j < pageEnd; j++)
+		{
+			num = (num << 8) ^ CrcTable[(num >> 24) ^ (uint)((j < position + 22 || j >= position + 26) ? data[j] : 0)];
+		}
+		return num == BitConverter.ToUInt32(data, position + 22);
+	}
+
+	private static bool HasVorbisTag(byte[] packet)
+	{
+		if (packet[1] == 118 && packet[2] == 111 && packet[3] == 114 && packet[4] == 98 && packet[5] == 105)
+		{
+			return packet[6] == 115;
+		}
+		return false;
+	}
+
+	private static bool[] ReadLongModes(byte[] packet, int length, int channels)
+	{
+		BitReader bitReader = new BitReader(packet, length, 7);
+		int num = bitReader.Read(8) + 1;
+		int num2 = 0;
+		for (int i = 0; i < num; i++)
+		{
+			if (bitReader.Read(24) != 5653314)
+			{
+				return null;
+			}
+			int num3 = bitReader.Read(16);
+			int num4 = bitReader.Read(24);
+			if (ILog(num3) + ILog(num4) > 24)
+			{
+				return null;
+			}
+			num2 += num4 * Math.Max(num3, 1);
+			if (num2 > 32768)
+			{
+				return null;
+			}
+			if (bitReader.Read(1) == 0)
+			{
+				bool flag = bitReader.Read(1) == 1;
+				for (int j = 0; j < num4; j++)
+				{
+					if (bitReader.Failed)
+					{
+						break;
+					}
+					if (!flag || bitReader.Read(1) == 1)
+					{
+						bitReader.Skip(5L);
+					}
+				}
+			}
+			else
+			{
+				int num5 = bitReader.Read(5) + 1;
+				int num6 = 0;
+				while (num6 < num4 && !bitReader.Failed)
+				{
+					int num7 = bitReader.Read(ILog(num4 - num6));
+					if (num5 > 32 || num7 > num4 - num6)
+					{
+						return null;
+					}
+					num6 += num7;
+					num5++;
+				}
+			}
+			int num8 = bitReader.Read(4);
+			switch (num8)
+			{
+			case 1:
+			case 2:
+			{
+				bitReader.Skip(64L);
+				int num9 = bitReader.Read(4) + 1;
+				bitReader.Skip(1L);
+				bitReader.Skip(((num8 == 1) ? Lookup1Values(num4, num3) : ((long)num4 * (long)num3)) * num9);
+				break;
+			}
+			default:
+				return null;
+			case 0:
+				break;
+			}
+		}
+		int num10 = bitReader.Read(6) + 1;
+		for (int k = 0; k < num10; k++)
+		{
+			if (bitReader.Read(16) != 0)
+			{
+				return null;
+			}
+		}
+		int num11 = bitReader.Read(6) + 1;
+		for (int l = 0; l < num11; l++)
+		{
+			switch (bitReader.Read(16))
+			{
+			case 0:
+				bitReader.Skip(54L);
+				bitReader.Skip((bitReader.Read(4) + 1) * 8);
+				break;
+			case 1:
+			{
+				int[] array = new int[bitReader.Read(5)];
+				int[] array2 = new int[16];
+				int num12 = 0;
+				for (int m = 0; m < array.Length; m++)
+				{
+					array[m] = bitReader.Read(4);
+					num12 = Math.Max(num12, array[m] + 1);
+				}
+				for (int n = 0; n < num12; n++)
+				{
+					array2[n] = bitReader.Read(3) + 1;
+					int num13 = bitReader.Read(2);
+					bitReader.Skip(((num13 > 0) ? 8 : 0) + (8 << num13));
+				}
+				bitReader.Skip(2L);
+				int num14 = bitReader.Read(4);
+				int[] array3 = array;
+				foreach (int num16 in array3)
+				{
+					bitReader.Skip(array2[num16] * num14);
+				}
+				break;
+			}
+			default:
+				return null;
+			}
+		}
+		int num17 = bitReader.Read(6) + 1;
+		for (int num18 = 0; num18 < num17; num18++)
+		{
+			if (bitReader.Read(16) > 2)
+			{
+				return null;
+			}
+			bitReader.Skip(72L);
+			int num19 = bitReader.Read(6) + 1;
+			bitReader.Skip(8L);
+			int num20 = 0;
+			for (int num21 = 0; num21 < num19; num21++)
+			{
+				int num22 = bitReader.Read(3);
+				if (bitReader.Read(1) == 1)
+				{
+					num22 |= bitReader.Read(5) << 3;
+				}
+				while (num22 != 0)
+				{
+					num20++;
+					num22 &= num22 - 1;
+				}
+			}
+			bitReader.Skip(num20 * 8);
+		}
+		int num23 = bitReader.Read(6) + 1;
+		for (int num24 = 0; num24 < num23; num24++)
+		{
+			if (bitReader.Read(16) != 0)
+			{
+				return null;
+			}
+			int num25 = ((bitReader.Read(1) != 1) ? 1 : (bitReader.Read(4) + 1));
+			if (bitReader.Read(1) == 1)
+			{
+				bitReader.Skip((bitReader.Read(8) + 1) * 2 * ILog(channels - 1));
+			}
+			if (bitReader.Read(2) != 0)
+			{
+				return null;
+			}
+			if (num25 > 1)
+			{
+				bitReader.Skip(channels * 4);
+			}
+			bitReader.Skip(num25 * 24);
+		}
+		bool[] array4 = new bool[bitReader.Read(6) + 1];
+		for (int num26 = 0; num26 < array4.Length; num26++)
+		{
+			array4[num26] = bitReader.Read(1) == 1;
+			if (bitReader.Read(16) != 0 || bitReader.Read(16) != 0 || bitReader.Read(8) >= num23)
+			{
+				return null;
+			}
+		}
+		if (bitReader.Read(1) != 1 || bitReader.Failed)
+		{
+			return null;
+		}
+		return array4;
+	}
+
+	private static long Lookup1Values(long entries, long dimensions)
+	{
+		if (dimensions == 0L)
+		{
+			return 0L;
+		}
+		long num = (long)Math.Pow(entries, 1.0 / (double)dimensions);
+		while (num > 0 && !PowerFits(num, dimensions, entries))
+		{
+			num--;
+		}
+		for (; PowerFits(num + 1, dimensions, entries); num++)
+		{
+		}
+		return num;
+	}
+
+	private static bool PowerFits(long value, long exponent, long limit)
+	{
+		if (value <= 1)
+		{
+			return value <= limit;
+		}
+		long num = 1L;
+		for (int i = 0; i < exponent; i++)
+		{
+			if (num > limit)
+			{
+				break;
+			}
+			num *= value;
+		}
+		return num <= limit;
+	}
+
+	private static int ILog(long value)
+	{
+		int num = 0;
+		while (value > 0)
+		{
+			num++;
+			value >>= 1;
+		}
+		return num;
+	}
+
+	private static uint[] BuildCrcTable()
+	{
+		uint[] array = new uint[256];
+		for (uint num = 0u; num < 256; num++)
+		{
+			uint num2 = num << 24;
+			for (int i = 0; i < 8; i++)
+			{
+				num2 = (((num2 & 0x80000000u) != 0) ? ((num2 << 1) ^ 0x4C11DB7) : (num2 << 1));
+			}
+			array[num] = num2;
+		}
+		return array;
+	}
+}
+
+
+private class BitReader
+{
+	private readonly byte[] data;
+
+	private readonly long end;
+
+	private long position;
+
+	public bool Failed { get; private set; }
+
+	public BitReader(byte[] data, int length, int startByte)
+	{
+		this.data = data;
+		end = (long)length * 8L;
+		position = (long)startByte * 8L;
+	}
+
+	public int Read(int count)
+	{
+		if (!Advance(count))
+		{
+			return 0;
+		}
+		int num = 0;
+		for (int i = 0; i < count; i++)
+		{
+			long num2 = position - count + i;
+			num |= ((data[num2 >> 3] >> (int)(num2 & 7)) & 1) << i;
+		}
+		return num;
+	}
+
+	public void Skip(long count)
+	{
+		Advance(count);
+	}
+
+	private bool Advance(long count)
+	{
+		if (Failed || count > end - position)
+		{
+			Failed = true;
+			return false;
+		}
+		position += count;
+		return true;
+	}
+}
+
+
 using UnityEngine;
 
 public class OnePoleLowpassFilter : MonoBehaviour
@@ -17778,7 +18289,6 @@ public class Construction : PrefabAttribute
 		//IL_0033: Unknown result type (might be due to invalid IL or missing references)
 		//IL_0047: Unknown result type (might be due to invalid IL or missing references)
 		//IL_0058: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00c0: Unknown result type (might be due to invalid IL or missing references)
 		//IL_0112: Unknown result type (might be due to invalid IL or missing references)
 		//IL_02e8: Unknown result type (might be due to invalid IL or missing references)
 		//IL_02f5: Unknown result type (might be due to invalid IL or missing references)
@@ -17850,7 +18360,7 @@ public class Construction : PrefabAttribute
 			lastPlacementError = ConstructionErrors.NoPermission;
 			return false;
 		}
-		if (!canBeDeployedInDeepSeaWater && DeepSea.block_building && DeepSeaManager.IsInsideDeepSea(transform.position))
+		if (!canBeDeployedInDeepSeaWater && DeepSea.block_building && DeepSeaManager.IsInsideDeepSea((BaseNetworkable)target.player))
 		{
 			if ((Object)(object)target.entity == (Object)null && !canPlaceAtMaxDistance)
 			{
@@ -18001,7 +18511,7 @@ public class Construction : PrefabAttribute
 				lastPlacementError = ConstructionErrors.TooFarAway;
 				continue;
 			}
-			DeployVolume[] volumes = PrefabAttribute.server.FindAll<DeployVolume>(prefabID);
+			DeployVolume[] volumes = PrefabAttribute.server.FindAll<DeployVolume>(base.prefabID);
 			if (DeployVolume.Check(placement.position, placement.rotation, volumes, item))
 			{
 				transform.position = placement.position;
@@ -18941,7 +19451,7 @@ public class ConstructionSkin : BasePrefab
 
 	public ulong DetermineConditionalModelState(BuildingBlock parent)
 	{
-		ConditionalModel[] array = PrefabAttribute.server.FindAll<ConditionalModel>(prefabID);
+		ConditionalModel[] array = PrefabAttribute.server.FindAll<ConditionalModel>(base.prefabID);
 		if (array.Length > 64)
 		{
 			Debug.LogError((object)("Too many ConditionalModels on " + ((Object)parent).name + "! Maximum supported is 64"));
@@ -18959,7 +19469,7 @@ public class ConstructionSkin : BasePrefab
 
 	private void CreateConditionalModels(BuildingBlock parent)
 	{
-		ConditionalModel[] array = PrefabAttribute.server.FindAll<ConditionalModel>(prefabID);
+		ConditionalModel[] array = PrefabAttribute.server.FindAll<ConditionalModel>(base.prefabID);
 		for (int i = 0; i < array.Length; i++)
 		{
 			if (!parent.GetConditionalModel(i))
@@ -21222,7 +21732,7 @@ public abstract class SocketMod : PrefabAttribute
 
 	public virtual string GetDebugErrorMessage()
 	{
-		return hierachyName ?? "";
+		return ((object)this).ToString();
 	}
 
 	public virtual bool DoCheck(ref Construction.Placement place)
@@ -23062,6 +23572,9 @@ public class Socket_Base : PrefabAttribute, IFlattenKeepsDescendants
 	public string socketName;
 
 	[NonSerialized]
+	public EncryptedValue<uint> socketID = 0u;
+
+	[NonSerialized]
 	public SocketMod[] socketMods;
 
 	public OccupiedSocketCheck[] checkOccupiedSockets;
@@ -23112,11 +23625,12 @@ public class Socket_Base : PrefabAttribute, IFlattenKeepsDescendants
 
 	protected override void AttributeSetup(GameObject rootObj, string name, bool serverside, bool clientside, bool bundling)
 	{
-		//IL_0014: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0019: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0025: Unknown result type (might be due to invalid IL or missing references)
 		//IL_002a: Unknown result type (might be due to invalid IL or missing references)
+		//IL_002f: Unknown result type (might be due to invalid IL or missing references)
+		//IL_003b: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0040: Unknown result type (might be due to invalid IL or missing references)
 		base.AttributeSetup(rootObj, name, serverside, clientside, bundling);
+		socketID = StringPool.Get(socketName);
 		position = ((Component)this).transform.position;
 		rotation = ((Component)this).transform.rotation;
 		socketMods = ((Component)this).GetComponentsInChildren<SocketMod>(true);
@@ -23627,8 +24141,8 @@ public class Socket_Free_Snappable : Socket_Free
 	[ClientVar(Help = "(Generated) When enabled, draws debug visualisations for deployable snapping calculations showing candidate snap points and distances")]
 	public static bool DebugSnapping = false;
 
-	[Header("Snapping - General")]
 	[Range(-1f, 1f)]
+	[Header("Snapping - General")]
 	[SerializeField]
 	private float generalPadding;
 
@@ -23641,16 +24155,16 @@ public class Socket_Free_Snappable : Socket_Free
 	[SerializeField]
 	private bool allowSnappingToCorners = true;
 
-	[SerializeField]
 	[Range(-1f, 1f)]
+	[SerializeField]
 	private float cornerPadding = -0.01f;
 
 	[Header("Snapping - Same Deployable")]
 	[SerializeField]
 	private bool allowSnappingToSameDeployable = true;
 
-	[Range(-1f, 1f)]
 	[SerializeField]
+	[Range(-1f, 1f)]
 	private float sameDeployablePadding;
 
 	private BaseEntity staticEntity;
@@ -29330,542 +29844,6 @@ public struct HitGuideVisuals
 			_ => CarveSphere, 
 		});
 	}
-}
-
-
-using Development.Attributes;
-using Facepunch;
-using UnityEngine;
-
-[ResetStaticFields]
-public class Model : MonoBehaviour, IPrefabPreProcess, IPrefabPostProcess
-{
-	public SphereCollider collision;
-
-	public Transform rootBone;
-
-	public Transform headBone;
-
-	public Transform eyeBone;
-
-	public Animator animator;
-
-	public Skeleton skeleton;
-
-	[HideInInspector]
-	public Transform[] boneTransforms;
-
-	[HideInInspector]
-	public string[] boneNames;
-
-	internal BoneDictionary boneDict;
-
-	internal int skin;
-
-	private static bool loggedMissingBones;
-
-	public Transform RootBoneOrSelf
-	{
-		get
-		{
-			if (!((Object)(object)rootBone != (Object)null))
-			{
-				return ((Component)this).transform;
-			}
-			return rootBone;
-		}
-	}
-
-	bool IPrefabPostProcess.CanPostProcessDuringBundling => true;
-
-	protected void OnEnable()
-	{
-		skin = -1;
-	}
-
-	public void BuildBoneDictionary()
-	{
-		if (boneDict != null)
-		{
-			return;
-		}
-		if (boneTransforms == null || boneTransforms.Length == 0)
-		{
-			if (FileSystem.IsBundled && !loggedMissingBones)
-			{
-				loggedMissingBones = true;
-				Debug.LogWarning((object)("Model on " + ((Object)this).name + " has no bones saved in its asset scene, so they're collected at runtime instead. Rebuild the asset bundles."), (Object)(object)this);
-			}
-			SetupBones();
-		}
-		boneDict = new BoneDictionary(((Component)this).transform, boneTransforms, boneNames);
-	}
-
-	public int GetSkin()
-	{
-		return skin;
-	}
-
-	private Transform FindBoneInternal(string name)
-	{
-		BuildBoneDictionary();
-		return boneDict.FindBone(name, defaultToRoot: false);
-	}
-
-	public Transform FindBone(string name)
-	{
-		BuildBoneDictionary();
-		Transform result = rootBone;
-		if (string.IsNullOrEmpty(name))
-		{
-			return result;
-		}
-		return boneDict.FindBone(name);
-	}
-
-	public Transform FindBone(uint hash)
-	{
-		BuildBoneDictionary();
-		Transform result = rootBone;
-		if (hash == 0)
-		{
-			return result;
-		}
-		return boneDict.FindBone(hash);
-	}
-
-	public uint FindBoneID(Transform transform)
-	{
-		BuildBoneDictionary();
-		return boneDict.FindBoneID(transform);
-	}
-
-	public bool HasBone(string name, out Transform bone)
-	{
-		BuildBoneDictionary();
-		bone = boneDict.FindBone(name, defaultToRoot: false);
-		return (Object)(object)bone != (Object)null;
-	}
-
-	public Transform[] GetBones()
-	{
-		BuildBoneDictionary();
-		return boneDict.transforms;
-	}
-
-	public Transform FindClosestBone(Vector3 worldPos)
-	{
-		//IL_0024: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0029: Unknown result type (might be due to invalid IL or missing references)
-		Transform result = rootBone;
-		float num = float.MaxValue;
-		for (int i = 0; i < boneTransforms.Length; i++)
-		{
-			Transform val = boneTransforms[i];
-			if (!((Object)(object)val == (Object)null))
-			{
-				float num2 = Vector3.Distance(val.position, worldPos);
-				if (!(num2 >= num))
-				{
-					result = val;
-					num = num2;
-				}
-			}
-		}
-		return result;
-	}
-
-	public void PreProcess(IPrefabProcessor process, GameObject rootObj, string name, bool serverside, bool clientside, bool bundling)
-	{
-		_ = (Object)(object)this == (Object)null;
-	}
-
-	public void PostProcess(IPrefabProcessor process, GameObject rootObj, string name, bool serverside, bool clientside, bool bundling)
-	{
-		if (!((Object)(object)this == (Object)null))
-		{
-			SetupBones();
-		}
-	}
-
-	private void SetupBones()
-	{
-		if ((Object)(object)animator == (Object)null)
-		{
-			animator = ((Component)this).GetComponent<Animator>();
-		}
-		if ((Object)(object)rootBone == (Object)null)
-		{
-			rootBone = ((Component)this).transform;
-		}
-		boneTransforms = ((Component)rootBone).GetComponentsInChildren<Transform>(true);
-		boneNames = new string[boneTransforms.Length];
-		for (int i = 0; i < boneTransforms.Length; i++)
-		{
-			boneNames[i] = ((Object)boneTransforms[i]).name;
-		}
-	}
-}
-
-
-public class NexusClient : SingletonComponent<NexusClient>
-{
-}
-
-
-public static class NexusClientUtil
-{
-}
-
-
-using UnityEngine;
-
-public class ParticleDisableOnParentDestroy : MonoBehaviour, IOnParentDestroying
-{
-	public float destroyAfterSeconds;
-
-	public void OnParentDestroying()
-	{
-		ParticleSystem component = ((Component)this).GetComponent<ParticleSystem>();
-		if (Object.op_Implicit((Object)(object)component))
-		{
-			component.enableEmission = false;
-		}
-		if (!((Component)this).gameObject.IsPooledPrefabChild())
-		{
-			((Component)this).transform.parent = null;
-			if (destroyAfterSeconds > 0f)
-			{
-				GameManager.Destroy(((Component)this).gameObject, destroyAfterSeconds);
-			}
-		}
-	}
-}
-
-
-using UnityEngine;
-
-public class ParticleRandomLifetime : MonoBehaviour
-{
-	public ParticleSystem mySystem;
-
-	public float minScale = 0.5f;
-
-	public float maxScale = 1f;
-
-	public void Awake()
-	{
-		if (Object.op_Implicit((Object)(object)mySystem))
-		{
-			float startLifetime = Random.Range(minScale, maxScale);
-			mySystem.startLifetime = startLifetime;
-		}
-	}
-}
-
-
-using UnityEngine;
-
-public class PlayAudioEx : MonoBehaviour
-{
-	public float delay;
-
-	private void Start()
-	{
-	}
-
-	private void OnEnable()
-	{
-		AudioSource component = ((Component)this).GetComponent<AudioSource>();
-		if (Object.op_Implicit((Object)(object)component))
-		{
-			component.PlayDelayed(delay);
-		}
-	}
-}
-
-
-using System.Collections.Generic;
-using Facepunch;
-using UnityEngine;
-
-public class PlayerModelHair : MonoBehaviour
-{
-	public struct RendererMaterials
-	{
-		public string[] names;
-
-		public Material[] original;
-
-		public Material[] replacement;
-
-		public RendererMaterials(Renderer r)
-		{
-			original = r.sharedMaterials;
-			replacement = original.Clone() as Material[];
-			names = new string[original.Length];
-			for (int i = 0; i < original.Length; i++)
-			{
-				names[i] = ((Object)original[i]).name;
-			}
-		}
-	}
-
-	public HairType type;
-
-	private Dictionary<Renderer, RendererMaterials> materials;
-
-	public Dictionary<Renderer, RendererMaterials> Materials => materials;
-
-	private void CacheOriginalMaterials()
-	{
-		if (materials != null)
-		{
-			return;
-		}
-		List<SkinnedMeshRenderer> list = Pool.Get<List<SkinnedMeshRenderer>>();
-		((Component)this).gameObject.GetComponentsInChildren<SkinnedMeshRenderer>(true, list);
-		materials = new Dictionary<Renderer, RendererMaterials>();
-		materials.Clear();
-		foreach (SkinnedMeshRenderer item in list)
-		{
-			materials.Add((Renderer)(object)item, new RendererMaterials((Renderer)(object)item));
-		}
-		Pool.FreeUnmanaged<SkinnedMeshRenderer>(ref list);
-	}
-
-	private void Setup(HairType type, HairSetCollection hair, int meshIndex, float typeNum, float dyeNum, MaterialPropertyBlock block)
-	{
-		CacheOriginalMaterials();
-		HairSetCollection.HairSetEntry hairSetEntry = hair.Get(type, typeNum);
-		if ((Object)(object)hairSetEntry.HairSet == (Object)null)
-		{
-			Debug.LogWarning((object)"Hair.Get returned a NULL hair");
-			return;
-		}
-		int blendShapeIndex = -1;
-		if (type == HairType.Facial || type == HairType.Eyebrow)
-		{
-			blendShapeIndex = meshIndex;
-		}
-		HairDye dye = null;
-		HairDyeCollection hairDyeCollection = hairSetEntry.HairDyeCollection;
-		if ((Object)(object)hairDyeCollection != (Object)null)
-		{
-			dye = hairDyeCollection.Get(dyeNum);
-		}
-		hairSetEntry.HairSet.Process(this, hairDyeCollection, dye, block);
-		hairSetEntry.HairSet.ProcessMorphs(((Component)this).gameObject, blendShapeIndex);
-	}
-
-	public void Setup(SkinSetCollection skin, float hairNum, float meshNum, float dyeNum, float meshSubNumber, MaterialPropertyBlock block)
-	{
-		int index = skin.GetIndex(meshNum);
-		SkinSet skinSet = skin.Get(meshNum, meshSubNumber);
-		if ((Object)(object)skinSet == (Object)null)
-		{
-			Debug.LogError((object)"Skin.Get returned a NULL skin");
-		}
-		else if (!((Object)(object)skinSet.HairCollection == (Object)null))
-		{
-			int typeIndex = (int)type;
-			GetRandomVariation(hairNum, typeIndex, dyeNum, out var typeNum, out var dyeNum2);
-			Setup(type, skinSet.HairCollection, index, typeNum, dyeNum2, block);
-		}
-	}
-
-	public static void GetRandomVariation(float hairNum, int typeIndex, float dyeNumber, out float typeNum, out float dyeNum)
-	{
-		typeNum = GetRandomHairType(hairNum, typeIndex);
-		dyeNum = dyeNumber;
-	}
-
-	public static float GetRandomHairType(float hairNum, int typeIndex)
-	{
-		Random.InitState(Mathf.FloorToInt(hairNum * 100000f) + typeIndex);
-		return Random.Range(0f, 1f);
-	}
-}
-
-
-using UnityEngine;
-
-public struct RendererMaterials
-{
-	public string[] names;
-
-	public Material[] original;
-
-	public Material[] replacement;
-
-	public RendererMaterials(Renderer r)
-	{
-		original = r.sharedMaterials;
-		replacement = original.Clone() as Material[];
-		names = new string[original.Length];
-		for (int i = 0; i < original.Length; i++)
-		{
-			names[i] = ((Object)original[i]).name;
-		}
-	}
-}
-
-
-using System;
-
-[Flags]
-public enum HairCapMask
-{
-	Head = 1,
-	Eyebrow = 2,
-	Facial = 4,
-	Armpit = 8,
-	Pubic = 0x10
-}
-
-
-using UnityEngine;
-
-public class PlayerModelHairCap : MonoBehaviour
-{
-	[InspectorFlags]
-	public HairCapMask hairCapMask;
-
-	public void SetupHairCap(SkinSetCollection skin, float hairNum, float meshNum, float dyeNumber, float meshSubNumber, MaterialPropertyBlock block)
-	{
-		SkinSet skinSet = skin.Get(meshNum, meshSubNumber);
-		if ((Object)(object)skinSet == (Object)null || (Object)(object)skinSet.HairCollection == (Object)null)
-		{
-			return;
-		}
-		for (int i = 0; i < 5; i++)
-		{
-			if (((uint)hairCapMask & (uint)(1 << i)) == 0)
-			{
-				continue;
-			}
-			PlayerModelHair.GetRandomVariation(hairNum, i, dyeNumber, out var typeNum, out var dyeNum);
-			HairType hairType = (HairType)i;
-			HairSetCollection.HairSetEntry hairSetEntry = skinSet.HairCollection.Get(hairType, typeNum);
-			if (!((Object)(object)hairSetEntry.HairSet == (Object)null))
-			{
-				HairDyeCollection hairDyeCollection = hairSetEntry.HairDyeCollection;
-				if (!((Object)(object)hairDyeCollection == (Object)null))
-				{
-					hairDyeCollection.Get(dyeNum)?.ApplyCap(hairDyeCollection, hairType, block);
-				}
-			}
-		}
-	}
-}
-
-
-using UnityEngine;
-
-public class PlayerModelSkin : MonoBehaviour, IPrefabPreProcess
-{
-	public enum SkinMaterialType
-	{
-		HEAD,
-		EYE,
-		BODY
-	}
-
-	public SkinMaterialType MaterialType;
-
-	public Renderer SkinRenderer;
-
-	public void Setup(SkinSet skin, float hairNum)
-	{
-		if (Object.op_Implicit((Object)(object)SkinRenderer) && Object.op_Implicit((Object)(object)skin))
-		{
-			SkinRenderer.enabled = true;
-			switch (MaterialType)
-			{
-			case SkinMaterialType.HEAD:
-				SkinRenderer.sharedMaterial = skin.HeadMaterial;
-				break;
-			case SkinMaterialType.BODY:
-				SkinRenderer.sharedMaterial = skin.BodyMaterial;
-				break;
-			case SkinMaterialType.EYE:
-				SkinRenderer.sharedMaterial = skin.EyeMaterial;
-				break;
-			default:
-				SkinRenderer.sharedMaterial = skin.BodyMaterial;
-				break;
-			}
-		}
-	}
-
-	public void ToggleSkinRenderer(bool toggle)
-	{
-		if (Object.op_Implicit((Object)(object)SkinRenderer))
-		{
-			SkinRenderer.enabled = toggle;
-		}
-	}
-
-	public void PreProcess(IPrefabProcessor preProcess, GameObject rootObj, string name, bool serverside, bool clientside, bool bundling)
-	{
-		if (clientside)
-		{
-			SkinRenderer = ((Component)this).GetComponent<Renderer>();
-		}
-	}
-}
-
-
-public enum SkinMaterialType
-{
-	HEAD,
-	EYE,
-	BODY
-}
-
-
-public interface ILerpInfo
-{
-	public enum LerpType
-	{
-		Generic,
-		Position
-	}
-
-	float GetExtrapolationTime();
-
-	float GetInterpolationDelay(LerpType lerpType);
-
-	float GetInterpolationSmoothing();
-}
-
-
-public enum LerpType
-{
-	Generic,
-	Position
-}
-
-
-using System.Collections.Generic;
-using Rust.Interpolation;
-using UnityEngine;
-
-public interface IPosLerpTarget : ILerpInfo
-{
-	float GetInterpolationInertia();
-
-	Vector3 GetNetworkPosition();
-
-	Quaternion GetNetworkRotation();
-
-	void SetNetworkPosition(Vector3 pos);
-
-	void SetNetworkRotation(Quaternion rot);
-
-	void DrawInterpolationState(Interpolator<TransformSnapshot>.Segment segment, List<TransformSnapshot> entries);
-
-	void LerpIdleDisable();
 }
 
 
