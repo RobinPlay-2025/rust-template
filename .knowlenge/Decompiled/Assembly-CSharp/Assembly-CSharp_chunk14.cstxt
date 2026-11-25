@@ -1,5 +1,802 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using ConVar;
+using Cronos;
+using Facepunch;
+using Facepunch.Math;
+using Newtonsoft.Json;
+using ProtoBuf;
+using TimeZoneConverter;
+using UnityEngine;
+
+public class WipeTimer : BaseEntity
+{
+	public enum WipeFrequency
+	{
+		Monthly,
+		Weekly,
+		BiWeekly
+	}
+
+	[ServerVar(Help = "0=sun,1=mon,2=tues,3=wed,4=thur,5=fri,6=sat")]
+	public static int wipeDayOfWeek = 4;
+
+	[ServerVar(Help = "Which hour to wipe? 14.5 = 2:30pm")]
+	public static float wipeHourOfDay = 19f;
+
+	[ServerVar(Help = "The timezone to use for wipes. Defaults to the server's time zone if not set or invalid. Value should be a TZ identifier as seen here: https://en.wikipedia.org/wiki/List_of_tz_database_time_zones")]
+	public static string wipeTimezone = "Europe/London";
+
+	[ServerVar(Help = "Unix timestamp (seconds) for the upcoming wipe. Overrides all other convars if set to a time in the future.")]
+	public static long wipeUnixTimestampOverride = 0L;
+
+	[ServerVar(Help = "Custom cron expression for the wipe schedule. Overrides all other convars (except wipeUnixTimestampOverride) if set. Uses Cronos as a parser: https://github.com/HangfireIO/Cronos/")]
+	public static string wipeCronOverride = "";
+
+	public bool useWipeDayOverride;
+
+	public DayOfWeek wipeDayOfWeekOverride = DayOfWeek.Thursday;
+
+	public WipeFrequency wipeFrequency;
+
+	[ServerVar(Name = "days_to_add_test", Help = "(Generated) Number of days to add to the server's wipe timer during testing; registered as wipetimer.days_to_add_test; 0 = no adjustment")]
+	public static int daysToAddTest = 0;
+
+	[ServerVar(Name = "hours_to_add_test", Help = "(Generated) Number of hours to add to the server's wipe timer during testing; registered as wipetimer.hours_to_add_test")]
+	public static float hoursToAddTest = 0f;
+
+	public static WipeTimer serverinstance;
+
+	public static WipeTimer clientinstance;
+
+	private string oldTags = "";
+
+	private static string cronExprCacheKey = null;
+
+	private static CronExpression cronExprCache = null;
+
+	private static (WipeFrequency, int, float)? cronCacheKey = null;
+
+	private static string cronCache = null;
+
+	private static string timezoneCacheKey = null;
+
+	private static TimeZoneInfo timezoneCache = null;
+
+	public override void InitShared()
+	{
+		base.InitShared();
+		if (base.isServer)
+		{
+			serverinstance = this;
+		}
+		if (base.isClient)
+		{
+			clientinstance = this;
+		}
+	}
+
+	public override void DestroyShared()
+	{
+		if (base.isServer)
+		{
+			serverinstance = null;
+		}
+		if (base.isClient)
+		{
+			clientinstance = null;
+		}
+		base.DestroyShared();
+	}
+
+	public override void ServerInit()
+	{
+		base.ServerInit();
+		GetTimeZone();
+		RecalculateWipeFrequency();
+		((FacepunchBehaviour)this).InvokeRepeating((Action)TryAndUpdate, 1f, 4f);
+	}
+
+	public void RecalculateWipeFrequency()
+	{
+		string tags = Server.tags;
+		if (tags.Contains("monthly"))
+		{
+			wipeFrequency = WipeFrequency.Monthly;
+		}
+		else if (tags.Contains("biweekly"))
+		{
+			wipeFrequency = WipeFrequency.BiWeekly;
+		}
+		else if (tags.Contains("weekly"))
+		{
+			wipeFrequency = WipeFrequency.Weekly;
+		}
+		else
+		{
+			wipeFrequency = WipeFrequency.Monthly;
+		}
+	}
+
+	public void TryAndUpdate()
+	{
+		if (Server.tags != oldTags)
+		{
+			RecalculateWipeFrequency();
+			oldTags = Server.tags;
+		}
+		SendNetworkUpdate();
+	}
+
+	public override void Save(SaveInfo info)
+	{
+		base.Save(info);
+		if (!info.forDisk && info.msg.landmine == null)
+		{
+			info.msg.landmine = Pool.Get<Landmine>();
+			info.msg.landmine.triggeredID = (ulong)GetTicksUntilWipe(info.cachedTime.Now);
+		}
+	}
+
+	public TimeSpan GetTimeSpanUntilWipe(DateTime? now = null)
+	{
+		DateTimeOffset dateTimeOffset = (now.HasValue ? ((DateTimeOffset)now.Value.ToUniversalTime()) : DateTimeOffset.UtcNow).AddDays(daysToAddTest).AddHours(hoursToAddTest);
+		return GetWipeTime(dateTimeOffset) - dateTimeOffset;
+	}
+
+	public long GetTicksUntilWipe(DateTime now)
+	{
+		return GetTimeSpanUntilWipe(now).Ticks;
+	}
+
+	[ServerVar(Help = "(Generated) Prints the current wipe timer status including next wipe date, frequency, and time remaining")]
+	public static void PrintWipe(Arg arg)
+	{
+		if ((Object)(object)serverinstance == (Object)null)
+		{
+			arg.ReplyWith("WipeTimer not found!");
+			return;
+		}
+		serverinstance.RecalculateWipeFrequency();
+		serverinstance.TryAndUpdate();
+		TimeZoneInfo timeZone = GetTimeZone();
+		string text = default(string);
+		string text2 = (TZConvert.TryWindowsToIana(timeZone.Id, ref text) ? text : timeZone.Id);
+		DateTimeOffset dateTimeOffset = DateTimeOffset.UtcNow.AddDays(daysToAddTest).AddHours(hoursToAddTest);
+		DateTimeOffset wipeTime = serverinstance.GetWipeTime(dateTimeOffset);
+		TimeSpan timeSpan = wipeTime - dateTimeOffset;
+		string cronString = GetCronString(serverinstance.wipeFrequency, serverinstance.useWipeDayOverride ? ((int)serverinstance.wipeDayOfWeekOverride) : wipeDayOfWeek, wipeHourOfDay);
+		CronExpression cronExpression = GetCronExpression(serverinstance.wipeFrequency, serverinstance.useWipeDayOverride ? ((int)serverinstance.wipeDayOfWeekOverride) : wipeDayOfWeek, wipeHourOfDay);
+		StringBuilder stringBuilder = new StringBuilder();
+		stringBuilder.AppendLine($"Frequency: {serverinstance.wipeFrequency}");
+		stringBuilder.AppendLine("Timezone: " + timeZone.StandardName + " (ID=" + timeZone.Id + ", IANA=" + text2 + ")");
+		stringBuilder.AppendLine($"Wipe day of week: {(DayOfWeek)wipeDayOfWeek}");
+		stringBuilder.AppendLine($"Wipe hour: {wipeHourOfDay}");
+		stringBuilder.AppendLine($"Test time: {dateTimeOffset:O}");
+		stringBuilder.AppendLine($"Wipe time: {wipeTime:O}");
+		stringBuilder.AppendLine($"Time until wipe: {timeSpan:g}");
+		stringBuilder.AppendLine($"Ticks until wipe: {timeSpan.Ticks}");
+		stringBuilder.AppendLine();
+		stringBuilder.AppendLine("Cron: " + cronString);
+		stringBuilder.AppendLine("Next 10 occurrences:");
+		int num = 0;
+		foreach (DateTimeOffset item in cronExpression.GetOccurrences(dateTimeOffset, dateTimeOffset.AddYears(2), timeZone, true, false).Take(10))
+		{
+			stringBuilder.AppendLine($"  {num}. {item:O}");
+			num++;
+		}
+		arg.ReplyWith(stringBuilder.ToString());
+	}
+
+	[ServerVar(Help = "(Generated) Prints a JSON list of all system, Windows, and IANA timezone identifiers available on the server machine")]
+	public static void PrintTimeZones(Arg arg)
+	{
+		List<string> systemTzs = (from z in TimeZoneInfo.GetSystemTimeZones()
+			select z.Id).ToList();
+		IReadOnlyCollection<string> knownWindowsTimeZoneIds = TZConvert.KnownWindowsTimeZoneIds;
+		IReadOnlyCollection<string> knownIanaTimeZoneNames = TZConvert.KnownIanaTimeZoneNames;
+		arg.ReplyWith(JsonConvert.SerializeObject((object)new
+		{
+			systemTzs = systemTzs,
+			windowsTzs = knownWindowsTimeZoneIds,
+			ianaTzs = knownIanaTimeZoneNames
+		}));
+	}
+
+	public DateTimeOffset GetWipeTime(DateTimeOffset nowTime)
+	{
+		if (wipeUnixTimestampOverride > 0 && wipeUnixTimestampOverride > Epoch.Current)
+		{
+			return Epoch.ToDateTime(wipeUnixTimestampOverride);
+		}
+		try
+		{
+			return GetCronExpression(wipeFrequency, useWipeDayOverride ? ((int)wipeDayOfWeekOverride) : wipeDayOfWeek, wipeHourOfDay).GetNextOccurrence(nowTime, GetTimeZone(), false) ?? DateTimeOffset.MaxValue;
+		}
+		catch (Exception ex)
+		{
+			Debug.LogException(ex);
+			return DateTimeOffset.MaxValue;
+		}
+	}
+
+	private bool HoursUntilWipe(float hours)
+	{
+		if (serverinstance.GetTimeSpanUntilWipe(null).TotalHours < (double)hours)
+		{
+			return true;
+		}
+		return false;
+	}
+
+	private static CronExpression GetCronExpression(WipeFrequency frequency, int dayOfWeek, float hourOfDay)
+	{
+		string cronString = GetCronString(frequency, dayOfWeek, hourOfDay);
+		if (cronString == cronExprCacheKey && cronExprCache != (CronExpression)null)
+		{
+			return cronExprCache;
+		}
+		cronExprCache = CronExpression.Parse(cronString);
+		cronExprCacheKey = cronString;
+		return cronExprCache;
+	}
+
+	private static string GetCronString(WipeFrequency frequency, int dayOfWeek, float hourOfDay)
+	{
+		if (!string.IsNullOrWhiteSpace(wipeCronOverride))
+		{
+			return wipeCronOverride;
+		}
+		(WipeFrequency, int, float) tuple = (frequency, dayOfWeek, hourOfDay);
+		(WipeFrequency, int, float) tuple2 = tuple;
+		(WipeFrequency, int, float)? tuple3 = cronCacheKey;
+		if (tuple3.HasValue)
+		{
+			(WipeFrequency, int, float) valueOrDefault = tuple3.GetValueOrDefault();
+			if (tuple2.Item1 == valueOrDefault.Item1 && tuple2.Item2 == valueOrDefault.Item2 && tuple2.Item3 == valueOrDefault.Item3 && cronCache != null)
+			{
+				return cronCache;
+			}
+		}
+		cronCache = BuildCronString(frequency, dayOfWeek, hourOfDay);
+		cronCacheKey = tuple;
+		return cronCache;
+	}
+
+	private static string BuildCronString(WipeFrequency frequency, int dayOfWeek, float hourOfDay)
+	{
+		int num = Mathf.FloorToInt(hourOfDay);
+		int num2 = Mathf.FloorToInt((hourOfDay - (float)num) * 60f);
+		return frequency switch
+		{
+			WipeFrequency.Weekly => $"{num2} {num} * * {dayOfWeek}", 
+			WipeFrequency.BiWeekly => $"{num2} {num} 1-7,15-21,29-31 * {dayOfWeek}", 
+			WipeFrequency.Monthly => $"{num2} {num} * * {dayOfWeek}#1", 
+			_ => throw new NotSupportedException($"WipeFrequency {frequency}"), 
+		};
+	}
+
+	private static TimeZoneInfo GetTimeZone()
+	{
+		if (string.IsNullOrWhiteSpace(wipeTimezone))
+		{
+			return TimeZoneInfo.Local;
+		}
+		if (wipeTimezone == timezoneCacheKey && timezoneCache != null)
+		{
+			return timezoneCache;
+		}
+		if (TZConvert.TryGetTimeZoneInfo(wipeTimezone, ref timezoneCache))
+		{
+			timezoneCacheKey = wipeTimezone;
+			return timezoneCache;
+		}
+		return TimeZoneInfo.Local;
+	}
+}
+
+
+public enum WipeFrequency
+{
+	Monthly,
+	Weekly,
+	BiWeekly
+}
+
+
+using System;
+using UnityEngine;
+using UnityEngine.UI;
+
+public class WipeTimerScreen : MonoBehaviour
+{
+	public Text timerText;
+
+	[NonSerialized]
+	public WipeLaptopEntity wipeLaptop;
+}
+
+
+using System.Collections.Generic;
+using ConVar;
+using Rust;
+using UnityEngine;
+
+public abstract class BaseModifiers<T> : EntityComponent<T> where T : BaseCombatEntity
+{
+	public List<Modifier> All = new List<Modifier>();
+
+	protected Dictionary<Modifier.ModifierType, float> totalValues = new Dictionary<Modifier.ModifierType, float>();
+
+	protected Dictionary<Modifier.ModifierType, float> modifierVariables = new Dictionary<Modifier.ModifierType, float>();
+
+	protected Dictionary<Modifier.ModifierSource, int> sourceCounts = new Dictionary<Modifier.ModifierSource, int>();
+
+	protected T owner;
+
+	protected bool dirty = true;
+
+	protected double timeSinceLastTick;
+
+	protected double lastTickTime;
+
+	public int ActiveModifierCount => All.Count;
+
+	public int ActiveTeaCount
+	{
+		get
+		{
+			int num = 0;
+			foreach (Modifier item in All)
+			{
+				if (item != null && item.Source == Modifier.ModifierSource.Tea)
+				{
+					num++;
+				}
+			}
+			return num;
+		}
+	}
+
+	public void Add(List<ModifierDefintion> modDefs, float effectScale = 1f, float durationScale = 1f)
+	{
+		foreach (ModifierDefintion modDef in modDefs)
+		{
+			if (IsCompatible(modDef.type))
+			{
+				Add(modDef, effectScale, durationScale);
+			}
+		}
+	}
+
+	protected virtual bool IsCompatible(Modifier.ModifierType modType)
+	{
+		return true;
+	}
+
+	protected void Add(ModifierDefintion def, float effectScale = 1f, float durationScale = 1f)
+	{
+		Modifier modifier = new Modifier();
+		modifier.Init(def.type, def.source, def.value * effectScale, def.duration * durationScale, def.duration * durationScale);
+		Add(modifier);
+	}
+
+	protected void Add(Modifier modifier)
+	{
+		if (!CanAdd(modifier))
+		{
+			return;
+		}
+		int maxModifierCount = GetMaxModifierCount(modifier);
+		if (GetActiveCount(modifier.Type, modifier.Source) >= maxModifierCount)
+		{
+			Modifier shortestLifeModifier = GetShortestLifeModifier(modifier.Type, modifier.Source);
+			if (shortestLifeModifier == null)
+			{
+				return;
+			}
+			Remove(shortestLifeModifier);
+		}
+		All.Add(modifier);
+		if (!modifier.IsHiddenModifier())
+		{
+			AdjustSourceCount(modifier.Source, 1);
+		}
+		ApplyModifierValue(modifier);
+		SetDirty(flag: true);
+	}
+
+	private void AdjustSourceCount(Modifier.ModifierSource source, int adjustBy)
+	{
+		sourceCounts.TryGetValue(source, out var value);
+		sourceCounts[source] = value + 1;
+	}
+
+	public int GetSourceCount(Modifier.ModifierSource source)
+	{
+		return sourceCounts.GetValueOrDefault(source, 0);
+	}
+
+	private void ApplyModifierValue(Modifier modifier)
+	{
+		float value = modifier.Value;
+		if (!totalValues.ContainsKey(modifier.Type))
+		{
+			totalValues.Add(modifier.Type, value);
+		}
+		else
+		{
+			totalValues[modifier.Type] += value;
+		}
+		totalValues[modifier.Type] = GetClampedValue(modifier, totalValues[modifier.Type]);
+	}
+
+	private bool CanAdd(Modifier modifier)
+	{
+		if (All.Contains(modifier))
+		{
+			return false;
+		}
+		if (modifier.HasNegativeSource() && (Object)(object)owner != (Object)null && owner is BasePlayer basePlayer && basePlayer.IsGod())
+		{
+			return false;
+		}
+		return true;
+	}
+
+	private int GetMaxModifiersForSourceType(Modifier.ModifierSource source)
+	{
+		if (source == Modifier.ModifierSource.Tea || source == Modifier.ModifierSource.Interaction)
+		{
+			return 1;
+		}
+		return int.MaxValue;
+	}
+
+	protected virtual int GetMaxModifierCount(Modifier modifier)
+	{
+		if (modifier == null)
+		{
+			return 0;
+		}
+		switch (modifier.Source)
+		{
+		case Modifier.ModifierSource.Tea:
+		case Modifier.ModifierSource.Interaction:
+		case Modifier.ModifierSource.MedicalSyringe:
+			return 1;
+		default:
+			return int.MaxValue;
+		}
+	}
+
+	protected virtual float GetClampedValue(Modifier modifier, float value)
+	{
+		return value;
+	}
+
+	private int GetActiveCount(Modifier.ModifierType type, Modifier.ModifierSource source)
+	{
+		int num = 0;
+		foreach (Modifier item in All)
+		{
+			if (item.Type == type && item.Source == source)
+			{
+				num++;
+			}
+		}
+		return num;
+	}
+
+	private Modifier GetShortestLifeModifier(Modifier.ModifierType type, Modifier.ModifierSource source)
+	{
+		Modifier modifier = null;
+		foreach (Modifier item in All)
+		{
+			if (item.Type == type && item.Source == source)
+			{
+				if (modifier == null)
+				{
+					modifier = item;
+				}
+				else if (item.TimeRemaining < modifier.TimeRemaining)
+				{
+					modifier = item;
+				}
+			}
+		}
+		return modifier;
+	}
+
+	private void Remove(Modifier toRemove)
+	{
+		bool flag = false;
+		bool flag2 = false;
+		Modifier.ModifierType type = toRemove.Type;
+		foreach (Modifier item in All)
+		{
+			if (toRemove == item)
+			{
+				flag = true;
+			}
+			else if (item.Type == type)
+			{
+				flag2 = true;
+			}
+		}
+		if (flag)
+		{
+			All.Remove(toRemove);
+			AdjustSourceCount(toRemove.Source, -1);
+			if (!flag2)
+			{
+				totalValues.Remove(toRemove.Type);
+			}
+			SetDirty(flag: true);
+		}
+	}
+
+	public void RemoveAll()
+	{
+		All.Clear();
+		totalValues.Clear();
+		sourceCounts.Clear();
+		SetDirty(flag: true);
+	}
+
+	public void RemoveFromSource(Modifier.ModifierSource source)
+	{
+		for (int num = All.Count - 1; num >= 0; num--)
+		{
+			Modifier modifier = All[num];
+			if (modifier != null && modifier.Source == source)
+			{
+				Remove(modifier);
+			}
+		}
+	}
+
+	public void RemoveAllExceptFromSource(Modifier.ModifierSource source)
+	{
+		for (int num = All.Count - 1; num >= 0; num--)
+		{
+			Modifier modifier = All[num];
+			if (modifier != null && modifier.Source != source)
+			{
+				Remove(modifier);
+			}
+		}
+	}
+
+	public float GetValue(Modifier.ModifierType type, float defaultValue = 0f)
+	{
+		float num = 1f;
+		if (IsModifierCompatibleWithDigestionBoost(type))
+		{
+			num = GetValue(Modifier.ModifierType.DigestionBoost, 1f);
+		}
+		if (totalValues.TryGetValue(type, out var value))
+		{
+			return value * num;
+		}
+		return defaultValue * num;
+	}
+
+	public void SetValue(Modifier.ModifierSource source, Modifier.ModifierType type, float value)
+	{
+		Modifier modifier = new Modifier();
+		bool flag = false;
+		foreach (Modifier item in All)
+		{
+			if (item != null && item.Source == source && item.Type == type)
+			{
+				modifier.Init(item.Type, item.Source, value, item.Duration, item.TimeRemaining);
+				flag = true;
+				break;
+			}
+		}
+		if (flag)
+		{
+			Add(modifier);
+		}
+	}
+
+	public float GetVariableValue(Modifier.ModifierType type, float defaultValue)
+	{
+		if (modifierVariables.TryGetValue(type, out var value))
+		{
+			return value;
+		}
+		return defaultValue;
+	}
+
+	public void SetVariableValue(Modifier.ModifierType type, float value)
+	{
+		if (modifierVariables.TryGetValue(type, out var _))
+		{
+			modifierVariables[type] = value;
+		}
+		else
+		{
+			modifierVariables.Add(type, value);
+		}
+	}
+
+	public void RemoveVariable(Modifier.ModifierType type)
+	{
+		modifierVariables.Remove(type);
+	}
+
+	protected virtual void OnDisable()
+	{
+		if (!Application.isQuitting)
+		{
+			owner = null;
+		}
+	}
+
+	public void SetDirty(bool flag)
+	{
+		dirty = flag;
+	}
+
+	public virtual void ServerInit(T owner)
+	{
+		this.owner = owner;
+		ResetTicking();
+		RemoveAll();
+	}
+
+	public void ResetTicking()
+	{
+		lastTickTime = Time.timeAsDouble;
+		timeSinceLastTick = 0.0;
+	}
+
+	public virtual void ServerUpdate(BaseCombatEntity ownerEntity)
+	{
+		double num = Time.timeAsDouble - lastTickTime;
+		lastTickTime = Time.timeAsDouble;
+		timeSinceLastTick += num;
+		if (!(timeSinceLastTick <= (double)ConVar.Server.modifierTickRate))
+		{
+			if ((Object)(object)owner != (Object)null && !owner.IsDead())
+			{
+				TickModifiers(ownerEntity, timeSinceLastTick);
+			}
+			timeSinceLastTick = 0.0;
+		}
+	}
+
+	protected virtual void TickModifiers(BaseCombatEntity ownerEntity, double delta)
+	{
+		for (int num = All.Count - 1; num >= 0; num--)
+		{
+			Modifier modifier = All[num];
+			float num2 = (IsModifierCompatibleWithDigestionBoost(modifier.Type) ? GetValue(Modifier.ModifierType.DigestionBoostTimeMod, 1f) : 1f);
+			modifier.Tick(ownerEntity, delta * (double)num2);
+			if (modifier.Expired)
+			{
+				Remove(modifier);
+			}
+		}
+	}
+
+	protected bool IsModifierCompatibleWithDigestionBoost(Modifier.ModifierType modifierType)
+	{
+		if ((uint)modifierType <= 1u || modifierType == Modifier.ModifierType.Scrap_Yield || modifierType == Modifier.ModifierType.Harvesting)
+		{
+			return true;
+		}
+		return false;
+	}
+}
+
+
+using System.Collections.Generic;
+using Development.Attributes;
+using Facepunch;
+using ProtoBuf;
+using UnityEngine;
+
+public class HorseModifiers : BaseModifiers<RidableHorse>
+{
+	public static void AddToHorse(RidableHorse horse, List<ModifierDefintion> modifiers)
+	{
+		if (!((Object)(object)horse == (Object)null) && !((Object)(object)horse.modifiers == (Object)null) && modifiers != null)
+		{
+			horse.modifiers.Add(modifiers);
+		}
+	}
+
+	protected override bool IsCompatible(Modifier.ModifierType modType)
+	{
+		if ((uint)(modType - 20) <= 1u)
+		{
+			return true;
+		}
+		return false;
+	}
+
+	public void SendNetworkUpdateIfDirty(RidableHorse horse)
+	{
+		if (dirty)
+		{
+			horse.SendNetworkUpdate();
+			SetDirty(flag: false);
+		}
+	}
+
+	[PoolAnalyzerGetWrapper]
+	public HorseModifiers Save(bool forDisk)
+	{
+		HorseModifiers val = Pool.Get<HorseModifiers>();
+		val.modifiers = Pool.Get<List<Modifier>>();
+		foreach (Modifier item2 in All)
+		{
+			if (item2 != null && (!forDisk || item2.Source != Modifier.ModifierSource.Interaction))
+			{
+				Modifier item = item2.Save();
+				val.modifiers.Add(item);
+			}
+		}
+		return val;
+	}
+
+	public void Load(HorseModifiers m, bool fromDisk)
+	{
+		RemoveAll();
+		if (m == null || m.modifiers == null)
+		{
+			return;
+		}
+		foreach (Modifier modifier2 in m.modifiers)
+		{
+			if (modifier2 != null && (!fromDisk || modifier2.source != 2))
+			{
+				Modifier modifier = new Modifier();
+				modifier.Init((Modifier.ModifierType)modifier2.type, (Modifier.ModifierSource)modifier2.source, modifier2.value, modifier2.duration, modifier2.timeRemaining);
+				Add(modifier);
+			}
+		}
+	}
+}
+
+
+using System;
+
+[Serializable]
+public class ModifierDefintion
+{
+	public Modifier.ModifierType type;
+
+	public Modifier.ModifierSource source;
+
+	public float value;
+
+	public float duration;
+}
+
+
+using System;
+
+[Serializable]
+public class ModifierLimit
+{
+	public Modifier.ModifierSource source;
+
+	public int MaxApplications;
+
+	public float minValue;
+
+	public float maxValue;
+}
+
+
+using System;
+using System.Collections.Generic;
 
 [Serializable]
 public class ModifierLimits
@@ -994,8 +1791,8 @@ using UnityEngine;
 
 public class AirfieldCallChinookTerminal : ChargeUpIOEntity
 {
-	[Tooltip("Only used for reference")]
 	[Header("Airfield Call Chinook Terminal")]
+	[Tooltip("Only used for reference")]
 	public EventSchedule chinookEventPrefab;
 
 	public CH47DropZone associatedDropZone;
@@ -2153,9 +2950,9 @@ public abstract class AnimationSubSystem : MonoBehaviour, IClientComponent
 	[SerializeField]
 	private string SubSystemName = string.Empty;
 
-	[Tooltip("Controls what part of the body this system modifies, if none full body mask will be used")]
-	[SubSystemVariable]
 	[SerializeField]
+	[SubSystemVariable]
+	[Tooltip("Controls what part of the body this system modifies, if none full body mask will be used")]
 	protected AvatarMask Mask;
 
 	[SerializeField]
@@ -2212,8 +3009,8 @@ public class GenericChildAnimatorSubSystem : ChildAnimatorSubSystem
 	[SerializeField]
 	private string AimingParameter = string.Empty;
 
-	[Tooltip("Bool parameter driven by a flag on the entity this system is attached to, leave empty to ignore")]
 	[SerializeField]
+	[Tooltip("Bool parameter driven by a flag on the entity this system is attached to, leave empty to ignore")]
 	private string FlagParameter = string.Empty;
 
 	[SerializeField]
@@ -2226,8 +3023,8 @@ public class GenericChildAnimatorSubSystem : ChildAnimatorSubSystem
 	[SerializeField]
 	private BaseEntity.Signal TriggerSignal;
 
-	[SerializeField]
 	[Tooltip("Second mask for poses that need both arms, blended by the RightArmLayerWeight and BothArmsLayerWeight animator floats")]
+	[SerializeField]
 	private AvatarMask TwoHandMask;
 }
 
@@ -2323,8 +3120,8 @@ public class MeleeWeaponAnimationSubSystem : ChildAnimatorSubSystem
 	[SerializeField]
 	private float PlayerVelocityCap = 2f;
 
-	[SerializeField]
 	[Tooltip("Optional prop-bone-only mask. Held at full weight so the velocity fade never pulls the held item out of the hand.")]
+	[SerializeField]
 	private AvatarMask PropMask;
 
 	[SerializeField]
@@ -2377,8 +3174,8 @@ using UnityEngine;
 [RequireComponent(typeof(BaseProjectile))]
 public class ProjectileAnimationSubSystem : GenericChildAnimatorSubSystem, IPrefabPreProcess
 {
-	[Tooltip("Length of the 3p reload clip, baked from the child controller during preprocess")]
 	[SerializeField]
+	[Tooltip("Length of the 3p reload clip, baked from the child controller during preprocess")]
 	private float ReloadClipLength;
 
 	public bool CanPreProcessDuringBundling => true;
@@ -2446,9 +3243,9 @@ public class TwoAnimBlendSubSystem : AnimationSubSystem
 	[SerializeField]
 	private AnimationClip ClipB;
 
+	[Range(0f, 1f)]
 	[SubSystemVariable]
 	[SerializeField]
-	[Range(0f, 1f)]
 	private float Blend;
 }
 
@@ -6163,8 +6960,8 @@ public class StagedResourceEntity : ResourceEntity
 	[Header("Staged Resource Entity")]
 	public GameObjectRef changeStageEffect;
 
-	[Tooltip("The LOD component whose visuals are swapped per destruction stage. Supports MeshLOD (meshes only) and StagedRendererLOD (meshes and materials).")]
 	[FormerlySerializedAs("ResourceMeshLod")]
+	[Tooltip("The LOD component whose visuals are swapped per destruction stage. Supports MeshLOD (meshes only) and StagedRendererLOD (meshes and materials).")]
 	public InstancedLODComponent LODComponent;
 
 	public MeshCollider[] ResourceMeshColliders = Array.Empty<MeshCollider>();
@@ -8012,8 +8809,8 @@ public class SatelliteCrash : BaseCombatEntity
 	[Tooltip("Visual effect played at the crash position when the satellite hits the ground")]
 	public GameObjectRef groundImpactEffect;
 
-	[Tooltip("Loot budget at 1.0x mass scale, in crate-equivalents. Multiplied by the mass-to-loot curve; the result spawns as crates up to Max Crates Per Crash, with any overflow going into extra items per crate.")]
 	[Header("Crash Config")]
+	[Tooltip("Loot budget at 1.0x mass scale, in crate-equivalents. Multiplied by the mass-to-loot curve; the result spawns as crates up to Max Crates Per Crash, with any overflow going into extra items per crate.")]
 	[FormerlySerializedAs("maxCratesToSpawn")]
 	public int baselineCrateSpawnCount = 6;
 
@@ -8029,8 +8826,8 @@ public class SatelliteCrash : BaseCombatEntity
 
 	public float startHeight = 200f;
 
-	[Header("Loot Scaling")]
 	[Tooltip("Maps satellite mass (kg) to the loot multiplier. The multiplier scales fireball count and the total crate loot budget (crate count up to Max Crates Per Crash, overflow into extra items per crate). Flat outside the first/last key.")]
+	[Header("Loot Scaling")]
 	public AnimationCurve massToLootScale = AnimationCurve.Linear(1000f, 0.5f, 6000f, 3f);
 
 	[Tooltip("Hard cap on crates spawned per crash, regardless of the loot multiplier. Budget beyond this goes into extra items per crate.")]
@@ -9977,8 +10774,8 @@ using UnityEngine.UI;
 
 public class SatelliteSpectatorScreenUI : MonoBehaviour
 {
-	[SerializeField]
 	[Header("Map")]
+	[SerializeField]
 	private RawImage mapImage;
 
 	[SerializeField]
@@ -10643,8 +11440,8 @@ public class Ballista : BaseSiegeWeapon
 
 	public Transform dismountPositionsParent;
 
-	[SerializeField]
 	[Header("Effects")]
+	[SerializeField]
 	private GameObjectRef fireEffectPrefab;
 
 	public override float DriveWheelVelocity { get; }
@@ -10819,8 +11616,8 @@ public class SiegeWeaponVehicleAudio : GroundVehicleAudio
 
 	public SoundDefinition reloadCompleteDef;
 
-	[Header("Rattles")]
 	[SerializeField]
+	[Header("Rattles")]
 	private SoundDefinition movementRattleLoop;
 
 	[SerializeField]
@@ -10832,8 +11629,8 @@ public class SiegeWeaponVehicleAudio : GroundVehicleAudio
 	[SerializeField]
 	private float movementRattleGainChangeSpeed = 1f;
 
-	[SerializeField]
 	[Header("Wheels")]
+	[SerializeField]
 	private SoundDefinition tyreRollingSoundDef;
 
 	[SerializeField]
@@ -11059,8 +11856,8 @@ public class CatapultSounds : GroundVehicleAudio
 
 	public SoundDefinition reloadStopDef;
 
-	[SerializeField]
 	[Header("Suspension")]
+	[SerializeField]
 	private SoundDefinition suspensionDef;
 
 	[SerializeField]
@@ -11085,8 +11882,8 @@ public class CatapultSounds : GroundVehicleAudio
 	[SerializeField]
 	private AnimationCurve tireGainCurve;
 
-	[Header("Movement")]
 	[SerializeField]
+	[Header("Movement")]
 	private SoundDefinition movementLoopDef;
 
 	[SerializeField]
@@ -11112,8 +11909,8 @@ public class ConstructableEntity : StorageContainer
 
 	private int[] currentMaterials;
 
-	[Tooltip("Fewest hammer hits this can be finished in.")]
 	[Min(1f)]
+	[Tooltip("Fewest hammer hits this can be finished in.")]
 	public int hitsToComplete = 10;
 
 	public GameObjectRef entityToSpawn;
@@ -13680,8 +14477,8 @@ using UnityEngine;
 
 public class BicycleAudio : BikeVehicleAudio
 {
-	[Header("Bicycle")]
 	[SerializeField]
+	[Header("Bicycle")]
 	private SoundDefinition pedalActiveSoundDef;
 
 	[SerializeField]
@@ -13932,8 +14729,8 @@ public class BikeVehicleAudio : GroundVehicleAudio
 	[SerializeField]
 	private float suspensionMinTimeBetweenSounds = 0.25f;
 
-	[SerializeField]
 	[Header("Tires")]
+	[SerializeField]
 	private SoundDefinition tireDirtSoundDef;
 
 	[SerializeField]
@@ -13948,8 +14745,8 @@ public class BikeVehicleAudio : GroundVehicleAudio
 	[SerializeField]
 	private AnimationCurve tireGainCurve;
 
-	[Header("Skid")]
 	[SerializeField]
+	[Header("Skid")]
 	private SoundDefinition skidSoundLoop;
 
 	[SerializeField]
@@ -14114,8 +14911,8 @@ public class BaseBoat : BaseVehicle
 
 	private static string OceanPatrolPathCacheFilePath => string.Format("{0}/{1}_oceanpatrol_{2}.dat", ConVar.Server.rootFolder, World.MapFileName.Replace(".map", ""), 1);
 
-	[Help("Seconds until boat starts drifting to shore if there's nobody around")]
 	[ServerVar]
+	[Help("Seconds until boat starts drifting to shore if there's nobody around")]
 	public static int seconds_until_shore_drift(Arg arg)
 	{
 		secondsUntilShoreDrift = arg.GetInt(0, secondsUntilShoreDrift);
@@ -14123,8 +14920,8 @@ public class BaseBoat : BaseVehicle
 		return secondsUntilShoreDrift;
 	}
 
-	[Help("Seconds between shore drift teleport ticks")]
 	[ServerVar]
+	[Help("Seconds between shore drift teleport ticks")]
 	public static int seconds_between_shore_drift(Arg arg)
 	{
 		secondsBetweenShoreDrift = arg.GetInt(0, secondsBetweenShoreDrift);
@@ -14997,9 +15794,9 @@ public class Buoyancy : ListComponent<Buoyancy>, IServerComponent, IPrefabPrePro
 	[Range(0f, 3f)]
 	public float underwaterDrag = 2f;
 
-	[Range(0f, 1f)]
 	[Tooltip("How much this object will pay attention to the wave system, 0 = flat water, 1 = full waves (default 1)")]
 	[FormerlySerializedAs("flatWaterLerp")]
+	[Range(0f, 1f)]
 	public float wavesEffect = 1f;
 
 	public Action<bool> SubmergedChanged;
@@ -15011,8 +15808,8 @@ public class Buoyancy : ListComponent<Buoyancy>, IServerComponent, IPrefabPrePro
 
 	public bool FlowForceDisabled;
 
-	[SerializeField]
 	[ReadOnly]
+	[SerializeField]
 	private BuoyancyPointData[] pointData;
 
 	private bool initedPointArrays;
@@ -16114,9 +16911,9 @@ using UnityEngine;
 public class BuoyancyBurstUtility
 {
 	[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-	internal delegate void FillPointData_00005F43$PostfixBurstDelegate(in int pointIndexOffset, ref NativeArray<Vector2> pointPositionArray, ref NativeArray<Vector2> pointPositionUVArray, in Matrix4x4 rootToWorld, ref NativeArray<Buoyancy.BuoyancyPointData> pointData, in Bounds deepSeaBounds, in Vector3 terrainPosition, in Vector3 terrainOneOverSize, in bool isDeepSea, ref NativeArray<Vector3> allPositions3D, out int pointCount);
+	internal delegate void FillPointData_00005F7C$PostfixBurstDelegate(in int pointIndexOffset, ref NativeArray<Vector2> pointPositionArray, ref NativeArray<Vector2> pointPositionUVArray, in Matrix4x4 rootToWorld, ref NativeArray<Buoyancy.BuoyancyPointData> pointData, in Bounds deepSeaBounds, in Vector3 terrainPosition, in Vector3 terrainOneOverSize, in bool isDeepSea, ref NativeArray<Vector3> allPositions3D, out int pointCount);
 
-	internal static class FillPointData_00005F43$BurstDirectCall
+	internal static class FillPointData_00005F7C$BurstDirectCall
 	{
 		private static IntPtr Pointer;
 
@@ -16127,7 +16924,7 @@ public class BuoyancyBurstUtility
 			//IL_001b: Unknown result type (might be due to invalid IL or missing references)
 			if (Pointer == (IntPtr)0)
 			{
-				Pointer = BurstCompiler.CompileFunctionPointer<FillPointData_00005F43$PostfixBurstDelegate>((FillPointData_00005F43$PostfixBurstDelegate)FillPointData).Value;
+				Pointer = BurstCompiler.CompileFunctionPointer<FillPointData_00005F7C$PostfixBurstDelegate>((FillPointData_00005F7C$PostfixBurstDelegate)FillPointData).Value;
 			}
 			P_0 = Pointer;
 		}
@@ -16154,11 +16951,11 @@ public class BuoyancyBurstUtility
 		}
 	}
 
-	[MonoPInvokeCallback(typeof(FillPointData_00005F43$PostfixBurstDelegate))]
 	[BurstCompile]
+	[MonoPInvokeCallback(typeof(FillPointData_00005F7C$PostfixBurstDelegate))]
 	public static void FillPointData(in int pointIndexOffset, ref NativeArray<Vector2> pointPositionArray, ref NativeArray<Vector2> pointPositionUVArray, in Matrix4x4 rootToWorld, ref NativeArray<Buoyancy.BuoyancyPointData> pointData, in Bounds deepSeaBounds, in Vector3 terrainPosition, in Vector3 terrainOneOverSize, in bool isDeepSea, ref NativeArray<Vector3> allPositions3D, out int pointCount)
 	{
-		FillPointData_00005F43$BurstDirectCall.Invoke(in pointIndexOffset, ref pointPositionArray, ref pointPositionUVArray, in rootToWorld, ref pointData, in deepSeaBounds, in terrainPosition, in terrainOneOverSize, in isDeepSea, ref allPositions3D, out pointCount);
+		FillPointData_00005F7C$BurstDirectCall.Invoke(in pointIndexOffset, ref pointPositionArray, ref pointPositionUVArray, in rootToWorld, ref pointData, in deepSeaBounds, in terrainPosition, in terrainOneOverSize, in isDeepSea, ref allPositions3D, out pointCount);
 	}
 
 	[MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -16218,7 +17015,7 @@ using Unity.Collections;
 using UnityEngine;
 
 [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-internal delegate void FillPointData_00005F43$PostfixBurstDelegate(in int pointIndexOffset, ref NativeArray<Vector2> pointPositionArray, ref NativeArray<Vector2> pointPositionUVArray, in Matrix4x4 rootToWorld, ref NativeArray<Buoyancy.BuoyancyPointData> pointData, in Bounds deepSeaBounds, in Vector3 terrainPosition, in Vector3 terrainOneOverSize, in bool isDeepSea, ref NativeArray<Vector3> allPositions3D, out int pointCount);
+internal delegate void FillPointData_00005F7C$PostfixBurstDelegate(in int pointIndexOffset, ref NativeArray<Vector2> pointPositionArray, ref NativeArray<Vector2> pointPositionUVArray, in Matrix4x4 rootToWorld, ref NativeArray<Buoyancy.BuoyancyPointData> pointData, in Bounds deepSeaBounds, in Vector3 terrainPosition, in Vector3 terrainOneOverSize, in bool isDeepSea, ref NativeArray<Vector3> allPositions3D, out int pointCount);
 
 
 using System;
@@ -16226,7 +17023,7 @@ using Unity.Burst;
 using Unity.Collections;
 using UnityEngine;
 
-internal static class FillPointData_00005F43$BurstDirectCall
+internal static class FillPointData_00005F7C$BurstDirectCall
 {
 	private static IntPtr Pointer;
 
@@ -16237,7 +17034,7 @@ internal static class FillPointData_00005F43$BurstDirectCall
 		//IL_001b: Unknown result type (might be due to invalid IL or missing references)
 		if (Pointer == (IntPtr)0)
 		{
-			Pointer = BurstCompiler.CompileFunctionPointer<FillPointData_00005F43$PostfixBurstDelegate>((FillPointData_00005F43$PostfixBurstDelegate)FillPointData).Value;
+			Pointer = BurstCompiler.CompileFunctionPointer<FillPointData_00005F7C$PostfixBurstDelegate>((FillPointData_00005F7C$PostfixBurstDelegate)FillPointData).Value;
 		}
 		P_0 = Pointer;
 	}
@@ -16308,9 +17105,9 @@ public static class BuoyancyForceAccumulationBurst
 	}
 
 	[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-	internal delegate void Compute_00005F45$PostfixBurstDelegate(in NativeArray<InstanceInput> instances, in NativeArray<float3> allPositions3D, in NativeArray<float> pointShoreDistance, in NativeArray<WaterLevel.WaterInfo> pointWaterInfo, in NativeArray<float> pointSize, in NativeArray<float> pointBuoyancyForce, in NativeArray<float> pointRandomOffset, in NativeArray<float> pointWaveFrequency, in NativeArray<float> pointWaveScale, in NativeArray<float3> pointFlowDirection, float time, ref NativeArray<InstanceOutput> results);
+	internal delegate void Compute_00005F7E$PostfixBurstDelegate(in NativeArray<InstanceInput> instances, in NativeArray<float3> allPositions3D, in NativeArray<float> pointShoreDistance, in NativeArray<WaterLevel.WaterInfo> pointWaterInfo, in NativeArray<float> pointSize, in NativeArray<float> pointBuoyancyForce, in NativeArray<float> pointRandomOffset, in NativeArray<float> pointWaveFrequency, in NativeArray<float> pointWaveScale, in NativeArray<float3> pointFlowDirection, float time, ref NativeArray<InstanceOutput> results);
 
-	internal static class Compute_00005F45$BurstDirectCall
+	internal static class Compute_00005F7E$BurstDirectCall
 	{
 		private static IntPtr Pointer;
 
@@ -16321,7 +17118,7 @@ public static class BuoyancyForceAccumulationBurst
 			//IL_001b: Unknown result type (might be due to invalid IL or missing references)
 			if (Pointer == (IntPtr)0)
 			{
-				Pointer = BurstCompiler.CompileFunctionPointer<Compute_00005F45$PostfixBurstDelegate>((Compute_00005F45$PostfixBurstDelegate)Compute).Value;
+				Pointer = BurstCompiler.CompileFunctionPointer<Compute_00005F7E$PostfixBurstDelegate>((Compute_00005F7E$PostfixBurstDelegate)Compute).Value;
 			}
 			P_0 = Pointer;
 		}
@@ -16348,11 +17145,11 @@ public static class BuoyancyForceAccumulationBurst
 		}
 	}
 
-	[MonoPInvokeCallback(typeof(Compute_00005F45$PostfixBurstDelegate))]
 	[BurstCompile]
+	[MonoPInvokeCallback(typeof(Compute_00005F7E$PostfixBurstDelegate))]
 	public static void Compute(in NativeArray<InstanceInput> instances, in NativeArray<float3> allPositions3D, in NativeArray<float> pointShoreDistance, in NativeArray<WaterLevel.WaterInfo> pointWaterInfo, in NativeArray<float> pointSize, in NativeArray<float> pointBuoyancyForce, in NativeArray<float> pointRandomOffset, in NativeArray<float> pointWaveFrequency, in NativeArray<float> pointWaveScale, in NativeArray<float3> pointFlowDirection, float time, ref NativeArray<InstanceOutput> results)
 	{
-		Compute_00005F45$BurstDirectCall.Invoke(in instances, in allPositions3D, in pointShoreDistance, in pointWaterInfo, in pointSize, in pointBuoyancyForce, in pointRandomOffset, in pointWaveFrequency, in pointWaveScale, in pointFlowDirection, time, ref results);
+		Compute_00005F7E$BurstDirectCall.Invoke(in instances, in allPositions3D, in pointShoreDistance, in pointWaterInfo, in pointSize, in pointBuoyancyForce, in pointRandomOffset, in pointWaveFrequency, in pointWaveScale, in pointFlowDirection, time, ref results);
 	}
 
 	[MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -16527,7 +17324,7 @@ using Unity.Collections;
 using Unity.Mathematics;
 
 [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-internal delegate void Compute_00005F45$PostfixBurstDelegate(in NativeArray<InstanceInput> instances, in NativeArray<float3> allPositions3D, in NativeArray<float> pointShoreDistance, in NativeArray<WaterLevel.WaterInfo> pointWaterInfo, in NativeArray<float> pointSize, in NativeArray<float> pointBuoyancyForce, in NativeArray<float> pointRandomOffset, in NativeArray<float> pointWaveFrequency, in NativeArray<float> pointWaveScale, in NativeArray<float3> pointFlowDirection, float time, ref NativeArray<InstanceOutput> results);
+internal delegate void Compute_00005F7E$PostfixBurstDelegate(in NativeArray<InstanceInput> instances, in NativeArray<float3> allPositions3D, in NativeArray<float> pointShoreDistance, in NativeArray<WaterLevel.WaterInfo> pointWaterInfo, in NativeArray<float> pointSize, in NativeArray<float> pointBuoyancyForce, in NativeArray<float> pointRandomOffset, in NativeArray<float> pointWaveFrequency, in NativeArray<float> pointWaveScale, in NativeArray<float3> pointFlowDirection, float time, ref NativeArray<InstanceOutput> results);
 
 
 using System;
@@ -16535,7 +17332,7 @@ using Unity.Burst;
 using Unity.Collections;
 using Unity.Mathematics;
 
-internal static class Compute_00005F45$BurstDirectCall
+internal static class Compute_00005F7E$BurstDirectCall
 {
 	private static IntPtr Pointer;
 
@@ -16546,7 +17343,7 @@ internal static class Compute_00005F45$BurstDirectCall
 		//IL_001b: Unknown result type (might be due to invalid IL or missing references)
 		if (Pointer == (IntPtr)0)
 		{
-			Pointer = BurstCompiler.CompileFunctionPointer<Compute_00005F45$PostfixBurstDelegate>((Compute_00005F45$PostfixBurstDelegate)Compute).Value;
+			Pointer = BurstCompiler.CompileFunctionPointer<Compute_00005F7E$PostfixBurstDelegate>((Compute_00005F7E$PostfixBurstDelegate)Compute).Value;
 		}
 		P_0 = Pointer;
 	}
@@ -16848,8 +17645,8 @@ public class TugboatSounds : MonoBehaviour, IClientComponent
 
 	private float soundCullDistanceSq;
 
-	[Header("Engine")]
 	[SerializeField]
+	[Header("Engine")]
 	private SoundDefinition engineLoopDef;
 
 	private Sound engineLoop;
@@ -16931,8 +17728,8 @@ public class TugboatSounds : MonoBehaviour, IClientComponent
 	[SerializeField]
 	private Vector3 sideSoundLineBow;
 
-	[SerializeField]
 	[Header("Ambient")]
+	[SerializeField]
 	private SoundDefinition ambientActiveLoopDef;
 
 	private Sound ambientActiveSound;
@@ -16969,19 +17766,19 @@ public class TugboatSounds : MonoBehaviour, IClientComponent
 	[SerializeField]
 	private SoundDefinition hornStop;
 
-	[Min(0f)]
 	[Tooltip("The maximum amount of time a looped horn can last. If 0s then this is ignored.")]
 	[SerializeField]
+	[Min(0f)]
 	private float maxHornTime;
 
+	[Min(0f)]
 	[SerializeField]
 	[Tooltip("Used for rate limiting. This defines the maximum number of horn spams that can be invoked one after another.")]
-	[Min(0f)]
 	private int hornTokenCapacity = 3;
 
 	[SerializeField]
-	[Min(0f)]
 	[Tooltip("Used for rate limiting. This defines how quickly a new token regenerates, permitting another horn honk.")]
+	[Min(0f)]
 	private float hornTokenRegenerationTime = 1f;
 
 	private Line leftSoundLine;
@@ -17003,8 +17800,8 @@ using UnityEngine;
 [Serializable]
 public class CarSettings
 {
-	[Header("Vehicle Setup")]
 	[Range(0f, 1f)]
+	[Header("Vehicle Setup")]
 	public float rollingResistance = 0.05f;
 
 	[Range(0f, 1f)]
@@ -17064,8 +17861,8 @@ public class CarSettings
 	[Range(0.01f, 1f)]
 	public float handbrakeGripMultiplier = 0.55f;
 
-	[Header("Drift")]
 	[Range(0.01f, 1f)]
+	[Header("Drift")]
 	public float rearTraction = 0.7f;
 
 	[Range(0.01f, 1f)]
@@ -17075,8 +17872,8 @@ public class CarSettings
 
 	public float driftRecoverySpeed = 20f;
 
-	[Range(0f, 1f)]
 	[Header("Front/Rear Vehicle Balance")]
+	[Range(0f, 1f)]
 	public float handlingBias = 0.5f;
 }
 
@@ -18342,8 +19139,8 @@ public class DiverPropulsionVehicleAudio : MonoBehaviour
 	[SerializeField]
 	private SoundDefinition engineActiveLoopDef;
 
-	[SerializeField]
 	[Header("Propeller")]
+	[SerializeField]
 	private SoundDefinition propellerLoopSoundDef;
 
 	[SerializeField]
@@ -18740,8 +19537,8 @@ public abstract class GroundVehicleAudio : MonoBehaviour, IClientComponent
 	[SerializeField]
 	private float overallVolume = 1f;
 
-	[SerializeField]
 	[Header("Water")]
+	[SerializeField]
 	private SoundDefinition waterSplashSoundDef;
 
 	[SerializeField]
@@ -18750,8 +19547,8 @@ public abstract class GroundVehicleAudio : MonoBehaviour, IClientComponent
 	[SerializeField]
 	private float waterSoundsMaxSpeed = 10f;
 
-	[SerializeField]
 	[Header("Brakes")]
+	[SerializeField]
 	private SoundDefinition brakeSoundDef;
 
 	[SerializeField]
@@ -18760,8 +19557,8 @@ public abstract class GroundVehicleAudio : MonoBehaviour, IClientComponent
 	[SerializeField]
 	private SoundDefinition brakeStopSoundDef;
 
-	[SerializeField]
 	[Header("Lights")]
+	[SerializeField]
 	protected SoundDefinition lightsToggleSound;
 }
 
@@ -19249,8 +20046,8 @@ public abstract class BaseHelicopter : BaseVehicle, SeekerTarget.ISeekerTargetOw
 		}
 	}
 
-	[Header("Helicopter")]
 	[SerializeField]
+	[Header("Helicopter")]
 	public float engineThrustMax;
 
 	[SerializeField]
@@ -19277,8 +20074,8 @@ public abstract class BaseHelicopter : BaseVehicle, SeekerTarget.ISeekerTargetOw
 	[SerializeField]
 	public GameObjectRef crashEffect;
 
-	[Tooltip("Lower values mean more lift is produced at high angles.")]
 	[SerializeField]
+	[Tooltip("Lower values mean more lift is produced at high angles.")]
 	[Range(0.1f, 0.95f)]
 	public float liftDotMax = 0.75f;
 
@@ -22412,8 +23209,8 @@ public class Minicopter : PlayerHelicopterWithFlares
 	[ServerVar(Help = "Population active on the server", ShowInAdminUI = true)]
 	public static float population;
 
-	[Header(" Minicopter Specific ")]
 	[SerializeField]
+	[Header(" Minicopter Specific ")]
 	private ParticleSystemContainer fxMediumDamage;
 
 	[SerializeField]
@@ -22588,8 +23385,8 @@ using UnityEngine;
 
 public class ScrapTransportHelicopter : PlayerHelicopterWithFlares, TriggerHurtNotChild.IHurtTriggerUser
 {
-	[Header("Scrap Transport Helicopter Specific")]
 	[SerializeField]
+	[Header("Scrap Transport Helicopter Specific")]
 	private Transform searchlightEye;
 
 	[SerializeField]
@@ -23186,8 +23983,8 @@ public class RidableHorseAnimation : EntityComponent<RidableHorse>, IClientCompo
 	[SerializeField]
 	public LegsAnimator legsAnimator;
 
-	[SerializeField]
 	[Space]
+	[SerializeField]
 	private Transform backHipTransform;
 
 	[SerializeField]
@@ -23220,9 +24017,9 @@ public class RidableHorseAnimation : EntityComponent<RidableHorse>, IClientCompo
 
 	public Vector3 headLookOffset = Vector3.zero;
 
-	[Header("Spine")]
-	[Range(0f, 1f)]
 	[SerializeField]
+	[Range(0f, 1f)]
+	[Header("Spine")]
 	private float spineBlend = 0.5f;
 
 	[ReadOnly]
@@ -23234,24 +24031,24 @@ public class RidableHorseAnimation : EntityComponent<RidableHorse>, IClientCompo
 
 	public float spineYawInertiaFactor = 150f;
 
-	[SerializeField]
 	[ReadOnly]
+	[SerializeField]
 	private Quaternion[] targetNeckRotations;
 
-	[ReadOnly]
 	[SerializeField]
+	[ReadOnly]
 	private Quaternion[] targetSpineRotations;
 
-	[SerializeField]
 	[ReadOnly]
+	[SerializeField]
 	private Vector3[] localSpinePositions;
 
-	[ReadOnly]
 	[SerializeField]
+	[ReadOnly]
 	private Vector3 originalHipPosition;
 
-	[ReadOnly]
 	[SerializeField]
+	[ReadOnly]
 	private Quaternion originalHipRotation;
 
 	public Vector3 spineOffset;
@@ -23305,8 +24102,8 @@ public class RidableHorseAudio : FacepunchBehaviour, IClientComponent
 	[SerializeField]
 	private string BaseFolder;
 
-	[SerializeField]
 	[Space]
+	[SerializeField]
 	private SoundDefinition skidLoopSoundDef;
 
 	[SerializeField]
@@ -24262,8 +25059,8 @@ public abstract class BaseModularVehicle : GroundVehicle, PlayerInventory.ICanMo
 
 	private bool disablePhysics;
 
-	[SerializeField]
 	[Header("Modular Vehicle")]
+	[SerializeField]
 	public List<ModularVehicleSocket> moduleSockets;
 
 	[SerializeField]
@@ -26158,8 +26955,8 @@ public class NPCMountable : EntityComponent<BaseEntity>
 		public int[] overlaps;
 	}
 
-	[Tooltip("An NPC takes the nearest free one.")]
 	[Header("NPC Mountable")]
+	[Tooltip("An NPC takes the nearest free one.")]
 	public NPCMountAnchor[] anchors;
 
 	[Tooltip("Where NPCs are put down when they get off. Same name and meaning as BaseMountable's.")]
@@ -27017,8 +27814,8 @@ using UnityEngine;
 
 public class PTBoatTurret : BaseMountedUseable
 {
-	[Header("Mounted Weapon")]
 	[SerializeField]
+	[Header("Mounted Weapon")]
 	private ItemDefinition[] weapons;
 
 	[SerializeField]
@@ -27937,12 +28734,12 @@ using UnityEngine;
 
 public class SnowmobileAudio : GroundVehicleAudio
 {
-	[SerializeField]
 	[Header("Engine")]
+	[SerializeField]
 	private EngineAudioSet engineAudioSet;
 
-	[SerializeField]
 	[Header("Skis")]
+	[SerializeField]
 	private AnimationCurve skiGainCurve;
 
 	[SerializeField]
@@ -27960,8 +28757,8 @@ public class SnowmobileAudio : GroundVehicleAudio
 	[SerializeField]
 	private SoundDefinition skiSlideWaterSoundDef;
 
-	[Header("Movement")]
 	[SerializeField]
+	[Header("Movement")]
 	private AnimationCurve movementGainCurve;
 
 	[SerializeField]
@@ -28057,8 +28854,8 @@ using UnityEngine;
 
 public class SoccerBall : BaseCombatEntity
 {
-	[SerializeField]
 	[Header("Soccer Ball")]
+	[SerializeField]
 	private Rigidbody rigidBody;
 
 	[SerializeField]
@@ -28374,8 +29171,8 @@ using UnityEngine;
 
 public class SubmarineAudio : MonoBehaviour
 {
-	[SerializeField]
 	[Header("Engine")]
+	[SerializeField]
 	private SoundDefinition engineStartSound;
 
 	[SerializeField]
@@ -28390,8 +29187,8 @@ public class SubmarineAudio : MonoBehaviour
 	[SerializeField]
 	private AnimationCurve engineLoopPitchCurve;
 
-	[SerializeField]
 	[Header("Water")]
+	[SerializeField]
 	private SoundDefinition underwaterLoopDef;
 
 	[SerializeField]
@@ -30733,8 +31530,8 @@ public class LocomotiveExtraVisuals : MonoBehaviour
 	[SerializeField]
 	private float speedoMax = 80f;
 
-	[Header("Fans")]
 	[SerializeField]
+	[Header("Fans")]
 	private Transform[] engineFans;
 }
 
@@ -30763,8 +31560,8 @@ using UnityEngine;
 
 public class TrainCarAudio : MonoBehaviour
 {
-	[Header("Train Car Audio")]
 	[SerializeField]
+	[Header("Train Car Audio")]
 	private TrainCar trainCar;
 
 	[SerializeField]
@@ -30805,607 +31602,6 @@ public class TrainCarAudio : MonoBehaviour
 	private SoundModulation.Modulator trackClatterGain;
 
 	private SoundModulation.Modulator trackClatterPitch;
-}
-
-
-using System;
-using UnityEngine;
-
-public class TrainCarFuelHatches : MonoBehaviour
-{
-	[SerializeField]
-	private TrainCar owner;
-
-	[SerializeField]
-	private float animSpeed = 1f;
-
-	[SerializeField]
-	private Transform hatch1Col;
-
-	[SerializeField]
-	private Transform hatch1Vis;
-
-	[SerializeField]
-	private Transform hatch2Col;
-
-	[SerializeField]
-	private Transform hatch2Vis;
-
-	[SerializeField]
-	private Transform hatch3Col;
-
-	[SerializeField]
-	private Transform hatch3Vis;
-
-	private const float closedXAngle = 0f;
-
-	private const float openXAngle = -145f;
-
-	[SerializeField]
-	private SoundDefinition hatchOpenSoundDef;
-
-	[SerializeField]
-	private SoundDefinition hatchCloseSoundDef;
-
-	private Vector3 _angles = Vector3.zero;
-
-	private float _hatchLerp;
-
-	private bool opening;
-
-	private bool openingQueued;
-
-	private bool isMoving;
-
-	public void LinedUpStateChanged(bool linedUp)
-	{
-		openingQueued = linedUp;
-		if (!isMoving)
-		{
-			opening = linedUp;
-			_ = opening;
-			isMoving = true;
-			InvokeHandler.InvokeRepeating((Behaviour)(object)this, (Action)MoveTick, 0f, 0f);
-		}
-	}
-
-	private void MoveTick()
-	{
-		if (opening)
-		{
-			_hatchLerp += Time.deltaTime * animSpeed;
-			if (_hatchLerp >= 1f)
-			{
-				EndMove();
-			}
-			else
-			{
-				SetAngleOnAll(_hatchLerp, closing: false);
-			}
-		}
-		else
-		{
-			_hatchLerp += Time.deltaTime * animSpeed;
-			if (_hatchLerp >= 1f)
-			{
-				EndMove();
-			}
-			else
-			{
-				SetAngleOnAll(_hatchLerp, closing: true);
-			}
-		}
-	}
-
-	private void EndMove()
-	{
-		_hatchLerp = 0f;
-		if (openingQueued == opening)
-		{
-			InvokeHandler.CancelInvoke((Behaviour)(object)this, (Action)MoveTick);
-			isMoving = false;
-		}
-		else
-		{
-			opening = openingQueued;
-		}
-	}
-
-	private void SetAngleOnAll(float lerpT, bool closing)
-	{
-		float angle;
-		float angle2;
-		float angle3;
-		if (closing)
-		{
-			angle = LeanTween.easeOutBounce(-145f, 0f, Mathf.Clamp01(_hatchLerp * 1.15f));
-			angle2 = LeanTween.easeOutBounce(-145f, 0f, _hatchLerp);
-			angle3 = LeanTween.easeOutBounce(-145f, 0f, Mathf.Clamp01(_hatchLerp * 1.25f));
-		}
-		else
-		{
-			angle = LeanTween.easeOutBounce(0f, -145f, Mathf.Clamp01(_hatchLerp * 1.15f));
-			angle2 = LeanTween.easeOutBounce(0f, -145f, _hatchLerp);
-			angle3 = LeanTween.easeOutBounce(0f, -145f, Mathf.Clamp01(_hatchLerp * 1.25f));
-		}
-		SetAngle(hatch1Col, angle);
-		SetAngle(hatch2Col, angle2);
-		SetAngle(hatch3Col, angle3);
-	}
-
-	private void SetAngle(Transform transform, float angle)
-	{
-		//IL_000e: Unknown result type (might be due to invalid IL or missing references)
-		_angles.x = angle;
-		transform.localEulerAngles = _angles;
-	}
-}
-
-
-using System;
-using Rust;
-using UnityEngine;
-
-public class TrainCarUnloadableLoot : TrainCarUnloadable
-{
-	[Serializable]
-	public class LootCrateSet
-	{
-		public GameObjectRef[] crates;
-	}
-
-	[SerializeField]
-	private LootCrateSet[] lootLayouts;
-
-	[SerializeField]
-	private Transform[] lootPositions;
-
-	public override void Spawn()
-	{
-		//IL_0051: Unknown result type (might be due to invalid IL or missing references)
-		//IL_005e: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00ae: Unknown result type (might be due to invalid IL or missing references)
-		base.Spawn();
-		bool flag = false;
-		if (Application.isLoadingSave || flag)
-		{
-			return;
-		}
-		int num = Random.Range(0, lootLayouts.Length);
-		for (int i = 0; i < lootLayouts[num].crates.Length; i++)
-		{
-			GameObjectRef gameObjectRef = lootLayouts[num].crates[i];
-			LootContainer lootContainer = GameManager.server.CreateEntity(gameObjectRef.resourcePath, lootPositions[i].localPosition, lootPositions[i].localRotation) as LootContainer;
-			if ((Object)(object)lootContainer != (Object)null)
-			{
-				lootContainer.Spawn();
-				lootContainer.SetParent(this);
-				lootContainer.inventory.SetLocked(!IsEmpty());
-				lootContainers.Add(new EntityRef<LootContainer>(lootContainer.net.ID));
-			}
-		}
-	}
-}
-
-
-using System;
-
-[Serializable]
-public class LootCrateSet
-{
-	public GameObjectRef[] crates;
-}
-
-
-using Oxide.Core;
-using UnityEngine;
-
-public class TrainCoupling
-{
-	public readonly TrainCar owner;
-
-	public readonly bool isFrontCoupling;
-
-	public readonly TrainCouplingController controller;
-
-	public readonly Transform couplingPoint;
-
-	public readonly Transform couplingPivot;
-
-	public readonly BaseEntity.Flags flag;
-
-	public readonly bool isValid;
-
-	public TimeSince timeSinceCouplingBlock;
-
-	public bool IsCoupled => owner.HasFlag(flag);
-
-	public bool IsUncoupled => !owner.HasFlag(flag);
-
-	public TrainCoupling CoupledTo { get; private set; }
-
-	public TrainCoupling(TrainCar owner, bool isFrontCoupling, TrainCouplingController controller)
-		: this(owner, isFrontCoupling, controller, null, null, BaseEntity.Flags.Placeholder)
-	{
-	}
-
-	public TrainCoupling(TrainCar owner, bool isFrontCoupling, TrainCouplingController controller, Transform couplingPoint, Transform couplingPivot, BaseEntity.Flags flag)
-	{
-		this.owner = owner;
-		this.isFrontCoupling = isFrontCoupling;
-		this.controller = controller;
-		this.couplingPoint = couplingPoint;
-		this.couplingPivot = couplingPivot;
-		this.flag = flag;
-		isValid = (Object)(object)couplingPoint != (Object)null;
-	}
-
-	public bool IsCoupledTo(TrainCar them)
-	{
-		if (CoupledTo != null)
-		{
-			return (Object)(object)CoupledTo.owner == (Object)(object)them;
-		}
-		return false;
-	}
-
-	public bool IsCoupledTo(TrainCoupling them)
-	{
-		if (CoupledTo != null)
-		{
-			return CoupledTo == them;
-		}
-		return false;
-	}
-
-	public bool TryCouple(TrainCoupling theirCoupling, bool reflect)
-	{
-		if (!isValid)
-		{
-			return false;
-		}
-		if (CoupledTo == theirCoupling)
-		{
-			return true;
-		}
-		if (IsCoupled)
-		{
-			return false;
-		}
-		object obj = Interface.CallHook("CanTrainCarCouple", (object)owner, (object)theirCoupling.owner);
-		if (obj is bool)
-		{
-			return (bool)obj;
-		}
-		if (reflect && !theirCoupling.TryCouple(this, reflect: false))
-		{
-			return false;
-		}
-		CoupledTo = theirCoupling;
-		owner.SetFlagLocal(flag, b: true);
-		owner.SendNetworkUpdate();
-		return true;
-	}
-
-	public void Uncouple(bool reflect)
-	{
-		//IL_004c: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0051: Unknown result type (might be due to invalid IL or missing references)
-		if (!IsUncoupled)
-		{
-			if (reflect && CoupledTo != null)
-			{
-				CoupledTo.Uncouple(reflect: false);
-			}
-			CoupledTo = null;
-			owner.SetFlagLocal(flag, b: false);
-			owner.SendNetworkUpdate();
-			timeSinceCouplingBlock = TimeSince.op_Implicit(0f);
-		}
-	}
-
-	public TrainCoupling GetOppositeCoupling()
-	{
-		if (!isFrontCoupling)
-		{
-			return controller.frontCoupling;
-		}
-		return controller.rearCoupling;
-	}
-
-	public bool TryGetCoupledToID(out NetworkableId id)
-	{
-		//IL_004b: Unknown result type (might be due to invalid IL or missing references)
-		//IL_003e: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0043: Unknown result type (might be due to invalid IL or missing references)
-		if (CoupledTo != null && (Object)(object)CoupledTo.owner != (Object)null && CoupledTo.owner.IsValid())
-		{
-			id = CoupledTo.owner.net.ID;
-			return true;
-		}
-		id = default(NetworkableId);
-		return false;
-	}
-}
-
-
-using System.Collections.Generic;
-using UnityEngine;
-
-public class TrainCouplingController
-{
-	public const BaseEntity.Flags Flag_CouplingFront = BaseEntity.Flags.Reserved2;
-
-	public const BaseEntity.Flags Flag_CouplingRear = BaseEntity.Flags.Reserved3;
-
-	public readonly TrainCoupling frontCoupling;
-
-	public readonly TrainCoupling rearCoupling;
-
-	private readonly TrainCar owner;
-
-	[ServerVar(Help = "Maximum difference in velocity for train cars to couple")]
-	public static float max_couple_speed = 9f;
-
-	public bool IsCoupled
-	{
-		get
-		{
-			if (!IsFrontCoupled)
-			{
-				return IsRearCoupled;
-			}
-			return true;
-		}
-	}
-
-	public bool IsFrontCoupled => owner.HasFlag(BaseEntity.Flags.Reserved2);
-
-	public bool IsRearCoupled => owner.HasFlag(BaseEntity.Flags.Reserved3);
-
-	public TrainCouplingController(TrainCar owner)
-	{
-		this.owner = owner;
-		frontCoupling = new TrainCoupling(owner, isFrontCoupling: true, this, owner.frontCoupling, owner.frontCouplingPivot, BaseEntity.Flags.Reserved2);
-		rearCoupling = new TrainCoupling(owner, isFrontCoupling: false, this, owner.rearCoupling, owner.rearCouplingPivot, BaseEntity.Flags.Reserved3);
-	}
-
-	public bool IsCoupledTo(TrainCar them)
-	{
-		if (!frontCoupling.IsCoupledTo(them))
-		{
-			return rearCoupling.IsCoupledTo(them);
-		}
-		return true;
-	}
-
-	public bool TryCouple(TrainCar them, TriggerTrainCollisions.Location ourLocation)
-	{
-		//IL_0027: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0055: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0060: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00ed: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00f2: Unknown result type (might be due to invalid IL or missing references)
-		//IL_00fd: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0102: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0119: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0124: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0129: Unknown result type (might be due to invalid IL or missing references)
-		TrainCoupling trainCoupling = ((ourLocation == TriggerTrainCollisions.Location.Front) ? frontCoupling : rearCoupling);
-		if (!trainCoupling.isValid)
-		{
-			return false;
-		}
-		if (trainCoupling.IsCoupled)
-		{
-			return false;
-		}
-		if (TimeSince.op_Implicit(trainCoupling.timeSinceCouplingBlock) < 1.5f)
-		{
-			return false;
-		}
-		if ((Object)(object)them == (Object)(object)owner)
-		{
-			return false;
-		}
-		float num = Vector3.Angle(((Component)owner).transform.forward, ((Component)them).transform.forward);
-		if (num > 25f && num < 155f)
-		{
-			return false;
-		}
-		bool num2 = num < 90f;
-		TrainCoupling trainCoupling2 = ((!num2) ? ((ourLocation == TriggerTrainCollisions.Location.Front) ? them.coupling.frontCoupling : them.coupling.rearCoupling) : ((ourLocation == TriggerTrainCollisions.Location.Front) ? them.coupling.rearCoupling : them.coupling.frontCoupling));
-		float num3 = them.GetTrackSpeed();
-		if (!num2)
-		{
-			num3 = 0f - num3;
-		}
-		if (Mathf.Abs(num3 - owner.GetTrackSpeed()) > max_couple_speed)
-		{
-			trainCoupling.timeSinceCouplingBlock = TimeSince.op_Implicit(0f);
-			trainCoupling2.timeSinceCouplingBlock = TimeSince.op_Implicit(0f);
-			return false;
-		}
-		if (!trainCoupling2.isValid)
-		{
-			return false;
-		}
-		if (Vector3.SqrMagnitude(trainCoupling.couplingPoint.position - trainCoupling2.couplingPoint.position) > 0.5f)
-		{
-			return false;
-		}
-		TrainTrackSpline frontTrackSection = owner.FrontTrackSection;
-		TrainTrackSpline frontTrackSection2 = them.FrontTrackSection;
-		if ((Object)(object)frontTrackSection2 != (Object)(object)frontTrackSection && !frontTrackSection.HasConnectedTrack(frontTrackSection2))
-		{
-			return false;
-		}
-		return trainCoupling.TryCouple(trainCoupling2, reflect: true);
-	}
-
-	public void Uncouple(bool front)
-	{
-		if (front)
-		{
-			frontCoupling.Uncouple(reflect: true);
-		}
-		else
-		{
-			rearCoupling.Uncouple(reflect: true);
-		}
-	}
-
-	public void GetAll(ref List<TrainCar> result)
-	{
-		result.Add(owner);
-		TrainCoupling coupledTo = rearCoupling.CoupledTo;
-		while (coupledTo != null && coupledTo.IsCoupled && !result.Contains(coupledTo.owner))
-		{
-			result.Insert(0, coupledTo.owner);
-			coupledTo = coupledTo.GetOppositeCoupling();
-			coupledTo = coupledTo.CoupledTo;
-		}
-		TrainCoupling coupledTo2 = frontCoupling.CoupledTo;
-		while (coupledTo2 != null && coupledTo2.IsCoupled && !result.Contains(coupledTo2.owner))
-		{
-			result.Add(coupledTo2.owner);
-			coupledTo2 = coupledTo2.GetOppositeCoupling();
-			coupledTo2 = coupledTo2.CoupledTo;
-		}
-	}
-}
-
-
-using System;
-using UnityEngine;
-
-public class TrainEngineAudio : TrainCarAudio
-{
-	[Serializable]
-	public class EngineReflection
-	{
-		public Vector3 direction;
-
-		public Vector3 offset;
-
-		public SoundDefinition soundDef;
-
-		public Sound sound;
-
-		public SoundModulation.Modulator pitchMod;
-
-		public SoundModulation.Modulator gainMod;
-
-		public float distance = 20f;
-	}
-
-	[SerializeField]
-	private TrainEngine trainEngine;
-
-	[SerializeField]
-	private Transform cockpitSoundPosition;
-
-	[SerializeField]
-	private Transform hornSoundPosition;
-
-	[Header("Engine")]
-	[SerializeField]
-	private SoundDefinition engineStartSound;
-
-	[SerializeField]
-	private SoundDefinition engineStopSound;
-
-	[SerializeField]
-	private SoundDefinition engineActiveLoopDef;
-
-	[SerializeField]
-	private AnimationCurve engineActiveLoopPitchCurve;
-
-	[SerializeField]
-	private float engineActiveLoopChangeSpeed = 0.2f;
-
-	private Sound engineActiveLoop;
-
-	private SoundModulation.Modulator engineActiveLoopPitch;
-
-	[SerializeField]
-	private BlendedLoopEngineSound engineLoops;
-
-	[SerializeField]
-	private EngineReflection[] engineReflections;
-
-	[SerializeField]
-	private LayerMask reflectionLayerMask;
-
-	[SerializeField]
-	private float reflectionMaxDistance = 20f;
-
-	[SerializeField]
-	private float reflectionGainChangeSpeed = 10f;
-
-	[SerializeField]
-	private float reflectionPositionChangeSpeed = 10f;
-
-	[SerializeField]
-	private float reflectionRayOffset = 0.5f;
-
-	[SerializeField]
-	[Header("Horn")]
-	private SoundDefinition hornLoop;
-
-	[SerializeField]
-	private SoundDefinition hornStart;
-
-	[Header("Other")]
-	[SerializeField]
-	private SoundDefinition lightsToggleSound;
-
-	[SerializeField]
-	private SoundDefinition proximityAlertDef;
-
-	private Sound proximityAlertSound;
-
-	[SerializeField]
-	private SoundDefinition damagedLoopDef;
-
-	private Sound damagedLoop;
-
-	[SerializeField]
-	private SoundDefinition changeThrottleDef;
-
-	[SerializeField]
-	private SoundDefinition changeCouplingDef;
-
-	[SerializeField]
-	private SoundDefinition unloadableStartDef;
-
-	[SerializeField]
-	private SoundDefinition unloadableEndDef;
-
-	[SerializeField]
-	private SoundPlayer brakeSound;
-}
-
-
-using System;
-using UnityEngine;
-
-[Serializable]
-public class EngineReflection
-{
-	public Vector3 direction;
-
-	public Vector3 offset;
-
-	public SoundDefinition soundDef;
-
-	public Sound sound;
-
-	public SoundModulation.Modulator pitchMod;
-
-	public SoundModulation.Modulator gainMod;
-
-	public float distance = 20f;
 }
 
 

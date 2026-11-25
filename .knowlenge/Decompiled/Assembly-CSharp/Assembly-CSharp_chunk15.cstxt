@@ -1,4 +1,605 @@
 using System;
+using UnityEngine;
+
+public class TrainCarFuelHatches : MonoBehaviour
+{
+	[SerializeField]
+	private TrainCar owner;
+
+	[SerializeField]
+	private float animSpeed = 1f;
+
+	[SerializeField]
+	private Transform hatch1Col;
+
+	[SerializeField]
+	private Transform hatch1Vis;
+
+	[SerializeField]
+	private Transform hatch2Col;
+
+	[SerializeField]
+	private Transform hatch2Vis;
+
+	[SerializeField]
+	private Transform hatch3Col;
+
+	[SerializeField]
+	private Transform hatch3Vis;
+
+	private const float closedXAngle = 0f;
+
+	private const float openXAngle = -145f;
+
+	[SerializeField]
+	private SoundDefinition hatchOpenSoundDef;
+
+	[SerializeField]
+	private SoundDefinition hatchCloseSoundDef;
+
+	private Vector3 _angles = Vector3.zero;
+
+	private float _hatchLerp;
+
+	private bool opening;
+
+	private bool openingQueued;
+
+	private bool isMoving;
+
+	public void LinedUpStateChanged(bool linedUp)
+	{
+		openingQueued = linedUp;
+		if (!isMoving)
+		{
+			opening = linedUp;
+			_ = opening;
+			isMoving = true;
+			InvokeHandler.InvokeRepeating((Behaviour)(object)this, (Action)MoveTick, 0f, 0f);
+		}
+	}
+
+	private void MoveTick()
+	{
+		if (opening)
+		{
+			_hatchLerp += Time.deltaTime * animSpeed;
+			if (_hatchLerp >= 1f)
+			{
+				EndMove();
+			}
+			else
+			{
+				SetAngleOnAll(_hatchLerp, closing: false);
+			}
+		}
+		else
+		{
+			_hatchLerp += Time.deltaTime * animSpeed;
+			if (_hatchLerp >= 1f)
+			{
+				EndMove();
+			}
+			else
+			{
+				SetAngleOnAll(_hatchLerp, closing: true);
+			}
+		}
+	}
+
+	private void EndMove()
+	{
+		_hatchLerp = 0f;
+		if (openingQueued == opening)
+		{
+			InvokeHandler.CancelInvoke((Behaviour)(object)this, (Action)MoveTick);
+			isMoving = false;
+		}
+		else
+		{
+			opening = openingQueued;
+		}
+	}
+
+	private void SetAngleOnAll(float lerpT, bool closing)
+	{
+		float angle;
+		float angle2;
+		float angle3;
+		if (closing)
+		{
+			angle = LeanTween.easeOutBounce(-145f, 0f, Mathf.Clamp01(_hatchLerp * 1.15f));
+			angle2 = LeanTween.easeOutBounce(-145f, 0f, _hatchLerp);
+			angle3 = LeanTween.easeOutBounce(-145f, 0f, Mathf.Clamp01(_hatchLerp * 1.25f));
+		}
+		else
+		{
+			angle = LeanTween.easeOutBounce(0f, -145f, Mathf.Clamp01(_hatchLerp * 1.15f));
+			angle2 = LeanTween.easeOutBounce(0f, -145f, _hatchLerp);
+			angle3 = LeanTween.easeOutBounce(0f, -145f, Mathf.Clamp01(_hatchLerp * 1.25f));
+		}
+		SetAngle(hatch1Col, angle);
+		SetAngle(hatch2Col, angle2);
+		SetAngle(hatch3Col, angle3);
+	}
+
+	private void SetAngle(Transform transform, float angle)
+	{
+		//IL_000e: Unknown result type (might be due to invalid IL or missing references)
+		_angles.x = angle;
+		transform.localEulerAngles = _angles;
+	}
+}
+
+
+using System;
+using Rust;
+using UnityEngine;
+
+public class TrainCarUnloadableLoot : TrainCarUnloadable
+{
+	[Serializable]
+	public class LootCrateSet
+	{
+		public GameObjectRef[] crates;
+	}
+
+	[SerializeField]
+	private LootCrateSet[] lootLayouts;
+
+	[SerializeField]
+	private Transform[] lootPositions;
+
+	public override void Spawn()
+	{
+		//IL_0051: Unknown result type (might be due to invalid IL or missing references)
+		//IL_005e: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00ae: Unknown result type (might be due to invalid IL or missing references)
+		base.Spawn();
+		bool flag = false;
+		if (Application.isLoadingSave || flag)
+		{
+			return;
+		}
+		int num = Random.Range(0, lootLayouts.Length);
+		for (int i = 0; i < lootLayouts[num].crates.Length; i++)
+		{
+			GameObjectRef gameObjectRef = lootLayouts[num].crates[i];
+			LootContainer lootContainer = GameManager.server.CreateEntity(gameObjectRef.resourcePath, lootPositions[i].localPosition, lootPositions[i].localRotation) as LootContainer;
+			if ((Object)(object)lootContainer != (Object)null)
+			{
+				lootContainer.Spawn();
+				lootContainer.SetParent(this);
+				lootContainer.inventory.SetLocked(!IsEmpty());
+				lootContainers.Add(new EntityRef<LootContainer>(lootContainer.net.ID));
+			}
+		}
+	}
+}
+
+
+using System;
+
+[Serializable]
+public class LootCrateSet
+{
+	public GameObjectRef[] crates;
+}
+
+
+using Oxide.Core;
+using UnityEngine;
+
+public class TrainCoupling
+{
+	public readonly TrainCar owner;
+
+	public readonly bool isFrontCoupling;
+
+	public readonly TrainCouplingController controller;
+
+	public readonly Transform couplingPoint;
+
+	public readonly Transform couplingPivot;
+
+	public readonly BaseEntity.Flags flag;
+
+	public readonly bool isValid;
+
+	public TimeSince timeSinceCouplingBlock;
+
+	public bool IsCoupled => owner.HasFlag(flag);
+
+	public bool IsUncoupled => !owner.HasFlag(flag);
+
+	public TrainCoupling CoupledTo { get; private set; }
+
+	public TrainCoupling(TrainCar owner, bool isFrontCoupling, TrainCouplingController controller)
+		: this(owner, isFrontCoupling, controller, null, null, BaseEntity.Flags.Placeholder)
+	{
+	}
+
+	public TrainCoupling(TrainCar owner, bool isFrontCoupling, TrainCouplingController controller, Transform couplingPoint, Transform couplingPivot, BaseEntity.Flags flag)
+	{
+		this.owner = owner;
+		this.isFrontCoupling = isFrontCoupling;
+		this.controller = controller;
+		this.couplingPoint = couplingPoint;
+		this.couplingPivot = couplingPivot;
+		this.flag = flag;
+		isValid = (Object)(object)couplingPoint != (Object)null;
+	}
+
+	public bool IsCoupledTo(TrainCar them)
+	{
+		if (CoupledTo != null)
+		{
+			return (Object)(object)CoupledTo.owner == (Object)(object)them;
+		}
+		return false;
+	}
+
+	public bool IsCoupledTo(TrainCoupling them)
+	{
+		if (CoupledTo != null)
+		{
+			return CoupledTo == them;
+		}
+		return false;
+	}
+
+	public bool TryCouple(TrainCoupling theirCoupling, bool reflect)
+	{
+		if (!isValid)
+		{
+			return false;
+		}
+		if (CoupledTo == theirCoupling)
+		{
+			return true;
+		}
+		if (IsCoupled)
+		{
+			return false;
+		}
+		object obj = Interface.CallHook("CanTrainCarCouple", (object)owner, (object)theirCoupling.owner);
+		if (obj is bool)
+		{
+			return (bool)obj;
+		}
+		if (reflect && !theirCoupling.TryCouple(this, reflect: false))
+		{
+			return false;
+		}
+		CoupledTo = theirCoupling;
+		owner.SetFlagLocal(flag, b: true);
+		owner.SendNetworkUpdate();
+		return true;
+	}
+
+	public void Uncouple(bool reflect)
+	{
+		//IL_004c: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0051: Unknown result type (might be due to invalid IL or missing references)
+		if (!IsUncoupled)
+		{
+			if (reflect && CoupledTo != null)
+			{
+				CoupledTo.Uncouple(reflect: false);
+			}
+			CoupledTo = null;
+			owner.SetFlagLocal(flag, b: false);
+			owner.SendNetworkUpdate();
+			timeSinceCouplingBlock = TimeSince.op_Implicit(0f);
+		}
+	}
+
+	public TrainCoupling GetOppositeCoupling()
+	{
+		if (!isFrontCoupling)
+		{
+			return controller.frontCoupling;
+		}
+		return controller.rearCoupling;
+	}
+
+	public bool TryGetCoupledToID(out NetworkableId id)
+	{
+		//IL_004b: Unknown result type (might be due to invalid IL or missing references)
+		//IL_003e: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0043: Unknown result type (might be due to invalid IL or missing references)
+		if (CoupledTo != null && (Object)(object)CoupledTo.owner != (Object)null && CoupledTo.owner.IsValid())
+		{
+			id = CoupledTo.owner.net.ID;
+			return true;
+		}
+		id = default(NetworkableId);
+		return false;
+	}
+}
+
+
+using System.Collections.Generic;
+using UnityEngine;
+
+public class TrainCouplingController
+{
+	public const BaseEntity.Flags Flag_CouplingFront = BaseEntity.Flags.Reserved2;
+
+	public const BaseEntity.Flags Flag_CouplingRear = BaseEntity.Flags.Reserved3;
+
+	public readonly TrainCoupling frontCoupling;
+
+	public readonly TrainCoupling rearCoupling;
+
+	private readonly TrainCar owner;
+
+	[ServerVar(Help = "Maximum difference in velocity for train cars to couple")]
+	public static float max_couple_speed = 9f;
+
+	public bool IsCoupled
+	{
+		get
+		{
+			if (!IsFrontCoupled)
+			{
+				return IsRearCoupled;
+			}
+			return true;
+		}
+	}
+
+	public bool IsFrontCoupled => owner.HasFlag(BaseEntity.Flags.Reserved2);
+
+	public bool IsRearCoupled => owner.HasFlag(BaseEntity.Flags.Reserved3);
+
+	public TrainCouplingController(TrainCar owner)
+	{
+		this.owner = owner;
+		frontCoupling = new TrainCoupling(owner, isFrontCoupling: true, this, owner.frontCoupling, owner.frontCouplingPivot, BaseEntity.Flags.Reserved2);
+		rearCoupling = new TrainCoupling(owner, isFrontCoupling: false, this, owner.rearCoupling, owner.rearCouplingPivot, BaseEntity.Flags.Reserved3);
+	}
+
+	public bool IsCoupledTo(TrainCar them)
+	{
+		if (!frontCoupling.IsCoupledTo(them))
+		{
+			return rearCoupling.IsCoupledTo(them);
+		}
+		return true;
+	}
+
+	public bool TryCouple(TrainCar them, TriggerTrainCollisions.Location ourLocation)
+	{
+		//IL_0027: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0055: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0060: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00ed: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00f2: Unknown result type (might be due to invalid IL or missing references)
+		//IL_00fd: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0102: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0119: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0124: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0129: Unknown result type (might be due to invalid IL or missing references)
+		TrainCoupling trainCoupling = ((ourLocation == TriggerTrainCollisions.Location.Front) ? frontCoupling : rearCoupling);
+		if (!trainCoupling.isValid)
+		{
+			return false;
+		}
+		if (trainCoupling.IsCoupled)
+		{
+			return false;
+		}
+		if (TimeSince.op_Implicit(trainCoupling.timeSinceCouplingBlock) < 1.5f)
+		{
+			return false;
+		}
+		if ((Object)(object)them == (Object)(object)owner)
+		{
+			return false;
+		}
+		float num = Vector3.Angle(((Component)owner).transform.forward, ((Component)them).transform.forward);
+		if (num > 25f && num < 155f)
+		{
+			return false;
+		}
+		bool num2 = num < 90f;
+		TrainCoupling trainCoupling2 = ((!num2) ? ((ourLocation == TriggerTrainCollisions.Location.Front) ? them.coupling.frontCoupling : them.coupling.rearCoupling) : ((ourLocation == TriggerTrainCollisions.Location.Front) ? them.coupling.rearCoupling : them.coupling.frontCoupling));
+		float num3 = them.GetTrackSpeed();
+		if (!num2)
+		{
+			num3 = 0f - num3;
+		}
+		if (Mathf.Abs(num3 - owner.GetTrackSpeed()) > max_couple_speed)
+		{
+			trainCoupling.timeSinceCouplingBlock = TimeSince.op_Implicit(0f);
+			trainCoupling2.timeSinceCouplingBlock = TimeSince.op_Implicit(0f);
+			return false;
+		}
+		if (!trainCoupling2.isValid)
+		{
+			return false;
+		}
+		if (Vector3.SqrMagnitude(trainCoupling.couplingPoint.position - trainCoupling2.couplingPoint.position) > 0.5f)
+		{
+			return false;
+		}
+		TrainTrackSpline frontTrackSection = owner.FrontTrackSection;
+		TrainTrackSpline frontTrackSection2 = them.FrontTrackSection;
+		if ((Object)(object)frontTrackSection2 != (Object)(object)frontTrackSection && !frontTrackSection.HasConnectedTrack(frontTrackSection2))
+		{
+			return false;
+		}
+		return trainCoupling.TryCouple(trainCoupling2, reflect: true);
+	}
+
+	public void Uncouple(bool front)
+	{
+		if (front)
+		{
+			frontCoupling.Uncouple(reflect: true);
+		}
+		else
+		{
+			rearCoupling.Uncouple(reflect: true);
+		}
+	}
+
+	public void GetAll(ref List<TrainCar> result)
+	{
+		result.Add(owner);
+		TrainCoupling coupledTo = rearCoupling.CoupledTo;
+		while (coupledTo != null && coupledTo.IsCoupled && !result.Contains(coupledTo.owner))
+		{
+			result.Insert(0, coupledTo.owner);
+			coupledTo = coupledTo.GetOppositeCoupling();
+			coupledTo = coupledTo.CoupledTo;
+		}
+		TrainCoupling coupledTo2 = frontCoupling.CoupledTo;
+		while (coupledTo2 != null && coupledTo2.IsCoupled && !result.Contains(coupledTo2.owner))
+		{
+			result.Add(coupledTo2.owner);
+			coupledTo2 = coupledTo2.GetOppositeCoupling();
+			coupledTo2 = coupledTo2.CoupledTo;
+		}
+	}
+}
+
+
+using System;
+using UnityEngine;
+
+public class TrainEngineAudio : TrainCarAudio
+{
+	[Serializable]
+	public class EngineReflection
+	{
+		public Vector3 direction;
+
+		public Vector3 offset;
+
+		public SoundDefinition soundDef;
+
+		public Sound sound;
+
+		public SoundModulation.Modulator pitchMod;
+
+		public SoundModulation.Modulator gainMod;
+
+		public float distance = 20f;
+	}
+
+	[SerializeField]
+	private TrainEngine trainEngine;
+
+	[SerializeField]
+	private Transform cockpitSoundPosition;
+
+	[SerializeField]
+	private Transform hornSoundPosition;
+
+	[SerializeField]
+	[Header("Engine")]
+	private SoundDefinition engineStartSound;
+
+	[SerializeField]
+	private SoundDefinition engineStopSound;
+
+	[SerializeField]
+	private SoundDefinition engineActiveLoopDef;
+
+	[SerializeField]
+	private AnimationCurve engineActiveLoopPitchCurve;
+
+	[SerializeField]
+	private float engineActiveLoopChangeSpeed = 0.2f;
+
+	private Sound engineActiveLoop;
+
+	private SoundModulation.Modulator engineActiveLoopPitch;
+
+	[SerializeField]
+	private BlendedLoopEngineSound engineLoops;
+
+	[SerializeField]
+	private EngineReflection[] engineReflections;
+
+	[SerializeField]
+	private LayerMask reflectionLayerMask;
+
+	[SerializeField]
+	private float reflectionMaxDistance = 20f;
+
+	[SerializeField]
+	private float reflectionGainChangeSpeed = 10f;
+
+	[SerializeField]
+	private float reflectionPositionChangeSpeed = 10f;
+
+	[SerializeField]
+	private float reflectionRayOffset = 0.5f;
+
+	[Header("Horn")]
+	[SerializeField]
+	private SoundDefinition hornLoop;
+
+	[SerializeField]
+	private SoundDefinition hornStart;
+
+	[Header("Other")]
+	[SerializeField]
+	private SoundDefinition lightsToggleSound;
+
+	[SerializeField]
+	private SoundDefinition proximityAlertDef;
+
+	private Sound proximityAlertSound;
+
+	[SerializeField]
+	private SoundDefinition damagedLoopDef;
+
+	private Sound damagedLoop;
+
+	[SerializeField]
+	private SoundDefinition changeThrottleDef;
+
+	[SerializeField]
+	private SoundDefinition changeCouplingDef;
+
+	[SerializeField]
+	private SoundDefinition unloadableStartDef;
+
+	[SerializeField]
+	private SoundDefinition unloadableEndDef;
+
+	[SerializeField]
+	private SoundPlayer brakeSound;
+}
+
+
+using System;
+using UnityEngine;
+
+[Serializable]
+public class EngineReflection
+{
+	public Vector3 direction;
+
+	public Vector3 offset;
+
+	public SoundDefinition soundDef;
+
+	public Sound sound;
+
+	public SoundModulation.Modulator pitchMod;
+
+	public SoundModulation.Modulator gainMod;
+
+	public float distance = 20f;
+}
+
+
+using System;
 using System.Collections.Generic;
 using Facepunch;
 using UnityEngine;
@@ -902,8 +1503,8 @@ public class TrainWagonLootData : ScriptableObject
 	[SerializeField]
 	private LootOption[] oreOptions;
 
-	[SerializeField]
 	[ReadOnly]
+	[SerializeField]
 	private LootOption lootWagonContent;
 
 	[SerializeField]
@@ -3071,8 +3672,8 @@ public class ChargeUpIOEntity : IOEntity
 
 	public bool RequireInputToTrigger;
 
-	[Header("Charging Sounds")]
 	[Tooltip("If this entity has no sound, disable this to save on resources")]
+	[Header("Charging Sounds")]
 	public bool doSounds = true;
 
 	public SoundDefinition startChargingSound;
@@ -5790,8 +6391,8 @@ public class Powergrid : ConsoleSystem
 	[ReplicatedVar]
 	public static bool enabled = true;
 
-	[ReplicatedVar]
 	[Help("Required powergrid stage for green recyclers to return to baseline efficiency. If < 0 then will use the default values.")]
+	[ReplicatedVar]
 	public static int greenRecyclerFullEfficiencyStage = -1;
 
 	[ServerVar]
@@ -15443,8 +16044,8 @@ public class PreventBuildingMonumentTag : MonoBehaviour
 {
 	public bool autoFindMonument;
 
-	[FlattenIgnoreReference]
 	[SerializeField]
+	[FlattenIgnoreReference]
 	private MonumentInfo AttachedMonument;
 
 	private static readonly ListHashSet<PreventBuildingMonumentTag> allTags = new ListHashSet<PreventBuildingMonumentTag>();
@@ -16638,9 +17239,9 @@ using UnityEngine;
 public static class EnvironmentVolumeMath
 {
 	[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-	internal delegate void CalculateTransformationBoundsBurst_00006711$PostfixBurstDelegate(in float4x4 transformationMatrix, in bool capsule, out Bounds bounds);
+	internal delegate void CalculateTransformationBoundsBurst_0000674A$PostfixBurstDelegate(in float4x4 transformationMatrix, in bool capsule, out Bounds bounds);
 
-	internal static class CalculateTransformationBoundsBurst_00006711$BurstDirectCall
+	internal static class CalculateTransformationBoundsBurst_0000674A$BurstDirectCall
 	{
 		private static IntPtr Pointer;
 
@@ -16651,7 +17252,7 @@ public static class EnvironmentVolumeMath
 			//IL_001b: Unknown result type (might be due to invalid IL or missing references)
 			if (Pointer == (IntPtr)0)
 			{
-				Pointer = BurstCompiler.CompileFunctionPointer<CalculateTransformationBoundsBurst_00006711$PostfixBurstDelegate>((CalculateTransformationBoundsBurst_00006711$PostfixBurstDelegate)CalculateTransformationBoundsBurst).Value;
+				Pointer = BurstCompiler.CompileFunctionPointer<CalculateTransformationBoundsBurst_0000674A$PostfixBurstDelegate>((CalculateTransformationBoundsBurst_0000674A$PostfixBurstDelegate)CalculateTransformationBoundsBurst).Value;
 			}
 			P_0 = Pointer;
 		}
@@ -16679,9 +17280,9 @@ public static class EnvironmentVolumeMath
 	}
 
 	[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-	internal delegate void MultiplyPoint3X4_00006712$PostfixBurstDelegate(in float4x4 transformationMatrix, in float3 point, out float3 result);
+	internal delegate void MultiplyPoint3X4_0000674B$PostfixBurstDelegate(in float4x4 transformationMatrix, in float3 point, out float3 result);
 
-	internal static class MultiplyPoint3X4_00006712$BurstDirectCall
+	internal static class MultiplyPoint3X4_0000674B$BurstDirectCall
 	{
 		private static IntPtr Pointer;
 
@@ -16692,7 +17293,7 @@ public static class EnvironmentVolumeMath
 			//IL_001b: Unknown result type (might be due to invalid IL or missing references)
 			if (Pointer == (IntPtr)0)
 			{
-				Pointer = BurstCompiler.CompileFunctionPointer<MultiplyPoint3X4_00006712$PostfixBurstDelegate>((MultiplyPoint3X4_00006712$PostfixBurstDelegate)MultiplyPoint3X4).Value;
+				Pointer = BurstCompiler.CompileFunctionPointer<MultiplyPoint3X4_0000674B$PostfixBurstDelegate>((MultiplyPoint3X4_0000674B$PostfixBurstDelegate)MultiplyPoint3X4).Value;
 			}
 			P_0 = Pointer;
 		}
@@ -16720,9 +17321,9 @@ public static class EnvironmentVolumeMath
 	}
 
 	[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-	internal delegate void UpdateVolumeTransformationAndBoundsBurst_00006713$PostfixBurstDelegate(in float3 size, in float3 center, in float4x4 localToWorldMatrix, in bool isCapsule, out float4x4 volumeTransformation, out float4x4 volumeTransformationInverse, out float3 volumePosition, out Bounds volumeBounds);
+	internal delegate void UpdateVolumeTransformationAndBoundsBurst_0000674C$PostfixBurstDelegate(in float3 size, in float3 center, in float4x4 localToWorldMatrix, in bool isCapsule, out float4x4 volumeTransformation, out float4x4 volumeTransformationInverse, out float3 volumePosition, out Bounds volumeBounds);
 
-	internal static class UpdateVolumeTransformationAndBoundsBurst_00006713$BurstDirectCall
+	internal static class UpdateVolumeTransformationAndBoundsBurst_0000674C$BurstDirectCall
 	{
 		private static IntPtr Pointer;
 
@@ -16733,7 +17334,7 @@ public static class EnvironmentVolumeMath
 			//IL_001b: Unknown result type (might be due to invalid IL or missing references)
 			if (Pointer == (IntPtr)0)
 			{
-				Pointer = BurstCompiler.CompileFunctionPointer<UpdateVolumeTransformationAndBoundsBurst_00006713$PostfixBurstDelegate>((UpdateVolumeTransformationAndBoundsBurst_00006713$PostfixBurstDelegate)UpdateVolumeTransformationAndBoundsBurst).Value;
+				Pointer = BurstCompiler.CompileFunctionPointer<UpdateVolumeTransformationAndBoundsBurst_0000674C$PostfixBurstDelegate>((UpdateVolumeTransformationAndBoundsBurst_0000674C$PostfixBurstDelegate)UpdateVolumeTransformationAndBoundsBurst).Value;
 			}
 			P_0 = Pointer;
 		}
@@ -16760,25 +17361,25 @@ public static class EnvironmentVolumeMath
 		}
 	}
 
-	[MonoPInvokeCallback(typeof(CalculateTransformationBoundsBurst_00006711$PostfixBurstDelegate))]
 	[BurstCompile]
+	[MonoPInvokeCallback(typeof(CalculateTransformationBoundsBurst_0000674A$PostfixBurstDelegate))]
 	private static void CalculateTransformationBoundsBurst(in float4x4 transformationMatrix, in bool capsule, out Bounds bounds)
 	{
-		CalculateTransformationBoundsBurst_00006711$BurstDirectCall.Invoke(in transformationMatrix, in capsule, out bounds);
+		CalculateTransformationBoundsBurst_0000674A$BurstDirectCall.Invoke(in transformationMatrix, in capsule, out bounds);
 	}
 
+	[MonoPInvokeCallback(typeof(MultiplyPoint3X4_0000674B$PostfixBurstDelegate))]
 	[BurstCompile]
-	[MonoPInvokeCallback(typeof(MultiplyPoint3X4_00006712$PostfixBurstDelegate))]
 	private static void MultiplyPoint3X4(in float4x4 transformationMatrix, in float3 point, out float3 result)
 	{
-		MultiplyPoint3X4_00006712$BurstDirectCall.Invoke(in transformationMatrix, in point, out result);
+		MultiplyPoint3X4_0000674B$BurstDirectCall.Invoke(in transformationMatrix, in point, out result);
 	}
 
-	[MonoPInvokeCallback(typeof(UpdateVolumeTransformationAndBoundsBurst_00006713$PostfixBurstDelegate))]
 	[BurstCompile]
+	[MonoPInvokeCallback(typeof(UpdateVolumeTransformationAndBoundsBurst_0000674C$PostfixBurstDelegate))]
 	public static void UpdateVolumeTransformationAndBoundsBurst(in float3 size, in float3 center, in float4x4 localToWorldMatrix, in bool isCapsule, out float4x4 volumeTransformation, out float4x4 volumeTransformationInverse, out float3 volumePosition, out Bounds volumeBounds)
 	{
-		UpdateVolumeTransformationAndBoundsBurst_00006713$BurstDirectCall.Invoke(in size, in center, in localToWorldMatrix, in isCapsule, out volumeTransformation, out volumeTransformationInverse, out volumePosition, out volumeBounds);
+		UpdateVolumeTransformationAndBoundsBurst_0000674C$BurstDirectCall.Invoke(in size, in center, in localToWorldMatrix, in isCapsule, out volumeTransformation, out volumeTransformationInverse, out volumePosition, out volumeBounds);
 	}
 
 	[MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -16898,7 +17499,7 @@ using Unity.Mathematics;
 using UnityEngine;
 
 [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-internal delegate void CalculateTransformationBoundsBurst_00006711$PostfixBurstDelegate(in float4x4 transformationMatrix, in bool capsule, out Bounds bounds);
+internal delegate void CalculateTransformationBoundsBurst_0000674A$PostfixBurstDelegate(in float4x4 transformationMatrix, in bool capsule, out Bounds bounds);
 
 
 using System;
@@ -16906,7 +17507,7 @@ using Unity.Burst;
 using Unity.Mathematics;
 using UnityEngine;
 
-internal static class CalculateTransformationBoundsBurst_00006711$BurstDirectCall
+internal static class CalculateTransformationBoundsBurst_0000674A$BurstDirectCall
 {
 	private static IntPtr Pointer;
 
@@ -16917,7 +17518,7 @@ internal static class CalculateTransformationBoundsBurst_00006711$BurstDirectCal
 		//IL_001b: Unknown result type (might be due to invalid IL or missing references)
 		if (Pointer == (IntPtr)0)
 		{
-			Pointer = BurstCompiler.CompileFunctionPointer<CalculateTransformationBoundsBurst_00006711$PostfixBurstDelegate>((CalculateTransformationBoundsBurst_00006711$PostfixBurstDelegate)CalculateTransformationBoundsBurst).Value;
+			Pointer = BurstCompiler.CompileFunctionPointer<CalculateTransformationBoundsBurst_0000674A$PostfixBurstDelegate>((CalculateTransformationBoundsBurst_0000674A$PostfixBurstDelegate)CalculateTransformationBoundsBurst).Value;
 		}
 		P_0 = Pointer;
 	}
@@ -16949,14 +17550,14 @@ using System.Runtime.InteropServices;
 using Unity.Mathematics;
 
 [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-internal delegate void MultiplyPoint3X4_00006712$PostfixBurstDelegate(in float4x4 transformationMatrix, in float3 point, out float3 result);
+internal delegate void MultiplyPoint3X4_0000674B$PostfixBurstDelegate(in float4x4 transformationMatrix, in float3 point, out float3 result);
 
 
 using System;
 using Unity.Burst;
 using Unity.Mathematics;
 
-internal static class MultiplyPoint3X4_00006712$BurstDirectCall
+internal static class MultiplyPoint3X4_0000674B$BurstDirectCall
 {
 	private static IntPtr Pointer;
 
@@ -16967,7 +17568,7 @@ internal static class MultiplyPoint3X4_00006712$BurstDirectCall
 		//IL_001b: Unknown result type (might be due to invalid IL or missing references)
 		if (Pointer == (IntPtr)0)
 		{
-			Pointer = BurstCompiler.CompileFunctionPointer<MultiplyPoint3X4_00006712$PostfixBurstDelegate>((MultiplyPoint3X4_00006712$PostfixBurstDelegate)MultiplyPoint3X4).Value;
+			Pointer = BurstCompiler.CompileFunctionPointer<MultiplyPoint3X4_0000674B$PostfixBurstDelegate>((MultiplyPoint3X4_0000674B$PostfixBurstDelegate)MultiplyPoint3X4).Value;
 		}
 		P_0 = Pointer;
 	}
@@ -17000,7 +17601,7 @@ using Unity.Mathematics;
 using UnityEngine;
 
 [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-internal delegate void UpdateVolumeTransformationAndBoundsBurst_00006713$PostfixBurstDelegate(in float3 size, in float3 center, in float4x4 localToWorldMatrix, in bool isCapsule, out float4x4 volumeTransformation, out float4x4 volumeTransformationInverse, out float3 volumePosition, out Bounds volumeBounds);
+internal delegate void UpdateVolumeTransformationAndBoundsBurst_0000674C$PostfixBurstDelegate(in float3 size, in float3 center, in float4x4 localToWorldMatrix, in bool isCapsule, out float4x4 volumeTransformation, out float4x4 volumeTransformationInverse, out float3 volumePosition, out Bounds volumeBounds);
 
 
 using System;
@@ -17008,7 +17609,7 @@ using Unity.Burst;
 using Unity.Mathematics;
 using UnityEngine;
 
-internal static class UpdateVolumeTransformationAndBoundsBurst_00006713$BurstDirectCall
+internal static class UpdateVolumeTransformationAndBoundsBurst_0000674C$BurstDirectCall
 {
 	private static IntPtr Pointer;
 
@@ -17019,7 +17620,7 @@ internal static class UpdateVolumeTransformationAndBoundsBurst_00006713$BurstDir
 		//IL_001b: Unknown result type (might be due to invalid IL or missing references)
 		if (Pointer == (IntPtr)0)
 		{
-			Pointer = BurstCompiler.CompileFunctionPointer<UpdateVolumeTransformationAndBoundsBurst_00006713$PostfixBurstDelegate>((UpdateVolumeTransformationAndBoundsBurst_00006713$PostfixBurstDelegate)UpdateVolumeTransformationAndBoundsBurst).Value;
+			Pointer = BurstCompiler.CompileFunctionPointer<UpdateVolumeTransformationAndBoundsBurst_0000674C$PostfixBurstDelegate>((UpdateVolumeTransformationAndBoundsBurst_0000674C$PostfixBurstDelegate)UpdateVolumeTransformationAndBoundsBurst).Value;
 		}
 		P_0 = Pointer;
 	}
@@ -17119,8 +17720,8 @@ public class FakePhysicsRope : FacepunchBehaviour, IClientComponent
 	[Tooltip("The Rope width set at start (changing this value during run time will produce no effect)")]
 	public float ropeWidth = 0.1f;
 
-	[Tooltip("Adjust the middle control point weight for the Rational Bezier curve")]
 	[Range(1f, 15f)]
+	[Tooltip("Adjust the middle control point weight for the Rational Bezier curve")]
 	public float midPointWeight = 1f;
 
 	[Tooltip("Use local positions instead of world positions (relative to this object)")]
@@ -20868,8 +21469,8 @@ public class CopyLODValues : MonoBehaviour, IEditorComponent
 	[SerializeField]
 	private LODGroup destination;
 
-	[Tooltip("Is false, exact values are copied. If true, values are scaled based on LODGroup size, so the changeover point will match.")]
 	[SerializeField]
+	[Tooltip("Is false, exact values are copied. If true, values are scaled based on LODGroup size, so the changeover point will match.")]
 	private bool scale = true;
 
 	public bool CanCopy()
@@ -21604,8 +22205,8 @@ public class StagedRendererLOD : InstancedLODComponent, IHLODMeshSource
 		public bool disableShadows;
 	}
 
-	[Tooltip("The single renderer everything is drawn through. Its mesh and materials are swapped at runtime.")]
 	[Header("Target Renderer")]
+	[Tooltip("The single renderer everything is drawn through. Its mesh and materials are swapped at runtime.")]
 	public MeshRenderer TargetRenderer;
 
 	public MeshFilter TargetFilter;
@@ -21782,7 +22383,6 @@ public class LakeInfo : MonoBehaviour
 }
 
 
-using System.Collections.Generic;
 using UnityEngine;
 
 public class LandmarkInfo : MonoBehaviour
@@ -21821,15 +22421,11 @@ public class LandmarkInfo : MonoBehaviour
 		string GetFallbackNameImpl()
 		{
 			Transform root = ((Component)this).transform.root;
-			GameObject gameObject = ((Component)root).gameObject;
-			foreach (var (result, hashSet2) in World.SpawnedPrefabs)
+			if (!World.TryGetSpawnedPrefabCategory(((Component)root).gameObject, out var category))
 			{
-				if (hashSet2.Contains(gameObject))
-				{
-					return result;
-				}
+				return ((Object)root).name;
 			}
-			return ((Object)root).name;
+			return category;
 		}
 	}
 }
@@ -21864,8 +22460,8 @@ public class LevelInfo : SingletonComponent<LevelInfo>
 	[Tooltip("A background image to be shown when loading the map")]
 	public Texture2D image;
 
-	[Tooltip("You should incrememnt this version when you make changes to the map that will invalidate old saves")]
 	[Space(10f)]
+	[Tooltip("You should incrememnt this version when you make changes to the map that will invalidate old saves")]
 	public int version = 1;
 }
 
@@ -25910,9 +26506,9 @@ using UnityEngine.Serialization;
 public class DensitySpawnPopulation : SpawnPopulationBase
 {
 	[SerializeField]
-	[Header("Spawn Info")]
 	[FormerlySerializedAs("TargetDensity")]
 	[Tooltip("Usually per square km")]
+	[Header("Spawn Info")]
 	public float _targetDensity = 1f;
 
 	public int ClusterSizeMin = 1;
@@ -26490,8 +27086,8 @@ public class SpawnPointSpawnPopulation : SpawnPopulationBase
 	[SerializeField]
 	private BaseSpawnPoint.SpawnPointType spawnPointType;
 
-	[Tooltip("Share of the spawn points to keep filled, rounded down. Below 1 leaves points free for spawned entities to move between.")]
 	[SerializeField]
+	[Tooltip("Share of the spawn points to keep filled, rounded down. Below 1 leaves points free for spawned entities to move between.")]
 	[Range(0f, 1f)]
 	private float fillFraction = 1f;
 
@@ -27733,8 +28329,8 @@ using UnityEngine;
 public class RadialSpawnPoint : BaseSpawnPoint
 {
 	[Tooltip("Circle to spawn within")]
-	[Header("Position Settings")]
 	[SerializeField]
+	[Header("Position Settings")]
 	public float radius = 10f;
 
 	[SerializeField]
@@ -27746,8 +28342,8 @@ public class RadialSpawnPoint : BaseSpawnPoint
 	[SerializeField]
 	private float yAxisOffsetMax;
 
-	[SerializeField]
 	[Header("Random Rotation Settings")]
+	[SerializeField]
 	private bool xRotationEnabled;
 
 	[Range(-180f, 180f)]
@@ -27761,19 +28357,19 @@ public class RadialSpawnPoint : BaseSpawnPoint
 	[SerializeField]
 	private bool yRotationEnabled = true;
 
-	[SerializeField]
 	[Range(-180f, 180f)]
+	[SerializeField]
 	private float yRotationMin = -180f;
 
-	[Range(-180f, 180f)]
 	[SerializeField]
+	[Range(-180f, 180f)]
 	private float yRotationMax = 180f;
 
 	[SerializeField]
 	private bool zRotationEnabled;
 
-	[Range(-180f, 180f)]
 	[SerializeField]
+	[Range(-180f, 180f)]
 	private float zRotationMin = -180f;
 
 	[SerializeField]
@@ -31987,327 +32583,6 @@ public class TriggerMount : TriggerBase, IServerComponent
 				((FacepunchBehaviour)this).Invoke((Action)CheckForMount, 3.6f);
 			}
 		}
-	}
-}
-
-
-using UnityEngine;
-
-private class EntryInfo
-{
-	public float entryTime;
-
-	public Vector3 entryPos;
-
-	public EntryInfo(float entryTime, Vector3 entryPos)
-	{
-		//IL_000e: Unknown result type (might be due to invalid IL or missing references)
-		//IL_000f: Unknown result type (might be due to invalid IL or missing references)
-		this.entryTime = entryTime;
-		this.entryPos = entryPos;
-	}
-
-	public void Set(float entryTime, Vector3 entryPos)
-	{
-		//IL_0008: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0009: Unknown result type (might be due to invalid IL or missing references)
-		this.entryTime = entryTime;
-		this.entryPos = entryPos;
-	}
-}
-
-
-using System.Collections.Generic;
-using UnityEngine;
-
-[RequireComponent(typeof(SphereCollider))]
-public class TriggerNoRespawnZone : TriggerBase
-{
-	public static List<TriggerNoRespawnZone> allNRZones = new List<TriggerNoRespawnZone>();
-
-	public float maxDepth = 20f;
-
-	public float maxAltitude = -1f;
-
-	private SphereCollider sphereCollider;
-
-	private float radiusSqr;
-
-	protected override void Awake()
-	{
-		base.Awake();
-		sphereCollider = ((Component)this).GetComponent<SphereCollider>();
-		radiusSqr = sphereCollider.radius * sphereCollider.radius;
-	}
-
-	protected void OnEnable()
-	{
-		allNRZones.Add(this);
-	}
-
-	protected override void OnDisable()
-	{
-		base.OnDisable();
-		allNRZones.Remove(this);
-	}
-
-	internal override GameObject InterestedInObject(GameObject obj)
-	{
-		obj = base.InterestedInObject(obj);
-		if ((Object)(object)obj == (Object)null)
-		{
-			return null;
-		}
-		BasePlayer basePlayer = obj.ToBaseEntity() as BasePlayer;
-		if ((Object)(object)basePlayer == (Object)null)
-		{
-			return null;
-		}
-		if (basePlayer.isClient)
-		{
-			return null;
-		}
-		return ((Component)basePlayer).gameObject;
-	}
-
-	public static bool InAnyNoRespawnZone(Vector3 theirPos)
-	{
-		//IL_000f: Unknown result type (might be due to invalid IL or missing references)
-		for (int i = 0; i < allNRZones.Count; i++)
-		{
-			if (allNRZones[i].InNoRespawnZone(theirPos, checkRadius: true))
-			{
-				return true;
-			}
-		}
-		return false;
-	}
-
-	public bool InNoRespawnZone(Vector3 theirPos, bool checkRadius)
-	{
-		//IL_0006: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0011: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0016: Unknown result type (might be due to invalid IL or missing references)
-		//IL_001b: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0035: Unknown result type (might be due to invalid IL or missing references)
-		//IL_003b: Unknown result type (might be due to invalid IL or missing references)
-		//IL_001f: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0020: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0021: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0055: Unknown result type (might be due to invalid IL or missing references)
-		//IL_005b: Unknown result type (might be due to invalid IL or missing references)
-		//IL_007b: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0081: Unknown result type (might be due to invalid IL or missing references)
-		Vector3 val = ((Component)this).transform.position + sphereCollider.center;
-		if (checkRadius && Vector3.SqrMagnitude(val - theirPos) > radiusSqr)
-		{
-			return false;
-		}
-		float num = Mathf.Abs(val.y - theirPos.y);
-		if (maxDepth != -1f && theirPos.y < val.y && num > maxDepth)
-		{
-			return false;
-		}
-		if (maxAltitude != -1f && theirPos.y > val.y && num > maxAltitude)
-		{
-			return false;
-		}
-		return true;
-	}
-}
-
-
-using UnityEngine;
-
-public class TriggerNoSpray : TriggerBase
-{
-	public BoxCollider TriggerCollider;
-
-	private OBB cachedBounds;
-
-	private Transform cachedTransform;
-
-	private void OnEnable()
-	{
-		//IL_0019: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0024: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0029: Unknown result type (might be due to invalid IL or missing references)
-		//IL_002e: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0033: Unknown result type (might be due to invalid IL or missing references)
-		cachedTransform = ((Component)this).transform;
-		cachedBounds = new OBB(cachedTransform, new Bounds(TriggerCollider.center, TriggerCollider.size));
-	}
-
-	internal override GameObject InterestedInObject(GameObject obj)
-	{
-		obj = base.InterestedInObject(obj);
-		if ((Object)(object)obj == (Object)null)
-		{
-			return null;
-		}
-		BaseEntity baseEntity = obj.ToBaseEntity();
-		if ((Object)(object)baseEntity == (Object)null)
-		{
-			return null;
-		}
-		if ((Object)(object)baseEntity.ToPlayer() == (Object)null)
-		{
-			return null;
-		}
-		return ((Component)baseEntity).gameObject;
-	}
-
-	public bool IsPositionValid(Vector3 worldPosition)
-	{
-		//IL_0006: Unknown result type (might be due to invalid IL or missing references)
-		return !((OBB)(ref cachedBounds)).Contains(worldPosition);
-	}
-}
-
-
-using UnityEngine;
-
-public class TriggerNotify : TriggerBase, IPrefabPreProcess
-{
-	public GameObject notifyTarget;
-
-	private INotifyTrigger toNotify;
-
-	public bool runClientside = true;
-
-	public bool runServerside = true;
-
-	public bool HasContents
-	{
-		get
-		{
-			if (contents != null)
-			{
-				return contents.Count > 0;
-			}
-			return false;
-		}
-	}
-
-	bool IPrefabPreProcess.CanPreProcessDuringBundling => true;
-
-	internal override void OnObjects()
-	{
-		base.OnObjects();
-		if (toNotify != null || ((Object)(object)notifyTarget != (Object)null && notifyTarget.TryGetComponent<INotifyTrigger>(ref toNotify)))
-		{
-			toNotify.OnObjects(this);
-		}
-	}
-
-	internal override void OnEmpty()
-	{
-		base.OnEmpty();
-		if (toNotify != null || ((Object)(object)notifyTarget != (Object)null && notifyTarget.TryGetComponent<INotifyTrigger>(ref toNotify)))
-		{
-			toNotify.OnEmpty();
-		}
-	}
-
-	public void PreProcess(IPrefabProcessor preProcess, GameObject rootObj, string name, bool serverside, bool clientside, bool bundling)
-	{
-		if ((!clientside || !runClientside) && (!serverside || !runServerside))
-		{
-			preProcess.RemoveComponent((Component)(object)this);
-		}
-	}
-}
-
-
-public interface INotifyTrigger
-{
-	void OnObjects(TriggerNotify trigger);
-
-	void OnEmpty();
-}
-
-
-using UnityEngine;
-
-public class TriggerNotifyEntity : TriggerBase, IPrefabPreProcess
-{
-	public GameObject notifyTarget;
-
-	private INotifyEntityTrigger toNotify;
-
-	public bool runClientside = true;
-
-	public bool runServerside = true;
-
-	public bool HasContents
-	{
-		get
-		{
-			if (contents != null)
-			{
-				return contents.Count > 0;
-			}
-			return false;
-		}
-	}
-
-	bool IPrefabPreProcess.CanPreProcessDuringBundling => true;
-
-	internal override void OnEntityEnter(BaseEntity ent)
-	{
-		base.OnEntityEnter(ent);
-		if (toNotify != null || ((Object)(object)notifyTarget != (Object)null && notifyTarget.TryGetComponent<INotifyEntityTrigger>(ref toNotify)))
-		{
-			toNotify.OnEntityEnter(ent);
-		}
-	}
-
-	internal override void OnEntityLeave(BaseEntity ent)
-	{
-		base.OnEntityLeave(ent);
-		if (toNotify != null || ((Object)(object)notifyTarget != (Object)null && notifyTarget.TryGetComponent<INotifyEntityTrigger>(ref toNotify)))
-		{
-			toNotify.OnEntityLeave(ent);
-		}
-	}
-
-	public void PreProcess(IPrefabProcessor preProcess, GameObject rootObj, string name, bool serverside, bool clientside, bool bundling)
-	{
-		if ((!clientside || !runClientside) && (!serverside || !runServerside))
-		{
-			preProcess.RemoveComponent((Component)(object)this);
-		}
-	}
-}
-
-
-public interface INotifyEntityTrigger
-{
-	void OnEntityEnter(BaseEntity ent);
-
-	void OnEntityLeave(BaseEntity ent);
-}
-
-
-using UnityEngine;
-
-public class TriggerParachuteForceVolume : TriggerBase
-{
-	[SerializeField]
-	private float SpeedMultiplier = 0.8f;
-
-	internal override GameObject InterestedInObject(GameObject obj)
-	{
-		if ((Object)(object)obj.GetComponent<Parachute>() == (Object)null)
-		{
-			return null;
-		}
-		return base.InterestedInObject(obj);
-	}
-
-	public float GetSpeedMultiplierForParachute(Parachute p)
-	{
-		return SpeedMultiplier;
 	}
 }
 

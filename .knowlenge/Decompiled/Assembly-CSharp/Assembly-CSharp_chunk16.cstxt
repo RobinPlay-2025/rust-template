@@ -1,3 +1,324 @@
+using UnityEngine;
+
+private class EntryInfo
+{
+	public float entryTime;
+
+	public Vector3 entryPos;
+
+	public EntryInfo(float entryTime, Vector3 entryPos)
+	{
+		//IL_000e: Unknown result type (might be due to invalid IL or missing references)
+		//IL_000f: Unknown result type (might be due to invalid IL or missing references)
+		this.entryTime = entryTime;
+		this.entryPos = entryPos;
+	}
+
+	public void Set(float entryTime, Vector3 entryPos)
+	{
+		//IL_0008: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0009: Unknown result type (might be due to invalid IL or missing references)
+		this.entryTime = entryTime;
+		this.entryPos = entryPos;
+	}
+}
+
+
+using System.Collections.Generic;
+using UnityEngine;
+
+[RequireComponent(typeof(SphereCollider))]
+public class TriggerNoRespawnZone : TriggerBase
+{
+	public static List<TriggerNoRespawnZone> allNRZones = new List<TriggerNoRespawnZone>();
+
+	public float maxDepth = 20f;
+
+	public float maxAltitude = -1f;
+
+	private SphereCollider sphereCollider;
+
+	private float radiusSqr;
+
+	protected override void Awake()
+	{
+		base.Awake();
+		sphereCollider = ((Component)this).GetComponent<SphereCollider>();
+		radiusSqr = sphereCollider.radius * sphereCollider.radius;
+	}
+
+	protected void OnEnable()
+	{
+		allNRZones.Add(this);
+	}
+
+	protected override void OnDisable()
+	{
+		base.OnDisable();
+		allNRZones.Remove(this);
+	}
+
+	internal override GameObject InterestedInObject(GameObject obj)
+	{
+		obj = base.InterestedInObject(obj);
+		if ((Object)(object)obj == (Object)null)
+		{
+			return null;
+		}
+		BasePlayer basePlayer = obj.ToBaseEntity() as BasePlayer;
+		if ((Object)(object)basePlayer == (Object)null)
+		{
+			return null;
+		}
+		if (basePlayer.isClient)
+		{
+			return null;
+		}
+		return ((Component)basePlayer).gameObject;
+	}
+
+	public static bool InAnyNoRespawnZone(Vector3 theirPos)
+	{
+		//IL_000f: Unknown result type (might be due to invalid IL or missing references)
+		for (int i = 0; i < allNRZones.Count; i++)
+		{
+			if (allNRZones[i].InNoRespawnZone(theirPos, checkRadius: true))
+			{
+				return true;
+			}
+		}
+		return false;
+	}
+
+	public bool InNoRespawnZone(Vector3 theirPos, bool checkRadius)
+	{
+		//IL_0006: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0011: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0016: Unknown result type (might be due to invalid IL or missing references)
+		//IL_001b: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0035: Unknown result type (might be due to invalid IL or missing references)
+		//IL_003b: Unknown result type (might be due to invalid IL or missing references)
+		//IL_001f: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0020: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0021: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0055: Unknown result type (might be due to invalid IL or missing references)
+		//IL_005b: Unknown result type (might be due to invalid IL or missing references)
+		//IL_007b: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0081: Unknown result type (might be due to invalid IL or missing references)
+		Vector3 val = ((Component)this).transform.position + sphereCollider.center;
+		if (checkRadius && Vector3.SqrMagnitude(val - theirPos) > radiusSqr)
+		{
+			return false;
+		}
+		float num = Mathf.Abs(val.y - theirPos.y);
+		if (maxDepth != -1f && theirPos.y < val.y && num > maxDepth)
+		{
+			return false;
+		}
+		if (maxAltitude != -1f && theirPos.y > val.y && num > maxAltitude)
+		{
+			return false;
+		}
+		return true;
+	}
+}
+
+
+using UnityEngine;
+
+public class TriggerNoSpray : TriggerBase
+{
+	public BoxCollider TriggerCollider;
+
+	private OBB cachedBounds;
+
+	private Transform cachedTransform;
+
+	private void OnEnable()
+	{
+		//IL_0019: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0024: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0029: Unknown result type (might be due to invalid IL or missing references)
+		//IL_002e: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0033: Unknown result type (might be due to invalid IL or missing references)
+		cachedTransform = ((Component)this).transform;
+		cachedBounds = new OBB(cachedTransform, new Bounds(TriggerCollider.center, TriggerCollider.size));
+	}
+
+	internal override GameObject InterestedInObject(GameObject obj)
+	{
+		obj = base.InterestedInObject(obj);
+		if ((Object)(object)obj == (Object)null)
+		{
+			return null;
+		}
+		BaseEntity baseEntity = obj.ToBaseEntity();
+		if ((Object)(object)baseEntity == (Object)null)
+		{
+			return null;
+		}
+		if ((Object)(object)baseEntity.ToPlayer() == (Object)null)
+		{
+			return null;
+		}
+		return ((Component)baseEntity).gameObject;
+	}
+
+	public bool IsPositionValid(Vector3 worldPosition)
+	{
+		//IL_0006: Unknown result type (might be due to invalid IL or missing references)
+		return !((OBB)(ref cachedBounds)).Contains(worldPosition);
+	}
+}
+
+
+using UnityEngine;
+
+public class TriggerNotify : TriggerBase, IPrefabPreProcess
+{
+	public GameObject notifyTarget;
+
+	private INotifyTrigger toNotify;
+
+	public bool runClientside = true;
+
+	public bool runServerside = true;
+
+	public bool HasContents
+	{
+		get
+		{
+			if (contents != null)
+			{
+				return contents.Count > 0;
+			}
+			return false;
+		}
+	}
+
+	bool IPrefabPreProcess.CanPreProcessDuringBundling => true;
+
+	internal override void OnObjects()
+	{
+		base.OnObjects();
+		if (toNotify != null || ((Object)(object)notifyTarget != (Object)null && notifyTarget.TryGetComponent<INotifyTrigger>(ref toNotify)))
+		{
+			toNotify.OnObjects(this);
+		}
+	}
+
+	internal override void OnEmpty()
+	{
+		base.OnEmpty();
+		if (toNotify != null || ((Object)(object)notifyTarget != (Object)null && notifyTarget.TryGetComponent<INotifyTrigger>(ref toNotify)))
+		{
+			toNotify.OnEmpty();
+		}
+	}
+
+	public void PreProcess(IPrefabProcessor preProcess, GameObject rootObj, string name, bool serverside, bool clientside, bool bundling)
+	{
+		if ((!clientside || !runClientside) && (!serverside || !runServerside))
+		{
+			preProcess.RemoveComponent((Component)(object)this);
+		}
+	}
+}
+
+
+public interface INotifyTrigger
+{
+	void OnObjects(TriggerNotify trigger);
+
+	void OnEmpty();
+}
+
+
+using UnityEngine;
+
+public class TriggerNotifyEntity : TriggerBase, IPrefabPreProcess
+{
+	public GameObject notifyTarget;
+
+	private INotifyEntityTrigger toNotify;
+
+	public bool runClientside = true;
+
+	public bool runServerside = true;
+
+	public bool HasContents
+	{
+		get
+		{
+			if (contents != null)
+			{
+				return contents.Count > 0;
+			}
+			return false;
+		}
+	}
+
+	bool IPrefabPreProcess.CanPreProcessDuringBundling => true;
+
+	internal override void OnEntityEnter(BaseEntity ent)
+	{
+		base.OnEntityEnter(ent);
+		if (toNotify != null || ((Object)(object)notifyTarget != (Object)null && notifyTarget.TryGetComponent<INotifyEntityTrigger>(ref toNotify)))
+		{
+			toNotify.OnEntityEnter(ent);
+		}
+	}
+
+	internal override void OnEntityLeave(BaseEntity ent)
+	{
+		base.OnEntityLeave(ent);
+		if (toNotify != null || ((Object)(object)notifyTarget != (Object)null && notifyTarget.TryGetComponent<INotifyEntityTrigger>(ref toNotify)))
+		{
+			toNotify.OnEntityLeave(ent);
+		}
+	}
+
+	public void PreProcess(IPrefabProcessor preProcess, GameObject rootObj, string name, bool serverside, bool clientside, bool bundling)
+	{
+		if ((!clientside || !runClientside) && (!serverside || !runServerside))
+		{
+			preProcess.RemoveComponent((Component)(object)this);
+		}
+	}
+}
+
+
+public interface INotifyEntityTrigger
+{
+	void OnEntityEnter(BaseEntity ent);
+
+	void OnEntityLeave(BaseEntity ent);
+}
+
+
+using UnityEngine;
+
+public class TriggerParachuteForceVolume : TriggerBase
+{
+	[SerializeField]
+	private float SpeedMultiplier = 0.8f;
+
+	internal override GameObject InterestedInObject(GameObject obj)
+	{
+		if ((Object)(object)obj.GetComponent<Parachute>() == (Object)null)
+		{
+			return null;
+		}
+		return base.InterestedInObject(obj);
+	}
+
+	public float GetSpeedMultiplierForParachute(Parachute p)
+	{
+		return SpeedMultiplier;
+	}
+}
+
+
 using System;
 using System.Collections.Generic;
 using ConVar;
@@ -303,9 +624,9 @@ public class TriggerParent : TriggerBase, IServerComponent
 	[NonSerialized]
 	public int StableIndex = -1;
 
-	[Tooltip("Deparent if the parented entity clips into an obstacle")]
-	[Header("General")]
 	[SerializeField]
+	[Header("General")]
+	[Tooltip("Deparent if the parented entity clips into an obstacle")]
 	protected bool doClippingCheck;
 
 	[Tooltip("If deparenting via clipping, this will be used (if assigned) to also move the entity to a valid dismount position")]
@@ -326,8 +647,8 @@ public class TriggerParent : TriggerBase, IServerComponent
 	[Tooltip("When parenting an NPC don't check if they are shop keepers or mission providers.")]
 	public bool SkipNPCChecks;
 
-	[Tooltip("If the player is already parented to something else, they'll switch over to another parent only if this is true")]
 	[Header("Other")]
+	[Tooltip("If the player is already parented to something else, they'll switch over to another parent only if this is true")]
 	public bool overrideOtherTriggers;
 
 	[Tooltip("Requires associatedMountable to be set. Prevents players entering the trigger if there's something between their feet and the bottom of the parent trigger")]
@@ -2715,18 +3036,18 @@ public class TriggerRadiation : TriggerBase
 	[Tooltip("Armor scales the dose instead of subtracting from it, so rad gear always reduces this volume but only full rad protection blocks it entirely. Ignored if BypassArmor is set.")]
 	public bool ScaleByArmor;
 
+	[Tooltip("The fraction of the radius where we fade in from 0-1 dosage.")]
 	[Space]
 	[Min(0f)]
-	[Tooltip("The fraction of the radius where we fade in from 0-1 dosage.")]
 	public float falloff = 0.1f;
 
 	public bool usePerAxisFalloff;
 
 	public Vector3 falloffPerAxis;
 
-	[FormerlySerializedAs("UseColliderRadius")]
-	[Tooltip("Use sphere collider size instead of the transform scale. For sphere triggers only (doesn't make sense for boxes)")]
 	[Space]
+	[Tooltip("Use sphere collider size instead of the transform scale. For sphere triggers only (doesn't make sense for boxes)")]
+	[FormerlySerializedAs("UseColliderRadius")]
 	public bool DontScaleRadiationSize;
 
 	public bool UseLOSCheck;
@@ -3537,8 +3858,8 @@ using UnityEngine;
 
 public class TubeRenderer : FacepunchBehaviour
 {
-	[Header("Settings")]
 	[Range(3f, 64f)]
+	[Header("Settings")]
 	public int Segments = 12;
 
 	public float Radius = 0.1f;
@@ -6960,9 +7281,9 @@ using UnityEngine;
 public class WaterVolumeBurst
 {
 	[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-	internal delegate bool TestBurst_00006C2B$PostfixBurstDelegate(in Vector3 position, out WaterLevel.WaterInfo info, float queryRadius = 100f);
+	internal delegate bool TestBurst_00006C64$PostfixBurstDelegate(in Vector3 position, out WaterLevel.WaterInfo info, float queryRadius = 100f);
 
-	internal static class TestBurst_00006C2B$BurstDirectCall
+	internal static class TestBurst_00006C64$BurstDirectCall
 	{
 		private static IntPtr Pointer;
 
@@ -6973,7 +7294,7 @@ public class WaterVolumeBurst
 			//IL_001b: Unknown result type (might be due to invalid IL or missing references)
 			if (Pointer == (IntPtr)0)
 			{
-				Pointer = BurstCompiler.CompileFunctionPointer<TestBurst_00006C2B$PostfixBurstDelegate>((TestBurst_00006C2B$PostfixBurstDelegate)TestBurst).Value;
+				Pointer = BurstCompiler.CompileFunctionPointer<TestBurst_00006C64$PostfixBurstDelegate>((TestBurst_00006C64$PostfixBurstDelegate)TestBurst).Value;
 			}
 			P_0 = Pointer;
 		}
@@ -6999,11 +7320,11 @@ public class WaterVolumeBurst
 		}
 	}
 
-	[MonoPInvokeCallback(typeof(TestBurst_00006C2B$PostfixBurstDelegate))]
+	[MonoPInvokeCallback(typeof(TestBurst_00006C64$PostfixBurstDelegate))]
 	[BurstCompile]
 	public static bool TestBurst(in Vector3 position, out WaterLevel.WaterInfo info, float queryRadius = 100f)
 	{
-		return TestBurst_00006C2B$BurstDirectCall.Invoke(in position, out info, queryRadius);
+		return TestBurst_00006C64$BurstDirectCall.Invoke(in position, out info, queryRadius);
 	}
 
 	private static bool CheckCutOffPlanesBurst(in WaterVolumeBurstData data, in Vector3 pos, out float bottomCutY)
@@ -7121,14 +7442,14 @@ using System.Runtime.InteropServices;
 using UnityEngine;
 
 [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-internal delegate bool TestBurst_00006C2B$PostfixBurstDelegate(in Vector3 position, out WaterLevel.WaterInfo info, float queryRadius = 100f);
+internal delegate bool TestBurst_00006C64$PostfixBurstDelegate(in Vector3 position, out WaterLevel.WaterInfo info, float queryRadius = 100f);
 
 
 using System;
 using Unity.Burst;
 using UnityEngine;
 
-internal static class TestBurst_00006C2B$BurstDirectCall
+internal static class TestBurst_00006C64$BurstDirectCall
 {
 	private static IntPtr Pointer;
 
@@ -7139,7 +7460,7 @@ internal static class TestBurst_00006C2B$BurstDirectCall
 		//IL_001b: Unknown result type (might be due to invalid IL or missing references)
 		if (Pointer == (IntPtr)0)
 		{
-			Pointer = BurstCompiler.CompileFunctionPointer<TestBurst_00006C2B$PostfixBurstDelegate>((TestBurst_00006C2B$PostfixBurstDelegate)TestBurst).Value;
+			Pointer = BurstCompiler.CompileFunctionPointer<TestBurst_00006C64$PostfixBurstDelegate>((TestBurst_00006C64$PostfixBurstDelegate)TestBurst).Value;
 		}
 		P_0 = Pointer;
 	}
@@ -7377,8 +7698,8 @@ public class Wearable : MonoBehaviour, IItemSetup, IPrefabPreProcess
 
 	public bool HideInEyesView;
 
-	[Tooltip("If this is true, we'll hide this item in the first person view. Usually done for items that you definitely won't see in first person view, like facemasks and hats.")]
 	[Header("First Person Legs")]
+	[Tooltip("If this is true, we'll hide this item in the first person view. Usually done for items that you definitely won't see in first person view, like facemasks and hats.")]
 	public bool HideInFirstPerson;
 
 	[Range(0f, 5f)]
@@ -14459,8 +14780,8 @@ public class ItemBlueprint : MonoBehaviour
 
 		public int amount = 1;
 
-		[Tooltip("Chance (0-1) this surplus item is created when crafted at a workbench with the surplus upgrade.")]
 		[Range(0f, 1f)]
+		[Tooltip("Chance (0-1) this surplus item is created when crafted at a workbench with the surplus upgrade.")]
 		public float chance = 0.1f;
 	}
 
@@ -14492,8 +14813,8 @@ public class ItemBlueprint : MonoBehaviour
 
 	public int scrapFromRecycle;
 
-	[Header("Unlocking")]
 	[Tooltip("This item won't show anywhere unless you have the corresponding SteamItem in your inventory - which is defined on the ItemDefinition")]
+	[Header("Unlocking")]
 	public bool NeedsSteamItem;
 
 	public ItemDefinition RequireUnlockedItem;
@@ -14640,8 +14961,8 @@ public class SurplusEntry
 
 	public int amount = 1;
 
-	[Tooltip("Chance (0-1) this surplus item is created when crafted at a workbench with the surplus upgrade.")]
 	[Range(0f, 1f)]
+	[Tooltip("Chance (0-1) this surplus item is created when crafted at a workbench with the surplus upgrade.")]
 	public float chance = 0.1f;
 }
 
@@ -14737,8 +15058,8 @@ public class ItemDefinition : MonoBehaviour, IEqualityComparer<ItemDefinition>
 		ToolCupboardLimit
 	}
 
-	[ReadOnly]
 	[Header("Item")]
+	[ReadOnly]
 	public int itemid;
 
 	[Tooltip("The shortname should be unique. A hash will be generated from it to identify the item type. If this name changes at any point it will make all saves incompatible")]
@@ -14797,8 +15118,8 @@ public class ItemDefinition : MonoBehaviour, IEqualityComparer<ItemDefinition>
 	[Tooltip("If true, this item will support item ownership even if it's stacksize is >1")]
 	public bool supportsStackableOwnership;
 
-	[Tooltip("How rare this item is and how much it costs to research")]
 	[Header("Spawn Tables")]
+	[Tooltip("How rare this item is and how much it costs to research")]
 	public Rarity rarity;
 
 	public Rarity despawnRarity;
@@ -16290,8 +16611,8 @@ public class ItemModConsumable : MonoBehaviour
 
 	public string steamStatIncrementWhenEaten;
 
-	[Tooltip("Replaces the calories used by the biofuel generator, zero stops it accepting this item")]
 	[Header("Biofuel")]
+	[Tooltip("Replaces the calories used by the biofuel generator, zero stops it accepting this item")]
 	public bool overrideBiofuelCalories;
 
 	[Min(0f)]
@@ -18386,8 +18707,8 @@ public class ItemModMenuOption : ItemMod
 	[Tooltip("If true, taking this option is reported to analytics. Off by default: most item actions are not worth a row each")]
 	public bool logAnalytics;
 
-	[Header("Still shows when disabled")]
 	[Space(10f)]
+	[Header("Still shows when disabled")]
 	public bool showDisabled = true;
 
 	public DisabledTooltipOption disabledTooltipDescription;
@@ -19676,8 +19997,8 @@ public class ItemModWearable : ItemMod
 
 	public UIBlackoutOverlay.blackoutType occlusionType = UIBlackoutOverlay.blackoutType.NONE;
 
-	[Range(0f, 1f)]
 	[Tooltip("Muffles world audio for the local player while this is worn. Drives the head gear lowpass, layering over the active snapshot.")]
+	[Range(0f, 1f)]
 	public float audioMuffleAmount;
 
 	public bool blocksAiming;
@@ -19966,9 +20287,9 @@ using UnityEngine;
 
 public class ItemModWorkbenchAccelerated : ItemModWorkbenchUpgrade
 {
-	[Header("Accelerated Crafting")]
-	[Tooltip("Speed bonus multiplier gained per item already crafted in this batch (e.g. 0.25 = 25% faster per item).")]
 	[Range(0f, 1f)]
+	[Tooltip("Speed bonus multiplier gained per item already crafted in this batch (e.g. 0.25 = 25% faster per item).")]
+	[Header("Accelerated Crafting")]
 	public float speedBonusPerItem = 0.25f;
 
 	[Tooltip("Maximum speed multiplier this upgrade can reach (e.g. 0.25 = 4x faster at cap).")]
@@ -20006,8 +20327,8 @@ using UnityEngine;
 
 public class ItemModWorkbenchCraftSpeed : ItemModWorkbenchUpgrade
 {
-	[Header("Craft Speed Upgrade")]
 	[Tooltip("Multiplier applied to craft duration. 0.75 = 25% faster, 0.5 = 50% faster.")]
+	[Header("Craft Speed Upgrade")]
 	[Range(0.1f, 1f)]
 	public float speedMultiplier = 0.75f;
 
@@ -20073,12 +20394,12 @@ using UnityEngine;
 
 public class ItemModWorkbenchPrototype : ItemModWorkbenchUpgrade
 {
-	[Header("Prototype")]
 	[Tooltip("Multiplier applied to scrap cost when bypassing the tech tree path (2 = double).")]
+	[Header("Prototype")]
 	public float costMultiplier = 2f;
 
-	[Tooltip("Probability (0-1) that the unlock fails and consumes resources without granting the blueprint.")]
 	[Range(0f, 1f)]
+	[Tooltip("Probability (0-1) that the unlock fails and consumes resources without granting the blueprint.")]
 	public float failChance = 0.1f;
 
 	public override bool CanBypassTechTreePath()
@@ -20119,8 +20440,8 @@ using UnityEngine;
 
 public class ItemModWorkbenchRecycleBin : ItemModWorkbenchUpgrade
 {
-	[Header("Recycle Bin")]
 	[Range(0f, 0.5f)]
+	[Header("Recycle Bin")]
 	[Tooltip("Maximum fraction of each ingredient that can be refunded (0-1). A random value between 0 and this is rolled each craft.")]
 	public float maxRefundFraction = 0.1f;
 
@@ -20170,8 +20491,8 @@ using UnityEngine;
 
 public class ItemModWorkbenchReinforced : ItemModWorkbenchUpgrade
 {
-	[Header("Reinforced - Per-Bench Health Bonus")]
 	[Tooltip("Flat HP to add for Workbench Level 1.")]
+	[Header("Reinforced - Per-Bench Health Bonus")]
 	public float healthBonusLevel1 = 500f;
 
 	[Tooltip("Flat HP to add for Workbench Level 2.")]
@@ -20183,8 +20504,8 @@ public class ItemModWorkbenchReinforced : ItemModWorkbenchUpgrade
 	[Tooltip("Flat HP to add for the IO/Engineering bench.")]
 	public float healthBonusIOBench = 500f;
 
-	[Header("Reinforced - Explosive Resistance")]
 	[Tooltip("Fraction of explosive damage to absorb (0-1).")]
+	[Header("Reinforced - Explosive Resistance")]
 	[Range(0f, 1f)]
 	public float explosiveResistance = 0.5f;
 
@@ -25556,8 +25877,8 @@ public class MissionObjective_AcquireItem : MissionObjective
 
 	public bool acceptExistingItems;
 
-	[BaseMission.PositionGenerator.PositionPoint]
 	[FormerlySerializedAs("requireProximityToPosition")]
+	[BaseMission.PositionGenerator.PositionPoint]
 	public string position;
 
 	[Tooltip("If true, objective progress will reset upon no longer having the required item.")]
@@ -25565,8 +25886,8 @@ public class MissionObjective_AcquireItem : MissionObjective
 
 	public bool shouldHideCompassMarkerWhenClose;
 
-	[Min(0f)]
 	[Tooltip("If \"Should Hide Compass Marker When Close\" is enabled and \"Require Proximity To Position\" is set and player is within this distance of the mission point then hide the compass marker, else the compass marker is visible.")]
+	[Min(0f)]
 	public float hideCompassMarkerDistance = 20f;
 
 	private float sqrDistanceToHideCompassMarker;
@@ -26170,8 +26491,8 @@ using UnityEngine;
 
 public class MissionObjective_GoToDeepSea : MissionObjective
 {
-	[InspectorName("Maximum Time To Wipe (s)")]
 	[Tooltip("Time in seconds from deep sea wipe in which this objective will be considered as valid. If current time to wipe is less than this, then the mission cannot be started. If value <= 0, then this value is ignored.")]
+	[InspectorName("Maximum Time To Wipe (s)")]
 	public int maximumTimeToDeepSeaWipe;
 
 	[Tooltip("Should fail mission when deep sea closes.")]
@@ -26327,12 +26648,12 @@ using UnityEngine;
 
 public class MissionObjective_GoToFloatingCity : MissionObjective
 {
-	[InspectorName("Distance For Completion (m)")]
 	[Tooltip("Distance threshold to player for objective to complete (if distance is less that this value).")]
+	[InspectorName("Distance For Completion (m)")]
 	public float distanceForCompletion = 50f;
 
-	[Tooltip("Distance threshold to player for objective to reset (if distance is greater than this value).")]
 	[InspectorName("Distance For Reset (m)")]
+	[Tooltip("Distance threshold to player for objective to reset (if distance is greater than this value).")]
 	public float distanceForReset = 50f;
 
 	[Tooltip("If true, disregards distance on the y-plane.")]
@@ -26459,14 +26780,14 @@ public class MissionObjective_GoToUnderwaterLab : MissionObjective
 	[BaseMission.PositionGenerator.PositionPoint]
 	public string position;
 
-	[Min(0f)]
 	[Tooltip("Player must be within underwater labs environment volume and within this distance of the mission point for the objective to complete.")]
+	[Min(0f)]
 	public float minimumDistanceToPosition = 100f;
 
 	public bool shouldHideCompassMarkerWhenClose;
 
-	[Tooltip("If \"Should Hide Compass Marker When Close\" is enabled and player is within this distance of the mission point then hide the compass marker, else the compass marker is visible.")]
 	[Min(0f)]
+	[Tooltip("If \"Should Hide Compass Marker When Close\" is enabled and player is within this distance of the mission point then hide the compass marker, else the compass marker is visible.")]
 	public float hideCompassMarkerDistance = 50f;
 
 	private float sqrMinimumDistanceToPosition;
@@ -27483,8 +27804,8 @@ public class MissionObjective_Move : MissionObjective
 	[BaseMission.PositionGenerator.PositionPoint]
 	public string positionName = "default";
 
-	[InspectorName("Distance For Completion (m)")]
 	[Tooltip("Distance threshold to player for objective to complete.")]
+	[InspectorName("Distance For Completion (m)")]
 	public float distForCompletion = 3f;
 
 	[Tooltip("If true, this objective will no longer be marked as completed if the objective criteria are no longer met.")]
@@ -27494,15 +27815,15 @@ public class MissionObjective_Move : MissionObjective
 	[InspectorName("Distance For Reset (m)")]
 	public float distanceForReset = 3f;
 
-	[Tooltip("If true, disregards distance on the y-plane.")]
 	[FormerlySerializedAs("use2D")]
+	[Tooltip("If true, disregards distance on the y-plane.")]
 	public bool use2DDistance;
 
 	[Tooltip("If set, player must be mounted on this mountable for objective to complete.")]
 	public BaseMountable requiredMountable;
 
-	[InspectorName("Should Ping (Tutorial Only)")]
 	[Tooltip("If true, displays a UI objective marker for this objective. Only works if at Tutorial Island.")]
+	[InspectorName("Should Ping (Tutorial Only)")]
 	public bool shouldPing;
 
 	[SerializeField]
@@ -27593,8 +27914,8 @@ public class MissionObjective_OpenStorageContainer : MissionObjective
 {
 	public BaseEntity TargetEntity;
 
-	[BaseMission.PositionGenerator.PositionPoint]
 	[Tooltip("If set, the objective world location will be set to this position.")]
+	[BaseMission.PositionGenerator.PositionPoint]
 	public string SetObjectiveLocation;
 
 	[BaseMission.PositionGenerator.PositionPoint]
@@ -27727,8 +28048,8 @@ public class MissionObjective_PlayBoomboxStation : MissionObjective
 	[Tooltip("If true, the boombox must be a static environment boombox for this objective to complete.")]
 	public bool boomboxMustBeStatic;
 
-	[BaseMission.PositionGenerator.PositionPoint]
 	[Tooltip("The boombox must be nearby this mission point for the objective to complete.")]
+	[BaseMission.PositionGenerator.PositionPoint]
 	public string requireProximityToPosition;
 
 	[Min(0f)]
@@ -27740,8 +28061,8 @@ public class MissionObjective_PlayBoomboxStation : MissionObjective
 
 	public bool shouldHideCompassMarkerWhenClose;
 
-	[Tooltip("If \"Should Hide Compass Marker When Close\" is enabled and player is within this distance of the mission point then hide the compass marker, else the compass marker is visible.")]
 	[Min(0f)]
+	[Tooltip("If \"Should Hide Compass Marker When Close\" is enabled and player is within this distance of the mission point then hide the compass marker, else the compass marker is visible.")]
 	public float hideCompassMarkerDistance = 50f;
 
 	private float sqrDistanceToMissionPoint;
@@ -28122,12 +28443,12 @@ public class MissionObjective_SpeakWithTargetNPC : MissionObjective
 
 	public ItemAmount[] requiredReturnItems = Array.Empty<ItemAmount>();
 
-	[BaseMission.PositionGenerator.PositionPoint]
 	[Tooltip("The target NPC must be nearby this mission point for the objective to complete.")]
+	[BaseMission.PositionGenerator.PositionPoint]
 	public string RequireProximityToPosition;
 
-	[Tooltip("This defines the minimum proximity between the target NPC and the mission point.")]
 	[Min(0f)]
+	[Tooltip("This defines the minimum proximity between the target NPC and the mission point.")]
 	public float MinimumDistanceToMissionPoint;
 
 	public bool destroyReturnItems;
@@ -28334,8 +28655,8 @@ public class MissionObjective_UnderwaterLabsBoomboxBonus : MissionObjective
 {
 	public string targetRadioIp;
 
-	[BaseMission.PositionGenerator.PositionPoint]
 	[Tooltip("The boombox must be nearby this mission point for the objective to complete.")]
+	[BaseMission.PositionGenerator.PositionPoint]
 	public string requireProximityToPosition;
 
 	[Min(0f)]
